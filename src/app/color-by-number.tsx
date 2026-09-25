@@ -11,6 +11,8 @@ import {
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
 import { buildPage, drawPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
+import { canvasJpeg, makePdf, type PdfPage } from "@/lib/pdf";
+import { PRINT_SIZES, fitOnPaper, fontFraction, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
@@ -18,6 +20,11 @@ const SCALE = 1.5;
 const MAX_PAGE_WIDTH = 2700;
 /** Share of the shape budget spent on the people on a two-layer page; the rest is the scene. */
 const PEOPLE_SHARE = 0.65;
+/** Print resolution, and the most pixels on a printed page's long side (keeps memory in check). */
+const PRINT_DPI = 300;
+const MAX_PRINT_PX = 6000;
+/** Resolution of the color-key sheet. */
+const KEY_DPI = 150;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
@@ -184,6 +191,58 @@ function describeSubjects(subjects: SubjectBox[]): string {
   return parts.join(", ");
 }
 
+/**
+ * The second printed sheet: the finished picture (what it will look like) and the color key,
+ * with big swatches so colors are easy to match.
+ */
+function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
+  const W = Math.round(fit.paperW * KEY_DPI);
+  const H = Math.round(fit.paperH * KEY_DPI);
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, W, H);
+  const m = 0.5 * KEY_DPI;
+  ctx.fillStyle = "#222";
+  ctx.font = `bold ${Math.round(0.3 * KEY_DPI)}px Arial, sans-serif`;
+  ctx.textBaseline = "top";
+  ctx.fillText("Color key", m, m);
+
+  // Swatches, in rows, sized to fill the sheet's width.
+  const cols = Math.max(4, Math.floor((W - 2 * m) / (1.1 * KEY_DPI)));
+  const cell = (W - 2 * m) / cols;
+  const sw = Math.min(cell * 0.45, 0.45 * KEY_DPI);
+  const top = m + 0.55 * KEY_DPI;
+  ctx.font = `bold ${Math.round(sw * 0.7)}px Arial, sans-serif`;
+  ctx.textBaseline = "middle";
+  page.key.forEach(({ n, rgb }, i) => {
+    const x = m + (i % cols) * cell;
+    const y = top + Math.floor(i / cols) * (sw + 0.2 * KEY_DPI);
+    ctx.fillStyle = `rgb(${rgb.join(",")})`;
+    ctx.fillRect(x, y, sw, sw);
+    ctx.strokeStyle = "#999";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, sw, sw);
+    ctx.fillStyle = "#222";
+    ctx.fillText(String(n), x + sw + 0.08 * KEY_DPI, y + sw / 2);
+  });
+  const keyBottom = top + Math.ceil(page.key.length / cols) * (sw + 0.2 * KEY_DPI);
+
+  // The finished picture under the key, as big as fits.
+  const painted = document.createElement("canvas");
+  drawPage(painted, page, "colored");
+  const room = { w: W - 2 * m, h: H - m - (keyBottom + 0.3 * KEY_DPI) };
+  if (room.h > 0.5 * KEY_DPI) {
+    const k = Math.min(room.w / painted.width, room.h / painted.height);
+    const pw = painted.width * k;
+    const ph = painted.height * k;
+    ctx.drawImage(painted, (W - pw) / 2, keyBottom + 0.3 * KEY_DPI, pw, ph);
+  }
+  return canvas;
+}
+
 export default function ColorByNumber() {
   const [file, setFile] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -193,6 +252,9 @@ export default function ColorByNumber() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [background, setBackground] = useState<Background>("remove");
+  const [printSize, setPrintSize] = useState<PrintSizeId>("letter");
+  /** Where the page sits on the chosen paper (set with the result). */
+  const [fit, setFit] = useState<Fit | null>(null);
   /** How far the brush has painted across the page, 0–100 (%). */
   const [reveal, setReveal] = useState(50);
   const [dragging, setDragging] = useState(false);
@@ -274,6 +336,12 @@ export default function ColorByNumber() {
     const faces = subjects.filter((s) => s.kind === "face");
     const twoLayers = !!(frame && cutout && background === "keep");
 
+    // The print size decides how small numbers (and so shapes) can be: the smallest number is
+    // a fixed share of the picture's width, from how wide it will be printed.
+    const pageRect = twoLayers && frame ? frame.scene : { width: main.width, height: main.height };
+    const pageFit = fitOnPaper(pageRect.width / pageRect.height, printSize);
+    const fontFrac = fontFraction(pageFit.w);
+
     // How big each layer is drawn decides how small its shapes can be and stay readable.
     let k = 0; // page px per photo px (two layers)
     let mainScale = SCALE;
@@ -291,7 +359,7 @@ export default function ColorByNumber() {
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     const mainResult = runPipeline(
       { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals },
-      { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale) },
+      { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
 
     let page: Page;
@@ -307,7 +375,7 @@ export default function ColorByNumber() {
       const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
       const sceneResult = runPipeline(
         { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
-        { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale) },
+        { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
       );
       const layers: Layer[] = [
         { result: sceneResult, x: 0, y: 0, scale: sceneScale, outlineBlank: false },
@@ -319,19 +387,52 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac);
     } else {
-      page = buildPage(main.width * SCALE, main.height * SCALE, [
-        { result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true },
-      ]);
+      page = buildPage(
+        main.width * SCALE,
+        main.height * SCALE,
+        [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
+        fontFrac,
+      );
     }
     full.close();
+    setFit(pageFit);
     setResult(page);
     setReveal(50);
     setBusy(null);
   }
 
+  /** Renders the page at print resolution for the chosen size and downloads it as a PDF. */
+  async function downloadPdf() {
+    if (!result || !fit) return;
+    setBusy("Preparing your PDF…");
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const longIn = Math.max(fit.w, fit.h);
+      const dpi = Math.min(PRINT_DPI, MAX_PRINT_PX / longIn);
+      const sheet = document.createElement("canvas");
+      drawPage(sheet, result, "outline", (fit.w * dpi) / result.width);
+      const keySheet = drawKeySheet(result, fit);
+      const pages: PdfPage[] = [
+        { jpeg: await canvasJpeg(sheet), pxW: sheet.width, pxH: sheet.height, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
+        { jpeg: await canvasJpeg(keySheet, 0.9), pxW: keySheet.width, pxH: keySheet.height, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
+      ];
+      const url = URL.createObjectURL(makePdf(pages));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `color-by-number-${printSize}.pdf`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch {
+      setError("Sorry, something went wrong making the PDF. Try a smaller print size.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const key = result?.key ?? [];
+  const sizeLabel = PRINT_SIZES.find((p) => p.id === printSize)?.label;
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
@@ -437,6 +538,35 @@ export default function ColorByNumber() {
           </div>
         </div>
 
+        <div>
+          <h2 className="mb-2 font-semibold">4. Print size</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="radiogroup">
+            {PRINT_SIZES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={printSize === p.id}
+                onClick={() => {
+                  setPrintSize(p.id);
+                  setResult(null);
+                }}
+                className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                  printSize === p.id
+                    ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
+                    : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
+                }`}
+              >
+                <div className="font-semibold">{p.label}</div>
+                <div className="text-sm text-zinc-600 dark:text-zinc-400">{p.blurb}</div>
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-sm text-zinc-500">
+            Bigger paper fits more small shapes while keeping every number easy to read.
+          </p>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -444,7 +574,7 @@ export default function ColorByNumber() {
             disabled={!file || !!busy}
             className="rounded-full bg-violet-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ?? "4. Make my color-by-number"}
+            {busy ?? "5. Make my color-by-number"}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
           {error && <span className="text-sm text-red-600">{error}</span>}
@@ -456,10 +586,11 @@ export default function ColorByNumber() {
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button
               type="button"
-              onClick={() => window.print()}
-              className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-900"
+              onClick={downloadPdf}
+              disabled={!!busy}
+              className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Print
+              Download PDF ({sizeLabel})
             </button>
             <span className="text-sm text-zinc-500">
               {result.shapes} shapes · {key.length} colors

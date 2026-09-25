@@ -27,21 +27,25 @@ export interface Page {
   key: { n: number; rgb: RGB }[];
   /** Number of shapes to color, over all layers. */
   shapes: number;
+  /** Smallest readable number as a share of the page width, set by the print size. */
+  fontFrac: number;
 }
 
 /** Colors from different layers closer than this (ΔE) share a number. */
 const SAME_COLOR = 7;
 /**
- * Smallest readable number, in page pixels: a share of the page width, so numbers stay
- * readable however big the page is when it's fit to a screen or a sheet of paper. Shapes too
- * small for it are printed already colored in (the pipeline keeps those rare).
+ * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
+ * print size), so it prints at a readable size however the page is scaled. Shapes too small
+ * for it are printed already colored in (the pipeline keeps those rare).
  */
-export const minFont = (pageWidth: number) => Math.max(7, pageWidth * 0.0065);
+export const minFont = (pageWidth: number, fontFrac: number) => pageWidth * fontFrac;
 /** Label radius (working px) a layer's shapes need for a readable number at `scale`. */
-export const minLabelRadius = (pageWidth: number, scale: number) => minFont(pageWidth) / (1.1 * scale);
-const MAX_FONT = 26;
+export const minLabelRadius = (pageWidth: number, scale: number, fontFrac: number) =>
+  minFont(pageWidth, fontFrac) / (1.1 * scale);
+/** Largest number, as a multiple of the smallest. */
+const MAX_FONT_RATIO = 2.4;
 
-export function buildPage(width: number, height: number, layers: Layer[]): Page {
+export function buildPage(width: number, height: number, layers: Layer[], fontFrac: number): Page {
   // Every color used anywhere, dark to light, then numbered, merging near-identical colors.
   const entries: { layer: number; index: number; rgb: RGB; lab: Float32Array }[] = [];
   layers.forEach(({ result }, layer) => {
@@ -72,22 +76,30 @@ export function buildPage(width: number, height: number, layers: Layer[]): Page 
   for (const { result } of layers) {
     for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== result.background) shapes++;
   }
-  return { width, height, layers, numbers, key: key.map(({ n, rgb }) => ({ n, rgb })), shapes };
+  return { width, height, layers, numbers, key: key.map(({ n, rgb }) => ({ n, rgb })), shapes, fontFrac };
 }
 
 const EDGE: RGB = [70, 70, 70];
 
-export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" | "colored") {
-  const W = Math.round(page.width);
-  const H = Math.round(page.height);
+/**
+ * Draws the page at `pxScale` times its layout size (1 for the screen, more for printing).
+ * Lines stay thin but visible at any resolution; numbers keep their printed size.
+ */
+export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" | "colored", pxScale = 1) {
+  const W = Math.round(page.width * pxScale);
+  const H = Math.round(page.height * pxScale);
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext("2d")!;
   const img = ctx.createImageData(W, H);
   img.data.fill(255);
 
-  const MIN_FONT = minFont(W);
-  page.layers.forEach((layer, li) => {
+  const MIN_FONT = minFont(W, page.fontFrac);
+  const MAX_FONT = MIN_FONT * MAX_FONT_RATIO;
+  /** Line thickness in pixels: about 0.2 mm when printed. */
+  const t = Math.max(1, Math.round(W / 1800));
+  const placed = page.layers.map((l) => ({ ...l, x: l.x * pxScale, y: l.y * pxScale, scale: l.scale * pxScale }));
+  placed.forEach((layer, li) => {
     const { result, scale } = layer;
     const { width: w, height: h, labels, regionColor } = result;
     const color = (index: number) => page.key[page.numbers[li][index] - 1]?.rgb ?? result.palette[index];
@@ -111,8 +123,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       for (let X = x0; X < x1; X++) {
         const p = at(X, Y);
         const l = labels[p];
-        const right = X + 1 < x1 ? labels[at(X + 1, Y)] : l;
-        const down = Y + 1 < y1 ? labels[at(X, Y + 1)] : l;
+        const right = X + t < x1 ? labels[at(X + t, Y)] : l;
+        const down = Y + t < y1 ? labels[at(X, Y + t)] : l;
         const edgeWith = (o: number) => o !== l && (layer.outlineBlank || (!blank(o) && !blank(l)));
         const edge = edgeWith(right) || edgeWith(down);
         let rgb: RGB | null;
@@ -135,22 +147,22 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
   const bottom = page.layers[0]?.result;
   if (bottom && bottom.background === undefined) {
     ctx.strokeStyle = "#464646";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+    ctx.lineWidth = t;
+    ctx.strokeRect(t / 2, t / 2, W - t, H - t);
   }
 
-  page.layers.forEach((layer, li) => {
+  placed.forEach((layer, li) => {
     const { result, scale } = layer;
     // Pet eyes and nose: plain black spots, printed already filled in, to color around.
     ctx.fillStyle = "#111";
     for (const n of result.noses ?? []) {
       ctx.beginPath();
-      ctx.ellipse(layer.x + n.x * scale, layer.y + n.y * scale, Math.max(2.5, n.rx * scale), Math.max(2, n.ry * scale), 0, 0, Math.PI * 2);
+      ctx.ellipse(layer.x + n.x * scale, layer.y + n.y * scale, Math.max(2 * t, n.rx * scale), Math.max(1.6 * t, n.ry * scale), 0, 0, Math.PI * 2);
       ctx.fill();
     }
     for (const e of result.eyes ?? []) {
       ctx.beginPath();
-      ctx.arc(layer.x + e.x * scale, layer.y + e.y * scale, Math.max(2.5, e.r * scale), 0, Math.PI * 2);
+      ctx.arc(layer.x + e.x * scale, layer.y + e.y * scale, Math.max(2 * t, e.r * scale), 0, Math.PI * 2);
       ctx.fill();
     }
     if (view === "colored") return;
