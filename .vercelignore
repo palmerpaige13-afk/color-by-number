@@ -1,0 +1,4 @@
+# local-only files that must never be deployed
+/public/test-images
+/.claude
+.env*
