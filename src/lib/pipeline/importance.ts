@@ -10,7 +10,7 @@ export interface SubjectBox extends FaceShape {
   kind: "face" | "person" | "animal";
 }
 
-const SUBJECT_WEIGHT: Record<SubjectBox["kind"], number> = { face: 1, person: 0.6, animal: 0.55 };
+const SUBJECT_WEIGHT: Record<SubjectBox["kind"], number> = { face: 1, person: 0.6, animal: 0.9 };
 const STRUCTURE_WEIGHT = 0.7;
 
 /** Separable box blur (running sums), radius r. */

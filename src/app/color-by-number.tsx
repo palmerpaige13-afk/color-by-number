@@ -13,6 +13,9 @@ import {
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
 
+/** Smallest number drawn, in canvas pixels. Smaller shapes are printed already colored in. */
+const MIN_FONT = 6.5;
+
 /** Output canvas pixels per working-raster pixel. */
 const SCALE = 1.5;
 
@@ -93,6 +96,8 @@ const MAIN_PERSON_SHARE = 0.06;
 const SIDE_PERSON_SHARE = 0.25;
 /** Animals at least this share of the biggest person's size are kept with the people. */
 const PET_SHARE = 0.05;
+/** With background, the scene is framed so the people and pets span this share of it. */
+const SUBJECT_FILL = 0.8;
 
 /** Downscales `bitmap` to the working raster. */
 function toWorkingImage(bitmap: ImageBitmap) {
@@ -108,15 +113,16 @@ function toWorkingImage(bitmap: ImageBitmap) {
 }
 
 /**
- * The photo to work on: when it's a photo of people, just the area around the main people (so
- * all the detail is spent on them), otherwise the whole photo.
+ * The photo to work on. For a photo of people: without background, just the area around the
+ * main people and their pets (so all the detail is spent on them); with background, the scene
+ * framed closer when they're small in it, so their faces (and a pet's) are big enough to color.
+ * Any other photo is used whole.
  */
 async function subjectImage(
   file: File,
   keepBackground: boolean,
 ): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
   const full = await createImageBitmap(file);
-  if (keepBackground) return { bitmap: full, ofPeople: false };
   const found = await findPeople(full).catch(() => ({ people: [], animals: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
@@ -130,15 +136,27 @@ async function subjectImage(
   const y0 = Math.min(...keep.map((b) => b.y));
   const x1 = Math.max(...keep.map((b) => b.x + b.width));
   const y1 = Math.max(...keep.map((b) => b.y + b.height));
-  const mx = (x1 - x0) * CROP_MARGIN;
-  const my = (y1 - y0) * CROP_MARGIN;
-  const sx = Math.max(0, Math.floor(x0 - mx));
-  const sy = Math.max(0, Math.floor(y0 - my));
-  const sw = Math.min(full.width, Math.ceil(x1 + mx)) - sx;
-  const sh = Math.min(full.height, Math.ceil(y1 + my)) - sy;
-  const cropped = await createImageBitmap(full, sx, sy, sw, sh);
+
+  let sx: number, sy: number, sw: number, sh: number;
+  if (keepBackground) {
+    // Same shape as the photo, just big enough that the subjects fill SUBJECT_FILL of it.
+    const zoom = Math.min(1, Math.max((y1 - y0) / full.height, (x1 - x0) / full.width) / SUBJECT_FILL);
+    if (zoom >= 0.95) return { bitmap: full, ofPeople: false };
+    sw = full.width * zoom;
+    sh = full.height * zoom;
+    sx = Math.min(full.width - sw, Math.max(0, (x0 + x1) / 2 - sw / 2));
+    sy = Math.min(full.height - sh, Math.max(0, (y0 + y1) / 2 - sh / 2));
+  } else {
+    const mx = (x1 - x0) * CROP_MARGIN;
+    const my = (y1 - y0) * CROP_MARGIN;
+    sx = Math.max(0, x0 - mx);
+    sy = Math.max(0, y0 - my);
+    sw = Math.min(full.width, x1 + mx) - sx;
+    sh = Math.min(full.height, y1 + my) - sy;
+  }
+  const cropped = await createImageBitmap(full, Math.floor(sx), Math.floor(sy), Math.ceil(sw), Math.ceil(sh));
   full.close();
-  return { bitmap: cropped, ofPeople: true };
+  return { bitmap: cropped, ofPeople: !keepBackground };
 }
 
 function describeSubjects(subjects: SubjectBox[]): string {
@@ -161,13 +179,19 @@ function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
   small.height = h;
   const sctx = small.getContext("2d")!;
   const img = sctx.createImageData(w, h);
+  // Shapes too small for a number (a pet's eye, a nose) are printed already colored in.
+  const tiny = new Uint8Array(result.regionCount);
+  for (let i = 0; i < result.regionCount; i++) {
+    tiny[i] = regionColor[i] !== result.background && result.labelRadius[i] * SCALE * 1.1 < MIN_FONT ? 1 : 0;
+  }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const p = y * w + x;
       const l = labels[p];
       const edge = (x < w - 1 && labels[p + 1] !== l) || (y < h - 1 && labels[p + w] !== l);
       let rgb: RGB = [255, 255, 255];
-      if (edge) rgb = [70, 70, 70];
+      if (tiny[l]) rgb = palette[regionColor[l]];
+      else if (edge) rgb = [70, 70, 70];
       else if (regionColor[l] === result.background) rgb = [255, 255, 255];
       else if (result.detailLines?.[p]) rgb = view === "colored" ? [90, 90, 90] : [150, 150, 150];
       else if (view === "colored") rgb = palette[regionColor[l]];
@@ -190,9 +214,9 @@ function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (let i = 0; i < result.regionCount; i++) {
-    if (regionColor[i] === result.background) continue;
+    if (regionColor[i] === result.background || tiny[i]) continue;
     const size = Math.min(26, result.labelRadius[i] * SCALE * 1.1);
-    if (size < 7) continue;
+    if (size < MIN_FONT) continue;
     ctx.font = `${Math.round(size)}px Arial, sans-serif`;
     ctx.fillText(String(number[regionColor[i]]), result.labelX[i] * SCALE, result.labelY[i] * SCALE);
   }

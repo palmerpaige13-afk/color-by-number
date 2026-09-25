@@ -15,6 +15,14 @@ export type Difficulty = "easy" | "medium" | "hard";
 
 /** Smallest label radius (working px) whose number is still legible when drawn at 1.5x. */
 const MIN_PRINT_RADIUS = 4.3;
+/**
+ * On faces and pets, standout features (eyes, nose, tongue) are kept however small; the ones
+ * too small for a number are printed already colored in. Applies from this keep factor
+ * (importance x contrast) up, down to shapes of TINY_AREA pixels / TINY_RADIUS.
+ */
+const DETAIL_LEVEL = 0.8;
+const TINY_AREA = 4;
+const TINY_RADIUS = 1;
 
 /** Mean importance per region. */
 function regionImportance(labels: Int32Array, count: number, importance: Float32Array): Float32Array {
@@ -53,8 +61,11 @@ function liftShadows(data: Uint8ClampedArray, animals: RegionMask[], w: number, 
       const l = luma(p);
       const t = Math.min(1, Math.max(0, (l - lo) / (hi - lo)));
       const target = 55 + t * (Math.max(hi, 200) - 55);
-      const k = target / Math.max(1, l);
-      for (let c = 0; c < 3; c++) data[p * 4 + c] = Math.min(255, data[p * 4 + c] * k + (l < 8 ? target - l : 0));
+      // Scale the color up by at most 2x (more would exaggerate a faint tint, turning black fur
+      // brown) and add the rest of the lift as neutral gray. Light fur is only nudged.
+      const k = Math.min(2, Math.max(0.9, target / Math.max(1, l)));
+      const gray = Math.max(0, target - l * k);
+      for (let c = 0; c < 3; c++) data[p * 4 + c] = Math.min(255, data[p * 4 + c] * k + gray);
     }
   }
 }
@@ -152,8 +163,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // walls (low contrast) still merges away. Never so small that a number won't fit.
   const keepFactor = (importance: number, contrast: number) =>
     importance * Math.min(1, Math.max(0, (contrast - 12) / 18));
-  const areaLimit = (k: number) => params.minArea * (1 - 0.85 * k);
-  const radiusLimit = (k: number) => Math.max(MIN_PRINT_RADIUS, params.minRadius * (1 - 0.5 * k));
+  const areaLimit = (k: number) => (k >= DETAIL_LEVEL ? TINY_AREA : params.minArea * (1 - 0.85 * k));
+  const radiusLimit = (k: number) =>
+    k >= DETAIL_LEVEL ? TINY_RADIUS : Math.max(MIN_PRINT_RADIUS, params.minRadius * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
