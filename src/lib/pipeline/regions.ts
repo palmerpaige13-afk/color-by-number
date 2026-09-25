@@ -243,3 +243,29 @@ export function majorityFilter(
   }
   return src;
 }
+
+/** Per region, the Lab distance (ΔE) to its most similar neighbor: how much it stands out. */
+export function neighborContrast(
+  comps: Components,
+  w: number,
+  h: number,
+  paletteLab: Float32Array,
+): Float32Array {
+  const { labels, count, color } = comps;
+  const best = new Float32Array(count).fill(Infinity);
+  const visit = (a: number, b: number) => {
+    const d = labDist2(paletteLab, color[a] * 3, paletteLab, color[b] * 3);
+    if (d < best[a]) best[a] = d;
+    if (d < best[b]) best[b] = d;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      const a = labels[p];
+      if (x < w - 1 && labels[p + 1] !== a) visit(a, labels[p + 1]);
+      if (y < h - 1 && labels[p + w] !== a) visit(a, labels[p + w]);
+    }
+  }
+  for (let i = 0; i < count; i++) best[i] = Math.sqrt(best[i]);
+  return best;
+}

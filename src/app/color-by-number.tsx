@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { detectSubjects } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
   WORKING_SIZE,
@@ -9,9 +10,10 @@ import {
   type PipelineResult,
   type RGB,
 } from "@/lib/pipeline";
+import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
 
 /** Output canvas pixels per working-raster pixel. */
-const SCALE = 2;
+const SCALE = 1.5;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
@@ -45,8 +47,17 @@ async function loadWorkingImage(file: File) {
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  return { width, height, data: ctx.getImageData(0, 0, width, height).data };
+  return { bitmap, width, height, data: ctx.getImageData(0, 0, width, height).data };
+}
+
+function describeSubjects(subjects: SubjectBox[]): string {
+  const count = (k: SubjectBox["kind"]) => subjects.filter((s) => s.kind === k).length;
+  const parts: string[] = [];
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  if (count("face")) parts.push(plural(count("face"), "face", "faces"));
+  if (count("person")) parts.push(plural(count("person"), "person", "people"));
+  if (count("animal")) parts.push(plural(count("animal"), "animal", "animals"));
+  return parts.join(", ");
 }
 
 function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
@@ -66,6 +77,7 @@ function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
       const edge = (x < w - 1 && labels[p + 1] !== l) || (y < h - 1 && labels[p + w] !== l);
       let rgb: RGB = [255, 255, 255];
       if (edge) rgb = [70, 70, 70];
+      else if (result.detailLines?.[p]) rgb = view === "colored" ? [90, 90, 90] : [150, 150, 150];
       else if (view === "colored") rgb = palette[regionColor[l]];
       img.data.set([rgb[0], rgb[1], rgb[2], 255], p * 4);
     }
@@ -98,7 +110,9 @@ export default function ColorByNumber() {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [result, setResult] = useState<PipelineResult | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [focus, setFocus] = useState(true);
+  const [focusNote, setFocusNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("outline");
   const [dragging, setDragging] = useState(false);
@@ -125,19 +139,47 @@ export default function ColorByNumber() {
 
   async function generate() {
     if (!file) return;
-    setBusy(true);
+    setBusy(focus ? "Finding people and buildings…" : "Making your page…");
     setError(null);
+    setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
     await new Promise((r) => setTimeout(r, 30));
+    let work;
     try {
-      const input = await loadWorkingImage(file);
-      setResult(runPipeline(input, DIFFICULTY_PARAMS[difficulty]));
-      setView("outline");
+      work = await loadWorkingImage(file);
     } catch {
       setError("Sorry, we couldn't read that photo. Try a different one.");
-    } finally {
-      setBusy(false);
+      setBusy(null);
+      return;
     }
+    const { bitmap, ...pixels } = work;
+    let importance: Float32Array | undefined;
+    if (focus) {
+      let subjects: SubjectBox[] = [];
+      let note = "";
+      try {
+        subjects = await detectSubjects(bitmap, pixels.width, pixels.height);
+      } catch {
+        note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
+      }
+      const structure = structureMap(pixels.data, pixels.width, pixels.height);
+      const map = importanceMap(structure, subjects, pixels.width, pixels.height);
+      importance = map.importance;
+      const found = [describeSubjects(subjects), map.buildings ? "buildings" : ""];
+      const list = found.filter(Boolean).join(", ");
+      setFocusNote(
+        note ||
+          (list
+            ? `Kept extra detail on: ${list}.`
+            : "Didn't spot any people or buildings, so the whole photo got the same detail."),
+      );
+      setBusy("Making your page…");
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    bitmap.close();
+    setResult(runPipeline({ ...pixels, importance }, DIFFICULTY_PARAMS[difficulty]));
+    setView("outline");
+    setBusy(null);
   }
 
   const key = result ? usedPalette(result).key : [];
@@ -217,14 +259,33 @@ export default function ColorByNumber() {
           </div>
         </div>
 
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={focus}
+            onChange={(e) => {
+              setFocus(e.target.checked);
+              setResult(null);
+            }}
+            className="mt-1 h-4 w-4 accent-violet-600"
+          />
+          <span>
+            <span className="font-medium">Extra detail on people and buildings</span>
+            <span className="block text-sm text-zinc-600 dark:text-zinc-400">
+              The whole photo is still included. Faces, people, animals and buildings just get
+              finer shapes so they look their best.
+            </span>
+          </span>
+        </label>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={generate}
-            disabled={!file || busy}
+            disabled={!file || !!busy}
             className="rounded-full bg-violet-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? "Making your page…" : "3. Make my color-by-number"}
+            {busy ?? "3. Make my color-by-number"}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
           {error && <span className="text-sm text-red-600">{error}</span>}
@@ -260,6 +321,7 @@ export default function ColorByNumber() {
             </span>
           </div>
 
+          {focusNote && <p className="text-sm text-zinc-600 print:hidden dark:text-zinc-400">{focusNote}</p>}
           <canvas ref={canvasRef} className="h-auto w-full rounded-lg bg-white shadow-sm" />
 
           <div>

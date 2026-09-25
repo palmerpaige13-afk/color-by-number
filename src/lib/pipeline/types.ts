@@ -20,6 +20,8 @@ export interface PipelineInput {
   height: number;
   /** RGBA, already downscaled to working resolution. */
   data: Uint8ClampedArray;
+  /** Optional 0..1 per pixel; higher keeps more detail (faces, people, buildings). */
+  importance?: Float32Array;
 }
 
 export interface PipelineResult {
@@ -36,8 +38,14 @@ export interface PipelineResult {
   labelY: Float32Array;
   /** Distance from label point to nearest boundary, in px. */
   labelRadius: Float32Array;
+  /**
+   * 1 where a thin feature line should be drawn: an outline in an important area (eyes, brows,
+   * lips, window frames) that was too thin to become its own numbered shape.
+   */
+  detailLines?: Uint8Array;
   timings: Record<string, number>;
   debug?: {
+    importance?: Float32Array;
     smoothed: Uint8ClampedArray;
     quantized: Uint8Array;
     rawRegionCount: number;
