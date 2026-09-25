@@ -23,6 +23,39 @@ const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
 
 type View = "outline" | "colored";
 
+type Background = "remove" | "keep";
+
+/** Tiny scene sketches for the background picker: a person alone, or in a landscape. */
+function SceneIcon({ withScene }: { withScene: boolean }) {
+  return (
+    <svg viewBox="0 0 64 40" className="h-10 w-16 shrink-0" aria-hidden>
+      <rect width="64" height="40" rx="6" className={withScene ? "fill-sky-100" : "fill-white"} stroke="currentColor" strokeOpacity=".2" />
+      {withScene && (
+        <>
+          <path d="M0 30 L14 16 L24 25 L36 12 L52 27 L64 20 V34 a6 6 0 0 1 -6 6 H6 a6 6 0 0 1 -6 -6Z" className="fill-emerald-300" />
+          <circle cx="52" cy="9" r="4" className="fill-amber-300" />
+        </>
+      )}
+      <circle cx="32" cy="13" r="4.5" className="fill-violet-500" />
+      <path d="M25 36 q0 -13 7 -14 q7 1 7 14Z" className="fill-violet-500" />
+    </svg>
+  );
+}
+
+const BACKGROUNDS: { id: Background; label: string; blurb: string }[] = [
+  { id: "remove", label: "Just the people", blurb: "Background removed, all the detail on them" },
+  { id: "keep", label: "Whole photo", blurb: "Keep the scene around them too" },
+];
+
+function BrushIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8 9.2 12z" />
+      <path d="M9.2 12c-2 0-3.7 1.6-3.7 3.6 0 1.9-1.1 3.2-3 3.9 1.3 1.3 3.2 2 5.1 2 3.2 0 5.6-2.4 5.6-5.4z" />
+    </svg>
+  );
+}
+
 /**
  * Palette entries actually used by some region, numbered 1..n dark to light. Face skin has its
  * own palette entries (so faces keep their outline) but shares a number with its color twin.
@@ -75,8 +108,12 @@ function toWorkingImage(bitmap: ImageBitmap) {
  * The photo to work on: when it's a photo of people, just the area around the main people (so
  * all the detail is spent on them), otherwise the whole photo.
  */
-async function subjectImage(file: File): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
+async function subjectImage(
+  file: File,
+  keepBackground: boolean,
+): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
   const full = await createImageBitmap(file);
+  if (keepBackground) return { bitmap: full, ofPeople: false };
   const found = await findPeople(full).catch(() => []);
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.map(area));
@@ -162,13 +199,17 @@ export default function ColorByNumber() {
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<View>("outline");
+  const [background, setBackground] = useState<Background>("remove");
+  /** How far the brush has painted across the page, 0–100 (%). */
+  const [reveal, setReveal] = useState(50);
   const [dragging, setDragging] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const outlineRef = useRef<HTMLCanvasElement>(null);
+  const paintedRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    if (result && canvasRef.current) draw(canvasRef.current, result, view);
-  }, [result, view]);
+    if (result && outlineRef.current) draw(outlineRef.current, result, "outline");
+    if (result && paintedRef.current) draw(paintedRef.current, result, "colored");
+  }, [result]);
 
   function pickFile(f: File | undefined) {
     if (!f) return;
@@ -195,7 +236,7 @@ export default function ColorByNumber() {
     let bitmap: ImageBitmap;
     let ofPeople: boolean;
     try {
-      ({ bitmap, ofPeople } = await subjectImage(file));
+      ({ bitmap, ofPeople } = await subjectImage(file, background === "keep"));
     } catch {
       setError("Sorry, we couldn't read that photo. Try a different one.");
       setBusy(null);
@@ -222,11 +263,16 @@ export default function ColorByNumber() {
     const { importance } = map;
     const found = [describeSubjects(subjects), map.buildings ? "buildings" : ""];
     const list = found.filter(Boolean).join(", ");
+    const kept =
+      background === "remove" && !cutout
+        ? " No main people to cut out, so the whole photo is kept."
+        : "";
     setFocusNote(
-      note ||
+      (note ||
         (list
           ? `Kept extra detail on: ${list}.`
-          : "Didn't spot any people or buildings, so the whole photo got the same detail."),
+          : "Didn't spot any people or buildings, so the whole photo got the same detail.")) +
+        kept,
     );
     setBusy("Making your page…");
     await new Promise((r) => setTimeout(r, 30));
@@ -239,7 +285,7 @@ export default function ColorByNumber() {
         DIFFICULTY_PARAMS[difficulty],
       ),
     );
-    setView("outline");
+    setReveal(50);
     setBusy(null);
   }
 
@@ -320,6 +366,35 @@ export default function ColorByNumber() {
           </div>
         </div>
 
+        <div>
+          <h2 className="mb-2 font-semibold">3. Background</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup">
+            {BACKGROUNDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                role="radio"
+                aria-checked={background === b.id}
+                onClick={() => {
+                  setBackground(b.id);
+                  setResult(null);
+                }}
+                className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                  background === b.id
+                    ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
+                    : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
+                }`}
+              >
+                <SceneIcon withScene={b.id === "keep"} />
+                <span>
+                  <span className="block font-semibold">{b.label}</span>
+                  <span className="block text-sm text-zinc-600 dark:text-zinc-400">{b.blurb}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -327,7 +402,7 @@ export default function ColorByNumber() {
             disabled={!file || !!busy}
             className="rounded-full bg-violet-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ?? "3. Make my color-by-number"}
+            {busy ?? "4. Make my color-by-number"}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
           {error && <span className="text-sm text-red-600">{error}</span>}
@@ -337,20 +412,6 @@ export default function ColorByNumber() {
       {result && (
         <section className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2 print:hidden">
-            <div className="inline-flex rounded-full border border-zinc-200 p-1 dark:border-zinc-800">
-              {(["outline", "colored"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={`rounded-full px-4 py-1.5 text-sm font-medium ${
-                    view === v ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : ""
-                  }`}
-                >
-                  {v === "outline" ? "Coloring page" : "Finished preview"}
-                </button>
-              ))}
-            </div>
             <button
               type="button"
               onClick={() => window.print()}
@@ -359,12 +420,45 @@ export default function ColorByNumber() {
               Print
             </button>
             <span className="text-sm text-zinc-500">
-              {result.regionCount} shapes · {key.length} colors
+              {result.regionCount - (result.background === undefined ? 0 : 1)} shapes · {key.length}{" "}
+              colors
             </span>
           </div>
 
           {focusNote && <p className="text-sm text-zinc-600 print:hidden dark:text-zinc-400">{focusNote}</p>}
-          <canvas ref={canvasRef} className="h-auto w-full rounded-lg bg-white shadow-sm" />
+          {/* Before/after: drag the brush to paint the numbered page into the finished picture. */}
+          <div className="relative select-none overflow-hidden rounded-lg bg-white shadow-sm">
+            <canvas ref={outlineRef} className="block h-auto w-full" />
+            <canvas
+              ref={paintedRef}
+              className="pointer-events-none absolute inset-0 h-full w-full print:hidden"
+              style={{ clipPath: `inset(0 ${100 - reveal}% 0 0)` }}
+            />
+            <div
+              className="pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden"
+              style={{ left: `${reveal}%` }}
+            >
+              <div className="absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 -rotate-12 items-center justify-center rounded-full border-2 border-white bg-violet-600 text-white shadow-lg">
+                <BrushIcon />
+              </div>
+            </div>
+            <span className="pointer-events-none absolute top-2 left-2 rounded-full bg-violet-600/90 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
+              Painted
+            </span>
+            <span className="pointer-events-none absolute top-2 right-2 rounded-full bg-zinc-900/75 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
+              Numbers
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={0.5}
+              value={reveal}
+              onChange={(e) => setReveal(Number(e.target.value))}
+              aria-label="Drag the brush to compare the finished picture with the numbered page"
+              className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0 print:hidden"
+            />
+          </div>
 
           <div>
             <h2 className="mb-2 font-semibold">Color key</h2>
