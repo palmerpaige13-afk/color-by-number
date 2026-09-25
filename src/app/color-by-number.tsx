@@ -110,7 +110,6 @@ export default function ColorByNumber() {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [result, setResult] = useState<PipelineResult | null>(null);
-  const [focus, setFocus] = useState(true);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +138,7 @@ export default function ColorByNumber() {
 
   async function generate() {
     if (!file) return;
-    setBusy(focus ? "Finding people and buildings…" : "Making your page…");
+    setBusy("Finding people and buildings…");
     setError(null);
     setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
@@ -153,29 +152,26 @@ export default function ColorByNumber() {
       return;
     }
     const { bitmap, ...pixels } = work;
-    let importance: Float32Array | undefined;
-    if (focus) {
-      let subjects: SubjectBox[] = [];
-      let note = "";
-      try {
-        subjects = await detectSubjects(bitmap, pixels.width, pixels.height);
-      } catch {
-        note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
-      }
-      const structure = structureMap(pixels.data, pixels.width, pixels.height);
-      const map = importanceMap(structure, subjects, pixels.width, pixels.height);
-      importance = map.importance;
-      const found = [describeSubjects(subjects), map.buildings ? "buildings" : ""];
-      const list = found.filter(Boolean).join(", ");
-      setFocusNote(
-        note ||
-          (list
-            ? `Kept extra detail on: ${list}.`
-            : "Didn't spot any people or buildings, so the whole photo got the same detail."),
-      );
-      setBusy("Making your page…");
-      await new Promise((r) => setTimeout(r, 30));
+    let subjects: SubjectBox[] = [];
+    let note = "";
+    try {
+      subjects = await detectSubjects(bitmap, pixels.width, pixels.height);
+    } catch {
+      note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
     }
+    const structure = structureMap(pixels.data, pixels.width, pixels.height);
+    const map = importanceMap(structure, subjects, pixels.width, pixels.height);
+    const { importance } = map;
+    const found = [describeSubjects(subjects), map.buildings ? "buildings" : ""];
+    const list = found.filter(Boolean).join(", ");
+    setFocusNote(
+      note ||
+        (list
+          ? `Kept extra detail on: ${list}.`
+          : "Didn't spot any people or buildings, so the whole photo got the same detail."),
+    );
+    setBusy("Making your page…");
+    await new Promise((r) => setTimeout(r, 30));
     bitmap.close();
     setResult(runPipeline({ ...pixels, importance }, DIFFICULTY_PARAMS[difficulty]));
     setView("outline");
@@ -258,25 +254,6 @@ export default function ColorByNumber() {
             ))}
           </div>
         </div>
-
-        <label className="flex cursor-pointer items-start gap-3">
-          <input
-            type="checkbox"
-            checked={focus}
-            onChange={(e) => {
-              setFocus(e.target.checked);
-              setResult(null);
-            }}
-            className="mt-1 h-4 w-4 accent-violet-600"
-          />
-          <span>
-            <span className="font-medium">Extra detail on people and buildings</span>
-            <span className="block text-sm text-zinc-600 dark:text-zinc-400">
-              The whole photo is still included. Faces, people, animals and buildings just get
-              finer shapes so they look their best.
-            </span>
-          </span>
-        </label>
 
         <div className="flex flex-wrap items-center gap-3">
           <button
