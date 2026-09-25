@@ -10,12 +10,14 @@ import {
   type RegionMask,
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
-import { buildPage, drawPage, type Layer, type Page } from "@/lib/page";
+import { buildPage, drawPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 
 /** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
 /** Largest page width, in pixels (a two-layer page scales up to keep the people's detail). */
 const MAX_PAGE_WIDTH = 2700;
+/** Share of the shape budget spent on the people on a two-layer page; the rest is the scene. */
+const PEOPLE_SHARE = 0.65;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
@@ -270,32 +272,50 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
 
     const faces = subjects.filter((s) => s.kind === "face");
+    const twoLayers = !!(frame && cutout && background === "keep");
+
+    // How big each layer is drawn decides how small its shapes can be and stay readable.
+    let k = 0; // page px per photo px (two layers)
+    let mainScale = SCALE;
+    let pageWidth = main.width * SCALE;
+    if (twoLayers && frame) {
+      k = Math.min((SCALE * main.width) / mainRect.width, MAX_PAGE_WIDTH / frame.scene.width);
+      mainScale = (k * mainRect.width) / main.width;
+      pageWidth = frame.scene.width * k;
+    }
+    const budget = (share: number) => ({
+      ...params,
+      maxShapes: params.maxShapes && Math.round(params.maxShapes * share),
+    });
+
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     const mainResult = runPipeline(
       { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals },
-      params,
+      { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale) },
     );
 
     let page: Page;
-    if (frame && cutout && background === "keep") {
+    if (twoLayers && frame && cutout) {
       // Scene layer underneath: the framed photo, coarser, with the people's area left out.
       const sceneBitmap = await crop(full, frame.scene);
       const scene = toWorkingImage(sceneBitmap);
       sceneBitmap.close();
       const keep = sceneMask(scene, frame.scene, { ...main, cutout }, mainRect);
+      const sceneScale = (k * frame.scene.width) / scene.width;
+      // The scene gets whatever part of the budget the people didn't use.
+      const peopleShapes = mainResult.regionCount - (mainResult.background === undefined ? 0 : 1);
+      const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
       const sceneResult = runPipeline(
         { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
-        params,
+        { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale) },
       );
-      // Page pixels per photo pixel, set by the people layer drawn at SCALE (capped).
-      const k = Math.min((SCALE * main.width) / mainRect.width, MAX_PAGE_WIDTH / frame.scene.width);
       const layers: Layer[] = [
-        { result: sceneResult, x: 0, y: 0, scale: (k * frame.scene.width) / scene.width, outlineBlank: false },
+        { result: sceneResult, x: 0, y: 0, scale: sceneScale, outlineBlank: false },
         {
           result: mainResult,
           x: (mainRect.x - frame.scene.x) * k,
           y: (mainRect.y - frame.scene.y) * k,
-          scale: (k * mainRect.width) / main.width,
+          scale: mainScale,
           outlineBlank: true,
         },
       ];

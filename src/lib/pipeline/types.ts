@@ -53,6 +53,13 @@ export interface PipelineParams {
   boundaryPasses: number;
   /** Include intermediate rasters (smoothed, quantized) for the lab page. */
   debug: boolean;
+  /** Most shapes the page may have; the smallest are merged until it fits. */
+  maxShapes?: number;
+  /**
+   * Smallest shape (label radius, working px) that can hold a readable number, for how this
+   * layer will be drawn. Defaults to one suited to drawing at 1.5 page px per working px.
+   */
+  minLabelRadius?: number;
 }
 
 export interface PipelineInput {

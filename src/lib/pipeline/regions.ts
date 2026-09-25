@@ -104,7 +104,8 @@ class Heap {
  * between palette colors, longest shared border breaks ties), smallest first, until no
  * flagged region remains or a flagged region has no neighbors. Returns a new color map.
  *
- * `needsMerge` is evaluated against the region's *current* (possibly grown) area.
+ * `needsMerge` is evaluated against the region's *current* (possibly grown) area. With a
+ * `budget`, merging stops as soon as at most that many regions remain.
  *
  * `group` (per palette color) keeps faces apart from the background: a region only merges
  * into a neighbor of its own group. A background region with no background neighbor (an eye
@@ -118,8 +119,10 @@ export function mergeRegions(
   paletteLab: Float32Array,
   needsMerge: (id: number, area: number) => boolean,
   group?: Uint8Array,
+  budget = 0,
 ): Uint8Array {
   const { labels, count } = comps;
+  let live = count;
   const color = Uint8Array.from(comps.color);
   const area = Uint32Array.from(comps.area);
 
@@ -159,7 +162,8 @@ export function mergeRegions(
     }
   }
 
-  while (heap.size > 0) {
+  // With a budget, stop once few enough regions are left (smallest go first).
+  while (heap.size > 0 && live > budget) {
     const [pri, r] = heap.pop();
     if (parent[r] !== r || pri !== area[r] || !flagged[r]) continue; // stale entry
     if (adj[r].size === 0) continue;
@@ -182,6 +186,7 @@ export function mergeRegions(
 
     // Absorb r into target.
     parent[r] = target;
+    live--;
     area[target] += area[r];
     adj[target].delete(r);
     for (const [nb, border] of adj[r]) {

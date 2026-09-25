@@ -31,8 +31,14 @@ export interface Page {
 
 /** Colors from different layers closer than this (ΔE) share a number. */
 const SAME_COLOR = 7;
-/** Smallest number drawn, in page pixels. Smaller shapes are printed already colored in. */
-export const MIN_FONT = 6.5;
+/**
+ * Smallest readable number, in page pixels: a share of the page width, so numbers stay
+ * readable however big the page is when it's fit to a screen or a sheet of paper. Shapes too
+ * small for it are printed already colored in (the pipeline keeps those rare).
+ */
+export const minFont = (pageWidth: number) => Math.max(7, pageWidth * 0.0065);
+/** Label radius (working px) a layer's shapes need for a readable number at `scale`. */
+export const minLabelRadius = (pageWidth: number, scale: number) => minFont(pageWidth) / (1.1 * scale);
 const MAX_FONT = 26;
 
 export function buildPage(width: number, height: number, layers: Layer[]): Page {
@@ -80,6 +86,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
   const img = ctx.createImageData(W, H);
   img.data.fill(255);
 
+  const MIN_FONT = minFont(W);
   page.layers.forEach((layer, li) => {
     const { result, scale } = layer;
     const { width: w, height: h, labels, regionColor } = result;

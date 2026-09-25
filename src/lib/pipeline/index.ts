@@ -55,9 +55,9 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
 });
 
 export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
-  easy: tuned({ paletteSize: 8, minArea: 900, minRadius: 9, smoothPasses: 3, boundaryPasses: 3 }),
-  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5 }),
-  hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1 }),
+  easy: tuned({ paletteSize: 8, minArea: 900, minRadius: 9, smoothPasses: 3, boundaryPasses: 3, maxShapes: 60 }),
+  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150 }),
+  hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1, maxShapes: 280 }),
 };
 
 export function runPipeline(input: PipelineInput, params: PipelineParams): PipelineResult {
@@ -129,8 +129,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const keepFactor = (importance: number, contrast: number) =>
     importance * Math.min(1, Math.max(0, (contrast - 12) / 18));
   const areaLimit = (k: number) => (k >= DETAIL_LEVEL ? TINY_AREA : params.minArea * (1 - 0.85 * k));
+  const minPrint = params.minLabelRadius ?? MIN_PRINT_RADIUS;
   const radiusLimit = (k: number) =>
-    k >= DETAIL_LEVEL ? TINY_RADIUS : Math.max(MIN_PRINT_RADIUS, params.minRadius * (1 - 0.5 * k));
+    k >= DETAIL_LEVEL ? TINY_RADIUS : Math.max(minPrint, params.minRadius * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -144,6 +145,14 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id])),
     group,
   );
+
+  // Budget: if there are still too many shapes, merge the smallest until it fits.
+  if (params.maxShapes) {
+    const counted = labelComponents(colorMap, w, h);
+    if (counted.count > params.maxShapes) {
+      colorMap = mergeRegions(counted, w, h, paletteLab, () => true, group, params.maxShapes);
+    }
+  }
 
   // Pass 2: merge regions too thin to fit a number. Radius is only known for the original
   // shape, so a region stops being flagged once it has absorbed a neighbor; repeating the
