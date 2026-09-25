@@ -71,23 +71,21 @@ export async function detectSubjects(
     out.push({ kind, x: b.originX * toWork, y: b.originY * toWork, width: b.width * toWork, height: b.height * toWork });
   }
 
-  const faceBoxes: SubjectBox[] = [];
-  const addFaces = (src: CanvasImageSource, ox: number, oy: number, scale: number) => {
-    for (const d of faces.detect(src as HTMLCanvasElement).detections) {
+  // Face candidates from the whole photo and from zoomed-in crops of each person; the same
+  // face is usually found more than once, so candidates are resolved afterwards.
+  type Candidate = { x: number; y: number; w: number; h: number; score: number };
+  const candidates: Candidate[] = [];
+  const addFaces = (src: HTMLCanvasElement, ox: number, oy: number, scale: number) => {
+    for (const d of faces.detect(src).detections) {
       const b = d.boundingBox;
       if (!b) continue;
-      const box: SubjectBox = {
-        kind: "face",
-        x: (ox + b.originX / scale) * toWork,
-        y: (oy + b.originY / scale) * toWork,
-        width: (b.width / scale) * toWork,
-        height: (b.height / scale) * toWork,
-      };
-      // Skip duplicates of a face already found at another scale.
-      const dup = faceBoxes.some(
-        (f) => Math.abs(f.x - box.x) < f.width / 2 && Math.abs(f.y - box.y) < f.height / 2,
-      );
-      if (!dup) faceBoxes.push(box);
+      candidates.push({
+        x: ox + b.originX / scale,
+        y: oy + b.originY / scale,
+        w: b.width / scale,
+        h: b.height / scale,
+        score: d.categories[0]?.score ?? 0,
+      });
     }
   };
   addFaces(canvas, 0, 0, 1);
@@ -104,6 +102,41 @@ export async function detectSubjects(
     crop.getContext("2d")!.drawImage(canvas, p.x, p.y, cw, ch, 0, 0, crop.width, crop.height);
     addFaces(crop, p.x, p.y, scale);
   }
+
+  // Most confident first; drop any candidate overlapping one already kept.
+  const overlaps = (a: Candidate, b: Candidate) => {
+    const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    return ix * iy > 0.25 * Math.min(a.w * a.h, b.w * b.h);
+  };
+  candidates.sort((a, b) => b.score - a.score);
+  let kept: Candidate[] = [];
+  for (const c of candidates) if (!kept.some((k) => overlaps(k, c))) kept.push(c);
+
+  // When people were found, every real face belongs to one of them: at most one face per
+  // person, in the upper part of their box. Faces on no one (a bouquet, a pattern) are dropped.
+  if (people.length > 0) {
+    const taken = new Set<number>();
+    kept = kept.filter((c) => {
+      const fx = c.x + c.w / 2;
+      const fy = c.y + c.h / 2;
+      const owner = people.findIndex(
+        (p, i) =>
+          !taken.has(i) && fx >= p.x && fx <= p.x + p.w && fy >= p.y && fy <= p.y + p.h * 0.45,
+      );
+      if (owner === -1) return false;
+      taken.add(owner);
+      return true;
+    });
+  }
+
+  const faceBoxes: SubjectBox[] = kept.map((c) => ({
+    kind: "face",
+    x: c.x * toWork,
+    y: c.y * toWork,
+    width: c.w * toWork,
+    height: c.h * toWork,
+  }));
 
   return [...out, ...faceBoxes].map((b) => ({
     ...b,

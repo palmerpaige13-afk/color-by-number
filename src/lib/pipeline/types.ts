@@ -1,5 +1,13 @@
 export type RGB = [number, number, number];
 
+/** Axis-aligned box in working-raster pixels. */
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface PipelineParams {
   /** Number of palette colors (8–24). */
   paletteSize: number;
@@ -22,6 +30,8 @@ export interface PipelineInput {
   data: Uint8ClampedArray;
   /** Optional 0..1 per pixel; higher keeps more detail (faces, people, buildings). */
   importance?: Float32Array;
+  /** Detected faces; their skin is flattened to a single color. */
+  faces?: Box[];
 }
 
 export interface PipelineResult {

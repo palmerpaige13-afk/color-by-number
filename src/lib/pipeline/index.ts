@@ -2,6 +2,7 @@
 
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
+import { flattenFaces } from "./faces";
 import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
@@ -64,6 +65,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   lap("smooth");
 
   const { indices, palette, paletteLab } = quantize(smoothed, w, h, params.paletteSize, imp);
+  if (input.faces?.length) flattenFaces(indices, smoothed, input.faces, paletteLab, w, h);
   lap("quantize");
 
   let colorMap = majorityFilter(indices, w, h, palette.length, params.boundaryPasses);

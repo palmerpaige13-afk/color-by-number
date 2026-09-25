@@ -173,7 +173,8 @@ export default function ColorByNumber() {
     setBusy("Making your page…");
     await new Promise((r) => setTimeout(r, 30));
     bitmap.close();
-    setResult(runPipeline({ ...pixels, importance }, DIFFICULTY_PARAMS[difficulty]));
+    const faces = subjects.filter((s) => s.kind === "face");
+    setResult(runPipeline({ ...pixels, importance, faces }, DIFFICULTY_PARAMS[difficulty]));
     setView("outline");
     setBusy(null);
   }

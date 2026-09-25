@@ -3,13 +3,11 @@
 // that picks out buildings: dense, straight, strong edges (windows, walls, rooflines) as
 // opposed to foliage and grass, whose edges are just as strong but point every which way.
 
+import type { Box } from "./types";
+
 /** Detected subject box, in working-raster pixels. */
-export interface SubjectBox {
+export interface SubjectBox extends Box {
   kind: "face" | "person" | "animal";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 const SUBJECT_WEIGHT: Record<SubjectBox["kind"], number> = { face: 1, person: 0.6, animal: 0.55 };
