@@ -23,11 +23,12 @@ import type { FaceShape, RGB, RegionMask } from "./types";
 const SKIN_TOLERANCE = 20;
 
 /**
- * Every face pixel takes the nearer of the face's skin tones, so eyes, brows and stray strands of
- * hair inside the outline don't show up as dark hair-colored spots. Distance counts lightness at
- * only LIGHTNESS_WEIGHT, since shadow mostly darkens skin without changing its hue.
+ * A face gets a second (shadow) tone only if its lit and shaded halves differ by at least this
+ * ΔE and the shaded part is at least MIN_SHADOW_SHARE of the face; otherwise it's one tone.
+ * Eyes, brows and stray hair inside the outline always take a skin tone.
  */
-const LIGHTNESS_WEIGHT = 0.35;
+const TWO_TONE_DISTANCE = 10;
+const MIN_SHADOW_SHARE = 0.25;
 /**
  * A face in shadow (backlit, under a hat) has truly dark pixels, but people see it as normal
  * skin, and a flat dark-brown face reads as wrong. Faces whose lit tone is darker than this
@@ -182,39 +183,25 @@ export function separateFaces(
     return palette.length - 1;
   };
 
-  // Faces: their own skin tones.
-  const faceTone = new Map<number, { tones: Float32Array; ids: number[] }>();
+  // Faces: one or two of their own skin tones, as smooth lit/shadow areas.
+  const faceTone = new Map<number, { ids: number[]; tone: Map<number, number> }>();
   if (style !== "lines") {
     faces.forEach((_, i) => {
       const k = i + 1;
-      const tones = skinTones(smoothed, mask, k, style === "faceless" ? 1 : 2);
-      if (!tones) return;
-      const ids = tones.rgb.map((rgb, t) => add(rgb, tones.lab.subarray(t * 3, t * 3 + 3), k));
-      if (ids.every((id) => id >= 0)) faceTone.set(k, { tones: tones.lab, ids });
+      const shading = faceShading(smoothed, mask, k, w, style === "faceless" ? 1 : 2);
+      if (!shading) return;
+      const ids = shading.rgb.map((rgb, t) => add(rgb, shading.lab.subarray(t * 3, t * 3 + 3), k));
+      if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
     });
   }
 
-  const lab = new Float32Array(3);
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
     if (!k) continue;
     const face = faceTone.get(k);
     if (face) {
-      rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
-      let best = 0;
-      let bestD = Infinity;
-      for (let t = 0; t < face.ids.length; t++) {
-        const dl = (lab[0] - face.tones[t * 3]) * LIGHTNESS_WEIGHT;
-        const da = lab[1] - face.tones[t * 3 + 1];
-        const db = lab[2] - face.tones[t * 3 + 2];
-        const d = dl * dl + da * da + db * db;
-        if (d < bestD) {
-          bestD = d;
-          best = t;
-        }
-      }
-      indices[p] = face.ids[best];
+      indices[p] = face.ids[face.tone.get(p) ?? 0];
       continue;
     }
     const base = indices[p];
@@ -232,52 +219,118 @@ export function separateFaces(
 }
 
 /**
- * The face's own skin tones: its pixels split by lightness into `count` groups (lit, shadow),
- * each group's mean color. The shadow tone is softened toward the lit one so it reads as
- * shaded skin rather than as a different material.
+ * A face's skin as one or two tones. Light and shadow are judged on a heavily blurred copy of
+ * the face's lightness, so the split follows the broad lit and shaded sides of the face, not
+ * eyes, brows or a smile (which would otherwise turn into blotches). A face gets a second
+ * tone only when its shaded side is clearly darker and a real part of the face; the shadow
+ * tone is softened toward the lit one so it reads as shaded skin. Returns each face pixel's
+ * tone (0 = shadow or the only tone, 1 = lit).
  */
-function skinTones(
+function faceShading(
   smoothed: Uint8ClampedArray,
   mask: Uint8Array,
   k: number,
-  count: 1 | 2,
-): { rgb: RGB[]; lab: Float32Array } | null {
+  w: number,
+  maxTones: 1 | 2,
+): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
   const lab = new Float32Array(3);
   const px: number[] = [];
-  const light: number[] = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
   for (let p = 0; p < mask.length; p++) {
     if (mask[p] !== k) continue;
-    rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
     px.push(p);
-    light.push(lab[0]);
+    const x = p % w;
+    const y = (p - x) / w;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
   }
   if (px.length < 8) return null;
-  // Ignore the darkest and brightest 10% (eyes, teeth, glare) when finding the skin tones.
+
+  // Lightness over the face's box, blurred only within the face.
+  const bw = x1 - x0 + 1;
+  const bh = y1 - y0 + 1;
+  const L = new Float32Array(bw * bh);
+  const M = new Float32Array(bw * bh);
+  const light: number[] = [];
+  for (const p of px) {
+    const x = (p % w) - x0;
+    const y = Math.floor(p / w) - y0;
+    rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
+    L[y * bw + x] = lab[0];
+    M[y * bw + x] = 1;
+    light.push(lab[0]);
+  }
+  const r = Math.max(2, Math.round(Math.min(bw, bh) * 0.18));
+  const blur = (a: Float32Array) => {
+    const t = new Float32Array(a.length);
+    const out = new Float32Array(a.length);
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        let s = 0;
+        for (let d = -r; d <= r; d++) s += a[y * bw + Math.min(bw - 1, Math.max(0, x + d))];
+        t[y * bw + x] = s;
+      }
+    }
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        let s = 0;
+        for (let d = -r; d <= r; d++) s += t[Math.min(bh - 1, Math.max(0, y + d)) * bw + x];
+        out[y * bw + x] = s;
+      }
+    }
+    return out;
+  };
+  const bl = blur(L);
+  const bm = blur(M);
+  const soft = px.map((p) => {
+    const i = (Math.floor(p / w) - y0) * bw + ((p % w) - x0);
+    return bl[i] / Math.max(1e-6, bm[i]);
+  });
+  const mid = [...soft].sort((a, b) => a - b)[soft.length >> 1];
+
+  // Mean color of a set of face pixels, leaving out the darkest and brightest 10% (eyes,
+  // brows, teeth, glare).
   const sorted = [...light].sort((a, b) => a - b);
   const lo = sorted[Math.floor(sorted.length * 0.1)];
   const hi = sorted[Math.floor(sorted.length * 0.9)];
-  const mid = count === 2 ? sorted[sorted.length >> 1] : Infinity;
-  const sums = [new Float64Array(4), new Float64Array(4)];
-  px.forEach((p, i) => {
-    if (light[i] < lo || light[i] > hi) return;
-    const s = sums[light[i] >= mid ? 1 : 0];
-    s[0] += smoothed[p * 4];
-    s[1] += smoothed[p * 4 + 1];
-    s[2] += smoothed[p * 4 + 2];
-    s[3]++;
-  });
-  const means = sums.filter((s) => s[3] > 0).map((s): RGB => [s[0] / s[3], s[1] / s[3], s[2] / s[3]]);
-  if (means.length === 0) return null;
-  if (means.length === 2) {
-    // [shadow, lit]: soften the shadow toward the lit tone.
-    const [dark, lit] = means;
-    means[0] = dark.map((v, c) => v + (lit[c] - v) * SHADOW_SOFTEN) as RGB;
+  const meanOf = (pick: (i: number) => boolean): RGB | null => {
+    let r0 = 0, g0 = 0, b0 = 0, n = 0;
+    px.forEach((p, i) => {
+      if (!pick(i) || light[i] < lo || light[i] > hi) return;
+      r0 += smoothed[p * 4];
+      g0 += smoothed[p * 4 + 1];
+      b0 += smoothed[p * 4 + 2];
+      n++;
+    });
+    return n ? [r0 / n, g0 / n, b0 / n] : null;
+  };
+
+  let means: RGB[];
+  const tone = new Map<number, number>();
+  const shadow = meanOf((i) => soft[i] < mid);
+  const lit = meanOf((i) => soft[i] >= mid);
+  const shadowShare = soft.filter((v) => v < mid - 4).length / soft.length;
+  let two = maxTones === 2 && !!shadow && !!lit && shadowShare >= MIN_SHADOW_SHARE;
+  if (two) {
+    const a = new Float32Array(3);
+    const b = new Float32Array(3);
+    rgbToLab(shadow![0], shadow![1], shadow![2], a, 0);
+    rgbToLab(lit![0], lit![1], lit![2], b, 0);
+    two = labDist2(a, 0, b, 0) >= TWO_TONE_DISTANCE * TWO_TONE_DISTANCE;
   }
-  const lit = means[means.length - 1];
-  const litLuma = 0.299 * lit[0] + 0.587 * lit[1] + 0.114 * lit[2];
+  if (two) {
+    // [shadow, lit]: soften the shadow toward the lit tone.
+    means = [shadow!.map((v, c) => v + (lit![c] - v) * SHADOW_SOFTEN) as RGB, lit!];
+    px.forEach((p, i) => tone.set(p, soft[i] >= mid ? 1 : 0));
+  } else {
+    means = [meanOf(() => true) ?? [200, 160, 140]];
+    px.forEach((p) => tone.set(p, 0));
+  }
+
+  const litTone = means[means.length - 1];
+  const litLuma = 0.299 * litTone[0] + 0.587 * litTone[1] + 0.114 * litTone[2];
   const boost = Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma)));
   const rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
   const out = new Float32Array(rgb.length * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
-  return { rgb, lab: out };
+  return { rgb, lab: out, tone };
 }

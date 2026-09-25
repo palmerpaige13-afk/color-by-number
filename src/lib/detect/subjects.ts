@@ -242,8 +242,10 @@ export async function detectSubjects(
     .filter((c) => c.lm || c.score >= SURE_FACE)
     .sort((a, b) => Number(!!b.lm) - Number(!!a.lm) || b.score - a.score);
 
-  // When people were found, every real face belongs to one of them: at most one face per
-  // person, in the upper part of their box. Faces on no one are dropped.
+  // When people were found, every real face belongs to one of them, in the upper part of a
+  // person's box. A face the landmarker confirmed is always kept (a baby held in someone's
+  // arms shares their box); an unconfirmed one only if that person has no face yet. Faces on
+  // no one (a bush, a pattern) are dropped.
   let kept = traced;
   if (people.length === 0) {
     // No people: a "face" on an animal (a parrot's eye and beak) isn't a human face.
@@ -257,16 +259,20 @@ export async function detectSubjects(
     );
   } else {
     const taken = new Set<number>();
-    kept = traced.filter((c) => {
+    const owners = (c: Candidate) => {
       const fx = c.x + c.w / 2;
       const fy = c.y + c.h / 2;
-      const owner = people.findIndex(
-        (p, i) =>
-          !taken.has(i) && fx >= p.x && fx <= p.x + p.w && fy >= p.y && fy <= p.y + p.h * 0.45,
-      );
-      if (owner === -1) return false;
-      taken.add(owner);
-      return true;
+      return people
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => fx >= p.x && fx <= p.x + p.w && fy >= p.y && fy <= p.y + p.h * 0.6)
+        .map(({ i }) => i);
+    };
+    kept = traced.filter((c) => {
+      const mine = owners(c);
+      if (mine.length === 0) return false;
+      const free = mine.find((i) => !taken.has(i));
+      if (free !== undefined) taken.add(free);
+      return free !== undefined || !!c.lm;
     });
   }
 
