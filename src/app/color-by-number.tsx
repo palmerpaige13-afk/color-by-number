@@ -137,8 +137,18 @@ async function framing(full: ImageBitmap): Promise<{ subjects: Rect; scene: Rect
   return { subjects, scene };
 }
 
-const crop = (full: ImageBitmap, r: Rect) =>
-  createImageBitmap(full, Math.floor(r.x), Math.floor(r.y), Math.ceil(r.width), Math.ceil(r.height));
+/**
+ * Cuts a rectangle out of the (upright) photo. Done by drawing rather than with
+ * createImageBitmap's crop, which on phone photos stored sideways (EXIF rotation) crops the
+ * stored, unrotated pixels, cutting out the wrong area.
+ */
+function crop(full: ImageBitmap, r: Rect): Promise<ImageBitmap> {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(r.width));
+  canvas.height = Math.max(1, Math.ceil(r.height));
+  canvas.getContext("2d")!.drawImage(full, Math.floor(r.x), Math.floor(r.y), canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+  return createImageBitmap(canvas);
+}
 
 /**
  * The part of the scene not covered by the people layer, in the scene layer's pixels: 1 where
@@ -290,7 +300,7 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
     let full: ImageBitmap;
     try {
-      full = await createImageBitmap(file);
+      full = await createImageBitmap(file, { imageOrientation: "from-image" });
     } catch {
       setError("Sorry, we couldn't read that photo. Try a different one.");
       setBusy(null);
