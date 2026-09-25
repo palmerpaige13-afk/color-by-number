@@ -35,8 +35,9 @@ export interface Page {
 const SAME_COLOR = 7;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
- * print size), so it prints at a readable size however the page is scaled. Shapes too small
- * for it are printed already colored in (the pipeline keeps those rare).
+ * print size), so it prints at a readable size however the page is scaled. The pipeline
+ * merges away shapes too small for it; the coloring page itself is never colored in (only a
+ * pet's black eyes and nose are).
  */
 export const minFont = (pageWidth: number, fontFrac: number) => pageWidth * fontFrac;
 /** Label radius (working px) a layer's shapes need for a readable number at `scale`. */
@@ -104,10 +105,6 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     const { width: w, height: h, labels, regionColor } = result;
     const color = (index: number) => page.key[page.numbers[li][index] - 1]?.rgb ?? result.palette[index];
     const blank = (l: number) => regionColor[l] === result.background;
-    const tiny = new Uint8Array(result.regionCount);
-    for (let i = 0; i < result.regionCount; i++) {
-      tiny[i] = !blank(i) && result.labelRadius[i] * scale * 1.1 < MIN_FONT ? 1 : 0;
-    }
 
     // Walk the layer's area in page pixels, so lines are one page pixel wide at any scale.
     const x0 = Math.max(0, Math.floor(layer.x));
@@ -129,9 +126,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
         const edge = edgeWith(right) || edgeWith(down);
         let rgb: RGB | null;
         if (blank(l)) rgb = edge ? EDGE : null;
-        else if (tiny[l]) rgb = color(regionColor[l]);
         else if (edge) rgb = EDGE;
-        else if (result.detailLines?.[p]) rgb = view === "colored" ? [90, 90, 90] : [150, 150, 150];
         else rgb = view === "colored" ? color(regionColor[l]) : [255, 255, 255];
         if (!rgb) continue; // leave whatever is underneath
         const q = (Y * W + X) * 4;

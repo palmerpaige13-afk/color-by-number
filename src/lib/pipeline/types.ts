@@ -101,11 +101,6 @@ export interface PipelineResult {
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];
-  /**
-   * 1 where a thin feature line should be drawn: an outline in an important area (eyes, brows,
-   * lips, window frames) that was too thin to become its own numbered shape.
-   */
-  detailLines?: Uint8Array;
   timings: Record<string, number>;
   debug?: {
     importance?: Float32Array;

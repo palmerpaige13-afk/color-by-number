@@ -4,7 +4,6 @@ import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
 import { paintSkin, separateFaces } from "./faces";
-import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
 import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult } from "./types";
@@ -15,14 +14,6 @@ export type Difficulty = "easy" | "medium" | "hard";
 
 /** Smallest label radius (working px) whose number is still legible when drawn at 1.5x. */
 const MIN_PRINT_RADIUS = 4.3;
-/**
- * On faces and pets, standout features (eyes, nose, tongue) are kept however small; the ones
- * too small for a number are printed already colored in. Applies from this keep factor
- * (importance x contrast) up, down to shapes of TINY_AREA pixels / TINY_RADIUS.
- */
-const DETAIL_LEVEL = 0.8;
-const TINY_AREA = 4;
-const TINY_RADIUS = 1;
 
 /** Mean importance per region. */
 function regionImportance(labels: Int32Array, count: number, importance: Float32Array): Float32Array {
@@ -39,8 +30,6 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
 /** Region-merge group of the blank background of a cut-out photo. */
 const BACKGROUND_GROUP = 255;
 
-/** Importance above which photo edges are drawn as feature lines. */
-const LINE_LEVEL = 0.35;
 
 /** Long edge of the working raster, in px. */
 export const WORKING_SIZE = 900;
@@ -128,10 +117,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // walls (low contrast) still merges away. Never so small that a number won't fit.
   const keepFactor = (importance: number, contrast: number) =>
     importance * Math.min(1, Math.max(0, (contrast - 12) / 18));
-  const areaLimit = (k: number) => (k >= DETAIL_LEVEL ? TINY_AREA : params.minArea * (1 - 0.85 * k));
+  const areaLimit = (k: number) => params.minArea * (1 - 0.85 * k);
   const minPrint = params.minLabelRadius ?? MIN_PRINT_RADIUS;
-  const radiusLimit = (k: number) =>
-    k >= DETAIL_LEVEL ? TINY_RADIUS : Math.max(minPrint, params.minRadius * (1 - 0.5 * k));
+  const radiusLimit = (k: number) => Math.max(minPrint, params.minRadius * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -178,6 +166,25 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       group,
     );
   }
+
+  // Last resort: anything still too small for a readable number (a sliver of face, hair or
+  // pet that had nothing of its own kind to join) merges into any neighbor, so every shape on
+  // the page can carry a number. Only the blank background stays apart.
+  {
+    const left = labelComponents(colorMap, w, h);
+    const pts = labelPoints(left.labels, left.count, w, h, boundaryDistance(left.labels, w, h));
+    const blankOnly = group && Uint8Array.from(group, (g) => (g === BACKGROUND_GROUP ? g : 0));
+    if (pts.radius.some((r, id) => r < minPrint && left.color[id] !== background)) {
+      colorMap = mergeRegions(
+        left,
+        w,
+        h,
+        paletteLab,
+        (id, area) => area === left.area[id] && pts.radius[id] < minPrint && left.color[id] !== background,
+        blankOnly,
+      );
+    }
+  }
   lap("merge");
 
   const final = labelComponents(colorMap, w, h);
@@ -190,9 +197,6 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       const eyes = petEyes(input.data, a, w, h);
       return { eyes, nose: petNose(input.data, eyes, w, h) };
     });
-  const detailLines = imp
-    ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h, faces?.mask, input.faces, faceStyle === "lines")
-    : undefined;
   lap("labels");
 
   return {
@@ -209,7 +213,6 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     background,
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),
-    detailLines,
     timings,
     debug: params.debug
       ? { importance: imp, smoothed, quantized: indices, rawRegionCount: raw.count }
