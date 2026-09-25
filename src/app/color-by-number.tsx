@@ -43,8 +43,8 @@ function SceneIcon({ withScene }: { withScene: boolean }) {
 }
 
 const BACKGROUNDS: { id: Background; label: string; blurb: string }[] = [
-  { id: "remove", label: "Just the people", blurb: "Background removed, all the detail on them" },
-  { id: "keep", label: "Whole photo", blurb: "Keep the scene around them too" },
+  { id: "remove", label: "No background", blurb: "Just the people, with all the detail on them" },
+  { id: "keep", label: "With background", blurb: "Keep the scene around them too" },
 ];
 
 function BrushIcon() {
