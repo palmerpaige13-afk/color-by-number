@@ -60,8 +60,10 @@ export interface PipelineInput {
    * "shaded" keeps shading shapes only; "faceless" is one smooth shape per face.
    */
   faceStyle?: "lines" | "shaded" | "faceless";
-  /** 1 on the subject (people), 0 on background. Background is left blank: no shapes. */
+  /** 1 on the subject (people and pets), 0 on background. Background is left blank: no shapes. */
   cutout?: Uint8Array;
+  /** Animal masks: each is outlined as its own part, with its shadows lifted. */
+  animals?: RegionMask[];
 }
 
 export interface PipelineResult {

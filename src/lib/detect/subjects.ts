@@ -12,7 +12,7 @@ import {
   ObjectDetector,
 } from "@mediapipe/tasks-vision";
 import type { SubjectBox } from "@/lib/pipeline/importance";
-import type { Box, Point } from "@/lib/pipeline/types";
+import type { Box, Point, RegionMask } from "@/lib/pipeline/types";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
@@ -20,6 +20,11 @@ const OBJECT_MODEL = `${MODELS}/object_detector/efficientdet_lite0/int8/latest/e
 const FACE_MODEL = `${MODELS}/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite`;
 const LANDMARK_MODEL = `${MODELS}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`;
 const SEGMENT_MODEL = `${MODELS}/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite`;
+/** General segmenter (PASCAL VOC classes) used to trace animals; ~3 MB, loaded only for pets. */
+const ANIMAL_MODEL = `${MODELS}/image_segmenter/deeplab_v3/float32/latest/deeplab_v3.tflite`;
+/** DeepLab category indices for animals: bird, cat, cow, dog, horse, sheep. */
+const ANIMAL_CLASSES = new Set([3, 8, 10, 12, 13, 17]);
+const ANIMAL_SIZE = 257;
 /** Category indices in the multiclass segmenter's output. */
 const HAIR = 1;
 const FACE_SKIN = 3;
@@ -57,6 +62,25 @@ function loadSegmenter() {
       throw err;
     });
   return segmenter;
+}
+
+let animalSegmenter: Promise<ImageSegmenter> | null = null;
+
+function loadAnimalSegmenter() {
+  animalSegmenter ??= FilesetResolver.forVisionTasks(WASM_URL)
+    .then((fileset) =>
+      ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: ANIMAL_MODEL },
+        runningMode: "IMAGE",
+        outputCategoryMask: true,
+        outputConfidenceMasks: false,
+      }),
+    )
+    .catch((err) => {
+      animalSegmenter = null;
+      throw err;
+    });
+  return animalSegmenter;
 }
 
 let detectors: Promise<{
@@ -110,23 +134,27 @@ function detectionCanvas(image: ImageBitmap) {
   return { canvas, scale: s };
 }
 
-/** People in the photo, as boxes in the image's own pixels. Used to crop to the subject. */
-export async function findPeople(image: ImageBitmap): Promise<Box[]> {
+/** People and animals in the photo, as boxes in the image's own pixels. Used to crop to the subject. */
+export async function findPeople(image: ImageBitmap): Promise<{ people: Box[]; animals: Box[] }> {
   const { objects } = await loadDetectors();
   const { canvas, scale } = detectionCanvas(image);
-  return objects
-    .detect(canvas)
-    .detections.filter((d) => d.categories[0]?.categoryName === "person" && d.boundingBox)
-    .map((d) => {
-      const b = d.boundingBox!;
-      return { x: b.originX / scale, y: b.originY / scale, width: b.width / scale, height: b.height / scale };
-    });
+  const people: Box[] = [];
+  const animals: Box[] = [];
+  for (const d of objects.detect(canvas).detections) {
+    const b = d.boundingBox;
+    if (!b) continue;
+    const box = { x: b.originX / scale, y: b.originY / scale, width: b.width / scale, height: b.height / scale };
+    (d.categories[0]?.categoryName === "person" ? people : animals).push(box);
+  }
+  return { people, animals };
 }
 
 export interface Detection {
   subjects: SubjectBox[];
-  /** 1 on people, 0 on background, per working pixel; absent when there are no people. */
+  /** 1 on people and pets, 0 on background, per working pixel; absent when not cutting out. */
   cutout?: Uint8Array;
+  /** Each animal's shape, in working pixels. */
+  animals: RegionMask[];
 }
 
 /**
@@ -141,17 +169,21 @@ export async function detectSubjects(
 ): Promise<Detection> {
   const { objects, faces, landmarks } = await loadDetectors();
 
-  const { canvas } = detectionCanvas(image);
+  const { canvas, scale } = detectionCanvas(image);
+  /** Draws a square of the detection canvas, sampled from the full-resolution photo. */
+  const drawSharp = (ctx: CanvasRenderingContext2D, sx: number, sy: number, side: number, size: number) =>
+    ctx.drawImage(image, sx / scale, sy / scale, side / scale, side / scale, 0, 0, size, size);
   const toWork = workW / canvas.width;
 
   const out: SubjectBox[] = [];
   const people: { x: number; y: number; w: number; h: number }[] = [];
+  const pets: { x: number; y: number; w: number; h: number }[] = [];
   for (const d of objects.detect(canvas).detections) {
     const b = d.boundingBox;
     const name = d.categories[0]?.categoryName;
     if (!b || !name) continue;
     const kind = name === "person" ? "person" : "animal";
-    if (kind === "person") people.push({ x: b.originX, y: b.originY, w: b.width, h: b.height });
+    (kind === "person" ? people : pets).push({ x: b.originX, y: b.originY, w: b.width, h: b.height });
     out.push({ kind, x: b.originX * toWork, y: b.originY * toWork, width: b.width * toWork, height: b.height * toWork });
   }
 
@@ -243,6 +275,10 @@ export async function detectSubjects(
   const seg = kept.length || wantCutout ? await loadSegmenter().catch(() => null) : null;
   const cutout = seg && wantCutout ? cutOutPeople(seg) : undefined;
 
+  const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
+  const animals = animalSeg ? pets.flatMap((p) => traceAnimal(animalSeg, p) ?? []) : [];
+  if (cutout) for (const a of animals) paint(a, cutout);
+
   const faceBoxes: SubjectBox[] = kept.map((c) => {
     const w = (pt: Point): Point => [pt[0] * toWork, pt[1] * toWork];
     const box: SubjectBox = { kind: "face", x: c.x * toWork, y: c.y * toWork, width: c.w * toWork, height: c.h * toWork };
@@ -280,7 +316,7 @@ export async function detectSubjects(
     const ctx = crop.getContext("2d")!;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SEGMENT_SIZE, SEGMENT_SIZE);
-    ctx.drawImage(canvas, sx, sy, side, side, 0, 0, SEGMENT_SIZE, SEGMENT_SIZE);
+    drawSharp(ctx, sx, sy, side, SEGMENT_SIZE);
     const result = model.segment(crop);
     const cats = result.categoryMask?.getAsUint8Array().slice();
     result.close();
@@ -302,7 +338,21 @@ export async function detectSubjects(
         else if (cat === HAIR) hair[y * size + x] = 1;
       }
     }
-    const hasSkin = cleanBlob(data, size, (c.x + c.w / 2) * toWork - x0, (c.y + c.h / 2) * toWork - y0);
+    // The detector's face box always counts as face: in hard side light the segmenter can call
+    // the shadowed half of a small face "hair".
+    const fcx = (c.x + c.w / 2) * toWork - x0;
+    const fcy = (c.y + c.h / 2) * toWork - y0;
+    const rx = (c.w / 2) * toWork * 0.85;
+    const ry = (c.h / 2) * toWork * 0.95;
+    for (let y = Math.max(0, Math.floor(fcy - ry)); y <= Math.min(size - 1, fcy + ry); y++) {
+      for (let x = Math.max(0, Math.floor(fcx - rx)); x <= Math.min(size - 1, fcx + rx); x++) {
+        if (((x - fcx) / rx) ** 2 + ((y - fcy) / ry) ** 2 <= 1) {
+          data[y * size + x] = 1;
+          hair[y * size + x] = 0;
+        }
+      }
+    }
+    const hasSkin = cleanBlob(data, size, fcx, fcy);
     return {
       skin: hasSkin ? { x: x0, y: y0, width: size, height: size, data } : undefined,
       hair: { x: x0, y: y0, width: size, height: size, data: hair },
@@ -319,7 +369,7 @@ export async function detectSubjects(
       const ctx = crop.getContext("2d")!;
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, TRACE_SIZE, TRACE_SIZE);
-      ctx.drawImage(canvas, sx, sy, side, side, 0, 0, TRACE_SIZE, TRACE_SIZE);
+      drawSharp(ctx, sx, sy, side, TRACE_SIZE);
       const lm = landmarks.detect(crop).faceLandmarks[0];
       if (!lm) continue;
       const pts = lm.map((l): Point => [sx + l.x * side, sy + l.y * side]);
@@ -336,7 +386,48 @@ export async function detectSubjects(
     width: Math.min(b.width, workW - b.x),
     height: Math.min(b.height, workH - b.y),
   }));
-  return { subjects, cutout };
+  return { subjects, cutout, animals };
+
+  function paint(m: RegionMask, into: Uint8Array) {
+    for (let y = 0; y < m.height; y++) {
+      for (let x = 0; x < m.width; x++) {
+        const wx = m.x + x;
+        const wy = m.y + y;
+        if (m.data[y * m.width + x] && wx >= 0 && wy >= 0 && wx < workW && wy < workH) into[wy * workW + wx] = 1;
+      }
+    }
+  }
+
+  /** The animal's shape inside its box, from DeepLab's animal classes, cleaned to one blob. */
+  function traceAnimal(model: ImageSegmenter, p: { x: number; y: number; w: number; h: number }): RegionMask | undefined {
+    const side = Math.max(p.w, p.h) * 1.2;
+    const sx = p.x + p.w / 2 - side / 2;
+    const sy = p.y + p.h / 2 - side / 2;
+    const N = ANIMAL_SIZE;
+    crop.width = crop.height = N;
+    const ctx = crop.getContext("2d")!;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, N, N);
+    ctx.drawImage(canvas, sx, sy, side, side, 0, 0, N, N);
+    const result = model.segment(crop);
+    const cats = result.categoryMask?.getAsUint8Array().slice();
+    result.close();
+    if (!cats) return undefined;
+    const x0 = Math.floor(sx * toWork);
+    const y0 = Math.floor(sy * toWork);
+    const size = Math.ceil(side * toWork) + 1;
+    const data = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const u = Math.floor((((x0 + x + 0.5) / toWork - sx) / side) * N);
+        const v = Math.floor((((y0 + y + 0.5) / toWork - sy) / side) * N);
+        if (u >= 0 && v >= 0 && u < N && v < N && ANIMAL_CLASSES.has(cats[v * N + u])) data[y * size + x] = 1;
+      }
+    }
+    const cx = (p.x + p.w / 2) * toWork - x0;
+    const cy = (p.y + p.h / 2) * toWork - y0;
+    return cleanBlob(data, size, cx, cy) ? { x: x0, y: y0, width: size, height: size, data } : undefined;
+  }
 
   /**
    * Everything that is part of a person (skin, hair, clothes, and what they hold), from the

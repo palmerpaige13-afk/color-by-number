@@ -3,6 +3,7 @@
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { paintSkin, separateFaces } from "./faces";
+import type { RegionMask } from "./types";
 import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
@@ -25,6 +26,37 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
   }
   for (let i = 0; i < count; i++) sum[i] /= n[i] || 1;
   return sum;
+}
+
+/**
+ * Brightens the dark end of each animal so a face in shade (a black dog's eyes and nose) still
+ * separates into shapes: the animal's lightness range is stretched so its 5th percentile maps
+ * to a mid-dark tone, keeping each pixel's hue.
+ */
+function liftShadows(data: Uint8ClampedArray, animals: RegionMask[], w: number, h: number) {
+  for (const a of animals) {
+    const px: number[] = [];
+    for (let y = 0; y < a.height; y++) {
+      for (let x = 0; x < a.width; x++) {
+        const mx = a.x + x;
+        const my = a.y + y;
+        if (mx >= 0 && my >= 0 && mx < w && my < h && a.data[y * a.width + x]) px.push(my * w + mx);
+      }
+    }
+    if (px.length < 16) continue;
+    const luma = (p: number) => 0.299 * data[p * 4] + 0.587 * data[p * 4 + 1] + 0.114 * data[p * 4 + 2];
+    const sorted = px.map(luma).sort((x, y) => x - y);
+    const lo = sorted[Math.floor(sorted.length * 0.05)];
+    const hi = Math.max(lo + 1, sorted[Math.floor(sorted.length * 0.95)]);
+    if (lo >= 70) continue; // not dark enough to need it
+    for (const p of px) {
+      const l = luma(p);
+      const t = Math.min(1, Math.max(0, (l - lo) / (hi - lo)));
+      const target = 55 + t * (Math.max(hi, 200) - 55);
+      const k = target / Math.max(1, l);
+      for (let c = 0; c < 3; c++) data[p * 4 + c] = Math.min(255, data[p * 4 + c] * k + (l < 8 ? target - l : 0));
+    }
+  }
 }
 
 /** Region-merge group of the blank background of a cut-out photo. */
@@ -76,23 +108,26 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const faceStyle = input.faceStyle ?? "lines";
 
   const smoothed =
-    params.smoothPasses > 0 ? bilateralSmooth(input.data, w, h, params.smoothPasses) : input.data;
+    params.smoothPasses > 0 ? bilateralSmooth(input.data, w, h, params.smoothPasses) : input.data.slice();
+  if (input.animals?.length) liftShadows(smoothed, input.animals, w, h);
   lap("smooth");
 
   const q = quantize(smoothed, w, h, params.paletteSize, imp, exclude);
   const { indices } = q;
-  const faces = input.faces?.length
-    ? separateFaces(
-        indices,
-        smoothed,
-        input.faces,
-        q.palette,
-        q.paletteLab,
-        w,
-        h,
-        faceStyle === "faceless",
-      )
-    : null;
+  const faces =
+    input.faces?.length || input.animals?.length
+      ? separateFaces(
+          indices,
+          smoothed,
+          input.faces ?? [],
+          input.animals ?? [],
+          q.palette,
+          q.paletteLab,
+          w,
+          h,
+          faceStyle,
+        )
+      : null;
   let palette = faces?.palette ?? q.palette;
   let paletteLab = faces?.paletteLab ?? q.paletteLab;
   let group = faces?.group;

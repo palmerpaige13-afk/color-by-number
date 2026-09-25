@@ -8,6 +8,7 @@ import {
   runPipeline,
   type Difficulty,
   type PipelineResult,
+  type RegionMask,
   type RGB,
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
@@ -90,6 +91,8 @@ const CROP_MARGIN = 0.06;
 const MAIN_PERSON_SHARE = 0.06;
 /** People smaller than this share of the biggest person are background people. */
 const SIDE_PERSON_SHARE = 0.25;
+/** Animals at least this share of the biggest person's size are kept with the people. */
+const PET_SHARE = 0.05;
 
 /** Downscales `bitmap` to the working raster. */
 function toWorkingImage(bitmap: ImageBitmap) {
@@ -114,15 +117,19 @@ async function subjectImage(
 ): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
   const full = await createImageBitmap(file);
   if (keepBackground) return { bitmap: full, ofPeople: false };
-  const found = await findPeople(full).catch(() => []);
+  const found = await findPeople(full).catch(() => ({ people: [], animals: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
-  const biggest = Math.max(0, ...found.map(area));
+  const biggest = Math.max(0, ...found.people.map(area));
   if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return { bitmap: full, ofPeople: false };
-  const people = found.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest);
-  const x0 = Math.min(...people.map((b) => b.x));
-  const y0 = Math.min(...people.map((b) => b.y));
-  const x1 = Math.max(...people.map((b) => b.x + b.width));
-  const y1 = Math.max(...people.map((b) => b.y + b.height));
+  // The main people, plus any pet with them.
+  const keep = [
+    ...found.people.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest),
+    ...found.animals.filter((b) => area(b) >= PET_SHARE * biggest),
+  ];
+  const x0 = Math.min(...keep.map((b) => b.x));
+  const y0 = Math.min(...keep.map((b) => b.y));
+  const x1 = Math.max(...keep.map((b) => b.x + b.width));
+  const y1 = Math.max(...keep.map((b) => b.y + b.height));
   const mx = (x1 - x0) * CROP_MARGIN;
   const my = (y1 - y0) * CROP_MARGIN;
   const sx = Math.max(0, Math.floor(x0 - mx));
@@ -245,9 +252,10 @@ export default function ColorByNumber() {
     const pixels = toWorkingImage(bitmap);
     let subjects: SubjectBox[] = [];
     let cutout: Uint8Array | undefined;
+    let animals: RegionMask[] = [];
     let note = "";
     try {
-      ({ subjects, cutout } = await detectSubjects(bitmap, pixels.width, pixels.height, {
+      ({ subjects, cutout, animals } = await detectSubjects(bitmap, pixels.width, pixels.height, {
         cutOut: ofPeople,
         sideShare: SIDE_PERSON_SHARE,
       }));
@@ -281,7 +289,7 @@ export default function ColorByNumber() {
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     setResult(
       runPipeline(
-        { ...pixels, importance, faces, faceStyle: "shaded", cutout },
+        { ...pixels, importance, faces, faceStyle: "shaded", cutout, animals },
         DIFFICULTY_PARAMS[difficulty],
       ),
     );
