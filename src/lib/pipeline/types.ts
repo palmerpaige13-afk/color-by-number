@@ -16,8 +16,19 @@ export interface FaceShape extends Box {
   outline?: Point[];
   /** Open polylines for eyes, eyebrows, nose and lips. */
   features?: Point[][];
-  /** Face-skin mask from segmentation (1 = face), covering the given working-pixel rectangle. */
-  skin?: { x: number; y: number; width: number; height: number; data: Uint8Array };
+  /** Face-skin mask from segmentation. */
+  skin?: RegionMask;
+  /** Hair mask from segmentation; hair is simplified like background. */
+  hair?: RegionMask;
+}
+
+/** A 0/1 mask covering a rectangle of working pixels. */
+export interface RegionMask {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  data: Uint8Array;
 }
 
 export interface PipelineParams {

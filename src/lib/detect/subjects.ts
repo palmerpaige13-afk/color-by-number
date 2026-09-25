@@ -20,7 +20,8 @@ const OBJECT_MODEL = `${MODELS}/object_detector/efficientdet_lite0/int8/latest/e
 const FACE_MODEL = `${MODELS}/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite`;
 const LANDMARK_MODEL = `${MODELS}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`;
 const SEGMENT_MODEL = `${MODELS}/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite`;
-/** Category index of face skin in the multiclass segmenter's output. */
+/** Category indices in the multiclass segmenter's output. */
+const HAIR = 1;
 const FACE_SKIN = 3;
 /** Segmenter input size, and how much around the face it looks at (x face size). */
 const SEGMENT_SIZE = 256;
@@ -210,7 +211,7 @@ export async function detectSubjects(
   const faceBoxes: SubjectBox[] = kept.map((c) => {
     const w = (pt: Point): Point => [pt[0] * toWork, pt[1] * toWork];
     const box: SubjectBox = { kind: "face", x: c.x * toWork, y: c.y * toWork, width: c.w * toWork, height: c.h * toWork };
-    if (seg) box.skin = segmentFace(seg, c);
+    if (seg) Object.assign(box, segmentFace(seg, c));
     if (!c.lm) return box;
     const lm = c.lm;
     const xs = lm.map((p) => p[0]);
@@ -233,10 +234,10 @@ export async function detectSubjects(
   });
 
   /**
-   * Face-skin mask for candidate `c`, in working pixels: the segmenter's face-skin pixels in a
-   * square around the face, keeping only the blob at the face's center, with holes filled.
+   * Face-skin and hair masks for candidate `c`, in working pixels, from the segmenter run on a
+   * square around the face. The skin keeps only the blob at the face's center, holes filled.
    */
-  function segmentFace(model: ImageSegmenter, c: Candidate): SubjectBox["skin"] {
+  function segmentFace(model: ImageSegmenter, c: Candidate): Pick<SubjectBox, "skin" | "hair"> {
     const side = Math.max(c.w, c.h) * SEGMENT_PAD;
     const sx = c.x + c.w / 2 - side / 2;
     const sy = c.y + c.h / 2 - side / 2;
@@ -248,24 +249,29 @@ export async function detectSubjects(
     const result = model.segment(crop);
     const cats = result.categoryMask?.getAsUint8Array().slice();
     result.close();
-    if (!cats) return undefined;
+    if (!cats) return {};
 
     // Resample into working pixels.
     const x0 = Math.floor(sx * toWork);
     const y0 = Math.floor(sy * toWork);
     const size = Math.ceil(side * toWork) + 1;
     const data = new Uint8Array(size * size);
+    const hair = new Uint8Array(size * size);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const u = Math.floor((((x0 + x + 0.5) / toWork - sx) / side) * SEGMENT_SIZE);
         const v = Math.floor((((y0 + y + 0.5) / toWork - sy) / side) * SEGMENT_SIZE);
         if (u < 0 || v < 0 || u >= SEGMENT_SIZE || v >= SEGMENT_SIZE) continue;
-        if (cats[v * SEGMENT_SIZE + u] === FACE_SKIN) data[y * size + x] = 1;
+        const cat = cats[v * SEGMENT_SIZE + u];
+        if (cat === FACE_SKIN) data[y * size + x] = 1;
+        else if (cat === HAIR) hair[y * size + x] = 1;
       }
     }
-    return cleanBlob(data, size, (c.x + c.w / 2) * toWork - x0, (c.y + c.h / 2) * toWork - y0)
-      ? { x: x0, y: y0, width: size, height: size, data }
-      : undefined;
+    const hasSkin = cleanBlob(data, size, (c.x + c.w / 2) * toWork - x0, (c.y + c.h / 2) * toWork - y0);
+    return {
+      skin: hasSkin ? { x: x0, y: y0, width: size, height: size, data } : undefined,
+      hair: { x: x0, y: y0, width: size, height: size, data: hair },
+    };
   }
 
   /** Landmarks (detection-canvas pixels) for the face in candidate `c`, if the landmarker finds it. */

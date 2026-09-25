@@ -2,7 +2,7 @@
 
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
-import { separateFaces } from "./faces";
+import { paintSkin, separateFaces } from "./faces";
 import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
@@ -58,7 +58,13 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     t = now;
   };
 
-  const imp = input.importance;
+  // Hair gets no extra detail: curls otherwise turn into a mess of tiny shapes and lines.
+  let imp = input.importance;
+  if (imp && input.faces?.some((f) => f.hair)) {
+    const hair = new Uint8Array(w * h);
+    for (const f of input.faces) if (f.hair) paintSkin(f.hair, hair, 1, w, h);
+    imp = Float32Array.from(imp, (v, p) => (hair[p] ? 0 : v));
+  }
 
   const smoothed =
     params.smoothPasses > 0 ? bilateralSmooth(input.data, w, h, params.smoothPasses) : input.data;

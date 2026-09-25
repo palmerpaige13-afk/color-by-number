@@ -12,7 +12,7 @@
 // skin-colored pixels outward from the cheeks.
 
 import { labDist2, rgbToLab } from "./color";
-import type { FaceShape, RGB } from "./types";
+import type { FaceShape, RGB, RegionMask } from "./types";
 
 /** ΔE from the face's typical skin color within which a pixel counts as skin (fallback). */
 const SKIN_TOLERANCE = 20;
@@ -47,7 +47,7 @@ function fillPolygon(poly: [number, number][], mask: Uint8Array, value: number, 
   }
 }
 
-function paintSkin(skin: NonNullable<FaceShape["skin"]>, mask: Uint8Array, value: number, w: number, h: number) {
+export function paintSkin(skin: RegionMask, mask: Uint8Array, value: number, w: number, h: number) {
   for (let y = 0; y < skin.height; y++) {
     const my = skin.y + y;
     if (my < 0 || my >= h) continue;
