@@ -3,8 +3,9 @@
 // already colored in: found as the two best matching dark spots (darker than the fur around
 // them) in the head, or, when there's no clear pair, placed where a pet's eyes usually are.
 //
-// The head is taken from the detector's box around the pet, not the traced outline: the
-// segmenter often misses a fluffy head entirely while the box always includes it.
+// The head is found from the detector's box around the pet together with the traced outline:
+// the segmenter often misses a fluffy head entirely (the outline stops at the shoulders) while
+// the box always includes it.
 
 import type { Box, RegionMask } from "./types";
 
@@ -16,17 +17,25 @@ export interface Eye {
 
 /** The head is taken as this top share of the pet's box (a sitting dog's head is ~35%). */
 const HEAD_SHARE = 0.38;
-/** An eye must be at least this much darker (0–255) than the fur just around it. */
+/** An eye must be at least this much darker (0–255) than the fur around it on nearly every side. */
 const EYE_CONTRAST = 35;
+/** ...and dark in itself. */
+const EYE_MAX_LUMA = 80;
 
 export function petEyes(data: Uint8ClampedArray, pet: RegionMask & { box?: Box }, w: number, h: number): Eye[] {
-  const box = pet.box ?? outlineBox(pet);
-  if (!box) return [];
+  const outline = outlineBox(pet);
+  const box = pet.box ?? outline;
+  if (!box || !outline) return [];
+  // Where the head is: if the outline starts well below the top of the box, the segmenter
+  // missed the head and it's the part of the box above the outline; otherwise the top of it.
+  const missedHead = outline.y - box.y > box.height * 0.2;
   const top = Math.max(0, Math.floor(box.y));
-  const headH = Math.max(4, box.height * HEAD_SHARE);
-  const left = Math.max(0, Math.floor(box.x));
-  const right = Math.min(w - 1, Math.ceil(box.x + box.width));
-  const headW = Math.max(4, right - left);
+  const headH = Math.max(4, missedHead ? outline.y - box.y : box.height * HEAD_SHARE);
+  // The head sits above the top of the body: center on the outline's topmost rows.
+  const cx = topCenter(pet) ?? box.x + box.width / 2;
+  const headW = Math.max(4, Math.min(box.width, headH * 1.2));
+  const left = Math.max(0, Math.floor(cx - headW / 2));
+  const right = Math.min(w - 1, Math.ceil(cx + headW / 2));
 
   const luma = (x: number, y: number) => {
     const p = (y * w + x) * 4;
@@ -41,16 +50,15 @@ export function petEyes(data: Uint8ClampedArray, pet: RegionMask & { box?: Box }
   for (let y = y0; y <= y1; y++) {
     for (let x = left; x <= right; x++) {
       const l = luma(x, y);
-      let around = 0;
-      let n = 0;
+      if (l > EYE_MAX_LUMA) continue;
+      // Lighter on nearly every side, like an eye; not just the dark side of a fur edge.
+      let lighter = 0;
       for (const [dx, dy] of [[ring, 0], [-ring, 0], [0, ring], [0, -ring], [ring, ring], [-ring, -ring], [ring, -ring], [-ring, ring]]) {
         const xx = x + dx;
         const yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-        around += luma(xx, yy);
-        n++;
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h && luma(xx, yy) - l >= EYE_CONTRAST) lighter++;
       }
-      if (n && around / n - l >= EYE_CONTRAST) dark.add(y * w + x);
+      if (lighter >= 6) dark.add(y * w + x);
     }
   }
 
@@ -109,12 +117,29 @@ export function petEyes(data: Uint8ClampedArray, pet: RegionMask & { box?: Box }
     return best.map((s) => ({ x: s.x + 0.5, y: s.y + 0.5, r: Math.min(r * 1.6, Math.max(r, Math.sqrt(s.n / Math.PI))) }));
   }
   // No clear pair: where a pet facing the camera has its eyes.
-  const cx = box.x + box.width / 2;
   const y = top + headH * 0.45;
   return [
     { x: cx - headW * 0.12, y, r },
     { x: cx + headW * 0.12, y, r },
   ];
+}
+
+/** Mean x of the outline's topmost rows (the top of the body, under the head). */
+function topCenter(pet: RegionMask): number | null {
+  for (let y = 0; y < pet.height; y++) {
+    let sum = 0;
+    let n = 0;
+    for (let yy = y; yy < Math.min(pet.height, y + 4); yy++) {
+      for (let x = 0; x < pet.width; x++) {
+        if (pet.data[yy * pet.width + x]) {
+          sum += pet.x + x;
+          n++;
+        }
+      }
+    }
+    if (n >= 6) return sum / n;
+  }
+  return null;
 }
 
 function outlineBox(pet: RegionMask): Box | null {

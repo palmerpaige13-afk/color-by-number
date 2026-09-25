@@ -29,6 +29,13 @@ const SKIN_TOLERANCE = 20;
  */
 const FEATURE_DISTANCE = 22;
 const LIGHTNESS_WEIGHT = 0.35;
+/**
+ * A face in shadow (backlit, under a hat) has truly dark pixels, but people see it as normal
+ * skin, and a flat dark-brown face reads as wrong. Faces whose lit tone is darker than this
+ * luma (0–255) are brightened, by at most FACE_MAX_BOOST, keeping the lit/shadow difference.
+ */
+const FACE_MIN_LUMA = 150;
+const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
 
@@ -271,7 +278,10 @@ function skinTones(
     const [dark, lit] = means;
     means[0] = dark.map((v, c) => v + (lit[c] - v) * SHADOW_SOFTEN) as RGB;
   }
-  const rgb = means.map((m) => m.map(Math.round) as RGB);
+  const lit = means[means.length - 1];
+  const litLuma = 0.299 * lit[0] + 0.587 * lit[1] + 0.114 * lit[2];
+  const boost = Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma)));
+  const rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
   const out = new Float32Array(rgb.length * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
   return { rgb, lab: out };
