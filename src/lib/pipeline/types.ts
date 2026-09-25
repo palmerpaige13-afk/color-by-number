@@ -55,8 +55,13 @@ export interface PipelineInput {
   importance?: Float32Array;
   /** Detected faces; each is kept as its own outlined area. */
   faces?: FaceShape[];
-  /** Draw faces as one smooth outlined shape with no eyes, nose or mouth. */
-  faceless?: boolean;
+  /**
+   * How faces are drawn: "lines" keeps shading and draws eyes, nose and mouth as lines;
+   * "shaded" keeps shading shapes only; "faceless" is one smooth shape per face.
+   */
+  faceStyle?: "lines" | "shaded" | "faceless";
+  /** 1 on the subject (people), 0 on background. Background is left blank: no shapes. */
+  cutout?: Uint8Array;
 }
 
 export interface PipelineResult {
@@ -73,6 +78,8 @@ export interface PipelineResult {
   labelY: Float32Array;
   /** Distance from label point to nearest boundary, in px. */
   labelRadius: Float32Array;
+  /** Palette index of the blank background, if the photo was cut out; never numbered. */
+  background?: number;
   /**
    * 1 where a thin feature line should be drawn: an outline in an important area (eyes, brows,
    * lips, window frames) that was too thin to become its own numbered shape.

@@ -29,6 +29,8 @@ export interface QuantizeResult {
 /**
  * `weights` (0..1 per pixel) biases the palette toward important pixels: they are sampled up to
  * 2.5x more often, so e.g. skin tones get their own colors instead of merging into the background.
+ * Pixels with `exclude` set are never sampled (a cut-out background), so no palette colors are
+ * spent on them.
  */
 export function quantize(
   data: Uint8ClampedArray,
@@ -36,16 +38,20 @@ export function quantize(
   h: number,
   k: number,
   weights?: Float32Array,
+  exclude?: Uint8Array,
 ): QuantizeResult {
   const n = w * h;
   const lab = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) rgbToLab(data[i * 4], data[i * 4 + 1], data[i * 4 + 2], lab, i * 3);
 
   const rand = mulberry32(0x5eed);
-  const sampleCount = Math.min(n, MAX_SAMPLES);
+  let eligible = n;
+  if (exclude) for (let i = 0; i < n; i++) eligible -= exclude[i];
+  const sampleCount = Math.min(eligible, MAX_SAMPLES);
   const samples = new Uint32Array(sampleCount);
   for (let i = 0; i < sampleCount; ) {
     const p = Math.floor(rand() * n);
+    if (exclude?.[p]) continue;
     if (!weights || rand() < 0.4 + 0.6 * weights[p]) samples[i++] = p;
   }
 

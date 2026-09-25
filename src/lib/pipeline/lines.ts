@@ -20,7 +20,7 @@ export function featureLines(
   h: number,
   faceMask?: Uint8Array,
   faces?: FaceShape[],
-  faceless = false,
+  faceLines = true,
 ): Uint8Array {
   const n = w * h;
   const gray = new Float32Array(n);
@@ -28,11 +28,11 @@ export function featureLines(
     gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
   }
 
-  // Faces traced by landmarks get their features from those, and faceless faces get none;
-  // either way, skip edge scribbles there.
+  // Faces traced by landmarks get their features from those, and faces drawn without lines
+  // get none; either way, skip edge scribbles there.
   const traced = (p: number) => {
     const k = faceMask?.[p];
-    return !!k && (faceless || !!faces?.[k - 1]?.features);
+    return !!k && (!faceLines || !!faces?.[k - 1]?.features);
   };
 
   const mag = new Float32Array(n);
@@ -104,7 +104,7 @@ export function featureLines(
       }
     }
   }
-  if (!faceless) {
+  if (faceLines) {
     for (const f of faces ?? []) for (const line of f.features ?? []) drawPolyline(line, out, w, h);
   }
   return out;

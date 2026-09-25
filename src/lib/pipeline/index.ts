@@ -27,6 +27,9 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
   return sum;
 }
 
+/** Region-merge group of the blank background of a cut-out photo. */
+const BACKGROUND_GROUP = 255;
+
 /** Importance above which photo edges are drawn as feature lines. */
 const LINE_LEVEL = 0.35;
 
@@ -44,8 +47,8 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
 
 export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
   easy: tuned({ paletteSize: 8, minArea: 900, minRadius: 9, smoothPasses: 3, boundaryPasses: 3 }),
-  medium: tuned({ paletteSize: 14, minArea: 300, minRadius: 6 }),
-  hard: tuned({ paletteSize: 22, minArea: 90, minRadius: 4, smoothPasses: 1, boundaryPasses: 1 }),
+  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5 }),
+  hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1 }),
 };
 
 export function runPipeline(input: PipelineInput, params: PipelineParams): PipelineResult {
@@ -58,26 +61,52 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     t = now;
   };
 
-  // Hair gets no extra detail: curls otherwise turn into a mess of tiny shapes and lines.
+  // A cut-out photo keeps only the subject; the background is left blank.
+  const { cutout } = input;
+  const exclude = cutout ? Uint8Array.from(cutout, (v) => 1 - v) : undefined;
+
+  // Hair gets no extra detail (curls otherwise turn into a mess of tiny shapes and lines), and
+  // neither does a blank background.
   let imp = input.importance;
-  if (imp && input.faces?.some((f) => f.hair)) {
-    const hair = new Uint8Array(w * h);
-    for (const f of input.faces) if (f.hair) paintSkin(f.hair, hair, 1, w, h);
-    imp = Float32Array.from(imp, (v, p) => (hair[p] ? 0 : v));
+  if (imp && (exclude || input.faces?.some((f) => f.hair))) {
+    const plain = exclude ? Uint8Array.from(exclude) : new Uint8Array(w * h);
+    for (const f of input.faces ?? []) if (f.hair) paintSkin(f.hair, plain, 1, w, h);
+    imp = Float32Array.from(imp, (v, p) => (plain[p] ? 0 : v));
   }
+  const faceStyle = input.faceStyle ?? "lines";
 
   const smoothed =
     params.smoothPasses > 0 ? bilateralSmooth(input.data, w, h, params.smoothPasses) : input.data;
   lap("smooth");
 
-  const q = quantize(smoothed, w, h, params.paletteSize, imp);
+  const q = quantize(smoothed, w, h, params.paletteSize, imp, exclude);
   const { indices } = q;
   const faces = input.faces?.length
-    ? separateFaces(indices, smoothed, input.faces, q.palette, q.paletteLab, w, h, input.faceless)
+    ? separateFaces(
+        indices,
+        smoothed,
+        input.faces,
+        q.palette,
+        q.paletteLab,
+        w,
+        h,
+        faceStyle === "faceless",
+      )
     : null;
-  const palette = faces?.palette ?? q.palette;
-  const paletteLab = faces?.paletteLab ?? q.paletteLab;
-  const group = faces?.group;
+  let palette = faces?.palette ?? q.palette;
+  let paletteLab = faces?.paletteLab ?? q.paletteLab;
+  let group = faces?.group;
+
+  // The blank background is one more palette entry in a group of its own, so nothing merges
+  // into it or out of it, and it is never numbered.
+  let background: number | undefined;
+  if (exclude && palette.length < 255) {
+    background = palette.length;
+    palette = [...palette, [255, 255, 255]];
+    paletteLab = Float32Array.from([...paletteLab, 100, 0, 0]);
+    group = Uint8Array.from([...(group ?? palette.slice(0, -1).map(() => 0)), BACKGROUND_GROUP]);
+    for (let p = 0; p < indices.length; p++) if (exclude[p]) indices[p] = background;
+  }
   lap("quantize");
 
   let colorMap = majorityFilter(indices, w, h, palette.length, params.boundaryPasses);
@@ -134,7 +163,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const labels = Uint16Array.from(final.labels);
   const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
   const detailLines = imp
-    ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h, faces?.mask, input.faces, input.faceless)
+    ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h, faces?.mask, input.faces, faceStyle === "lines")
     : undefined;
   lap("labels");
 
@@ -149,6 +178,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelX: pts.x,
     labelY: pts.y,
     labelRadius: pts.radius,
+    background,
     detailLines,
     timings,
     debug: params.debug

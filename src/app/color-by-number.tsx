@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { detectSubjects } from "@/lib/detect/subjects";
+import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
   WORKING_SIZE,
@@ -17,8 +17,8 @@ const SCALE = 1.5;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
-  { id: "medium", label: "Medium", blurb: "14 colors, more detail" },
-  { id: "hard", label: "Hard", blurb: "22 colors, lots of small shapes" },
+  { id: "medium", label: "Medium", blurb: "16 colors, more detail" },
+  { id: "hard", label: "Hard", blurb: "24 colors, lots of small shapes" },
 ];
 
 type View = "outline" | "colored";
@@ -30,6 +30,7 @@ type View = "outline" | "colored";
 function usedPalette(result: PipelineResult): { number: Uint8Array; key: { n: number; rgb: RGB }[] } {
   const used = new Uint8Array(result.palette.length);
   for (let i = 0; i < result.regionCount; i++) used[result.regionColor[i]] = 1;
+  if (result.background !== undefined) used[result.background] = 0;
   const number = new Uint8Array(result.palette.length);
   const key: { n: number; rgb: RGB }[] = [];
   const byColor = new Map<string, number>();
@@ -48,8 +49,17 @@ function usedPalette(result: PipelineResult): { number: Uint8Array; key: { n: nu
   return { number, key };
 }
 
-async function loadWorkingImage(file: File) {
-  const bitmap = await createImageBitmap(file);
+/** Share of the photo that must be people for the page to be cut out to just them. */
+const MIN_CUTOUT_SHARE = 0.02;
+/** Margin around the people when cropping, as a share of their size. */
+const CROP_MARGIN = 0.06;
+/** The biggest person must fill this share of the photo for it to count as a photo *of* people. */
+const MAIN_PERSON_SHARE = 0.06;
+/** People smaller than this share of the biggest person are background people. */
+const SIDE_PERSON_SHARE = 0.25;
+
+/** Downscales `bitmap` to the working raster. */
+function toWorkingImage(bitmap: ImageBitmap) {
   const s = Math.min(1, WORKING_SIZE / Math.max(bitmap.width, bitmap.height));
   const width = Math.max(1, Math.round(bitmap.width * s));
   const height = Math.max(1, Math.round(bitmap.height * s));
@@ -58,7 +68,33 @@ async function loadWorkingImage(file: File) {
   canvas.height = height;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0, width, height);
-  return { bitmap, width, height, data: ctx.getImageData(0, 0, width, height).data };
+  return { width, height, data: ctx.getImageData(0, 0, width, height).data };
+}
+
+/**
+ * The photo to work on: when it's a photo of people, just the area around the main people (so
+ * all the detail is spent on them), otherwise the whole photo.
+ */
+async function subjectImage(file: File): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
+  const full = await createImageBitmap(file);
+  const found = await findPeople(full).catch(() => []);
+  const area = (b: { width: number; height: number }) => b.width * b.height;
+  const biggest = Math.max(0, ...found.map(area));
+  if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return { bitmap: full, ofPeople: false };
+  const people = found.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest);
+  const x0 = Math.min(...people.map((b) => b.x));
+  const y0 = Math.min(...people.map((b) => b.y));
+  const x1 = Math.max(...people.map((b) => b.x + b.width));
+  const y1 = Math.max(...people.map((b) => b.y + b.height));
+  const mx = (x1 - x0) * CROP_MARGIN;
+  const my = (y1 - y0) * CROP_MARGIN;
+  const sx = Math.max(0, Math.floor(x0 - mx));
+  const sy = Math.max(0, Math.floor(y0 - my));
+  const sw = Math.min(full.width, Math.ceil(x1 + mx)) - sx;
+  const sh = Math.min(full.height, Math.ceil(y1 + my)) - sy;
+  const cropped = await createImageBitmap(full, sx, sy, sw, sh);
+  full.close();
+  return { bitmap: cropped, ofPeople: true };
 }
 
 function describeSubjects(subjects: SubjectBox[]): string {
@@ -88,6 +124,7 @@ function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
       const edge = (x < w - 1 && labels[p + 1] !== l) || (y < h - 1 && labels[p + w] !== l);
       let rgb: RGB = [255, 255, 255];
       if (edge) rgb = [70, 70, 70];
+      else if (regionColor[l] === result.background) rgb = [255, 255, 255];
       else if (result.detailLines?.[p]) rgb = view === "colored" ? [90, 90, 90] : [150, 150, 150];
       else if (view === "colored") rgb = palette[regionColor[l]];
       img.data.set([rgb[0], rgb[1], rgb[2], 255], p * 4);
@@ -102,13 +139,14 @@ function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
   ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
   ctx.strokeStyle = "#464646";
   ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+  if (result.background === undefined) ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
 
   if (view === "colored") return;
   ctx.fillStyle = "#555";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (let i = 0; i < result.regionCount; i++) {
+    if (regionColor[i] === result.background) continue;
     const size = Math.min(26, result.labelRadius[i] * SCALE * 1.1);
     if (size < 7) continue;
     ctx.font = `${Math.round(size)}px Arial, sans-serif`;
@@ -154,21 +192,30 @@ export default function ColorByNumber() {
     setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
     await new Promise((r) => setTimeout(r, 30));
-    let work;
+    let bitmap: ImageBitmap;
+    let ofPeople: boolean;
     try {
-      work = await loadWorkingImage(file);
+      ({ bitmap, ofPeople } = await subjectImage(file));
     } catch {
       setError("Sorry, we couldn't read that photo. Try a different one.");
       setBusy(null);
       return;
     }
-    const { bitmap, ...pixels } = work;
+    const pixels = toWorkingImage(bitmap);
     let subjects: SubjectBox[] = [];
+    let cutout: Uint8Array | undefined;
     let note = "";
     try {
-      subjects = await detectSubjects(bitmap, pixels.width, pixels.height);
+      ({ subjects, cutout } = await detectSubjects(bitmap, pixels.width, pixels.height, {
+        cutOut: ofPeople,
+        sideShare: SIDE_PERSON_SHARE,
+      }));
     } catch {
       note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
+    }
+    // Only cut out when the people were actually found by the segmenter.
+    if (cutout && cutout.reduce((n, v) => n + v, 0) < MIN_CUTOUT_SHARE * cutout.length) {
+      cutout = undefined;
     }
     const structure = structureMap(pixels.data, pixels.width, pixels.height);
     const map = importanceMap(structure, subjects, pixels.width, pixels.height);
@@ -185,9 +232,12 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
     bitmap.close();
     const faces = subjects.filter((s) => s.kind === "face");
-    // Faces are drawn faceless: one smooth, outlined shape each, no eyes, nose or mouth.
+    // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     setResult(
-      runPipeline({ ...pixels, importance, faces, faceless: true }, DIFFICULTY_PARAMS[difficulty]),
+      runPipeline(
+        { ...pixels, importance, faces, faceStyle: "shaded", cutout },
+        DIFFICULTY_PARAMS[difficulty],
+      ),
     );
     setView("outline");
     setBusy(null);

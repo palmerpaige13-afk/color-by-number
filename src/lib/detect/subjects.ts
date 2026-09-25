@@ -12,7 +12,7 @@ import {
   ObjectDetector,
 } from "@mediapipe/tasks-vision";
 import type { SubjectBox } from "@/lib/pipeline/importance";
-import type { Point } from "@/lib/pipeline/types";
+import type { Box, Point } from "@/lib/pipeline/types";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
@@ -49,7 +49,7 @@ function loadSegmenter() {
         baseOptions: { modelAssetPath: SEGMENT_MODEL },
         runningMode: "IMAGE",
         outputCategoryMask: true,
-        outputConfidenceMasks: false,
+        outputConfidenceMasks: true,
       }),
     )
     .catch((err) => {
@@ -101,18 +101,47 @@ function loadDetectors() {
  * sees faces that fill a decent share of its input, so faces are also searched inside each
  * detected person, which catches the small faces in group shots.
  */
-export async function detectSubjects(
-  image: ImageBitmap,
-  workW: number,
-  workH: number,
-): Promise<SubjectBox[]> {
-  const { objects, faces, landmarks } = await loadDetectors();
-
+function detectionCanvas(image: ImageBitmap) {
   const s = Math.min(1, DETECT_SIZE / Math.max(image.width, image.height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(image.width * s);
   canvas.height = Math.round(image.height * s);
   canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { canvas, scale: s };
+}
+
+/** People in the photo, as boxes in the image's own pixels. Used to crop to the subject. */
+export async function findPeople(image: ImageBitmap): Promise<Box[]> {
+  const { objects } = await loadDetectors();
+  const { canvas, scale } = detectionCanvas(image);
+  return objects
+    .detect(canvas)
+    .detections.filter((d) => d.categories[0]?.categoryName === "person" && d.boundingBox)
+    .map((d) => {
+      const b = d.boundingBox!;
+      return { x: b.originX / scale, y: b.originY / scale, width: b.width / scale, height: b.height / scale };
+    });
+}
+
+export interface Detection {
+  subjects: SubjectBox[];
+  /** 1 on people, 0 on background, per working pixel; absent when there are no people. */
+  cutout?: Uint8Array;
+}
+
+/**
+ * `cutOut`: also return a mask of the main people (anyone at least `sideShare` the size of the
+ * biggest person), so the background can be left blank.
+ */
+export async function detectSubjects(
+  image: ImageBitmap,
+  workW: number,
+  workH: number,
+  { cutOut = false, sideShare = 0.25 } = {},
+): Promise<Detection> {
+  const { objects, faces, landmarks } = await loadDetectors();
+
+  const { canvas } = detectionCanvas(image);
   const toWork = workW / canvas.width;
 
   const out: SubjectBox[] = [];
@@ -205,8 +234,14 @@ export async function detectSubjects(
     });
   }
 
-  // Face shapes. If the segmenter can't load, faces fall back to landmark outlines.
-  const seg = kept.length ? await loadSegmenter().catch(() => null) : null;
+  // Face shapes and the people cut-out. If the segmenter can't load, faces fall back to
+  // landmark outlines and the whole photo is kept.
+  const mainPeople = people.filter(
+    (p) => p.w * p.h >= sideShare * Math.max(...people.map((q) => q.w * q.h)),
+  );
+  const wantCutout = cutOut && mainPeople.length > 0;
+  const seg = kept.length || wantCutout ? await loadSegmenter().catch(() => null) : null;
+  const cutout = seg && wantCutout ? cutOutPeople(seg) : undefined;
 
   const faceBoxes: SubjectBox[] = kept.map((c) => {
     const w = (pt: Point): Point => [pt[0] * toWork, pt[1] * toWork];
@@ -296,11 +331,56 @@ export async function detectSubjects(
     return undefined;
   }
 
-  return [...out, ...faceBoxes].map((b) => ({
+  const subjects = [...out, ...faceBoxes].map((b) => ({
     ...b,
     width: Math.min(b.width, workW - b.x),
     height: Math.min(b.height, workH - b.y),
   }));
+  return { subjects, cutout };
+
+  /**
+   * Everything that is part of a person (skin, hair, clothes, and what they hold), from the
+   * segmenter run on a square around each person. The background-confidence mask is sampled
+   * bilinearly so the cut-out edge stays smooth at working resolution.
+   */
+  function cutOutPeople(model: ImageSegmenter): Uint8Array {
+    const mask = new Uint8Array(workW * workH);
+    const N = SEGMENT_SIZE;
+    for (const p of mainPeople) {
+      const side = Math.max(p.w, p.h) * 1.15;
+      const sx = p.x + p.w / 2 - side / 2;
+      const sy = p.y + p.h / 2 - side / 2;
+      crop.width = crop.height = N;
+      const ctx = crop.getContext("2d")!;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, N, N);
+      ctx.drawImage(canvas, sx, sy, side, side, 0, 0, N, N);
+      const result = model.segment(crop);
+      const bg = result.confidenceMasks?.[0]?.getAsFloat32Array().slice();
+      result.close();
+      if (!bg) continue;
+      const at = (u: number, v: number) => bg[Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u))];
+      const x0 = Math.max(0, Math.floor(sx * toWork));
+      const y0 = Math.max(0, Math.floor(sy * toWork));
+      const x1 = Math.min(workW - 1, Math.ceil((sx + side) * toWork));
+      const y1 = Math.min(workH - 1, Math.ceil((sy + side) * toWork));
+      for (let y = y0; y <= y1; y++) {
+        const v = (((y + 0.5) / toWork - sy) / side) * N - 0.5;
+        const vi = Math.floor(v);
+        const fv = v - vi;
+        for (let x = x0; x <= x1; x++) {
+          const u = (((x + 0.5) / toWork - sx) / side) * N - 0.5;
+          const ui = Math.floor(u);
+          const fu = u - ui;
+          const b =
+            (at(ui, vi) * (1 - fu) + at(ui + 1, vi) * fu) * (1 - fv) +
+            (at(ui, vi + 1) * (1 - fu) + at(ui + 1, vi + 1) * fu) * fv;
+          if (b < 0.5) mask[y * workW + x] = 1;
+        }
+      }
+    }
+    return mask;
+  }
 }
 
 /** Orders a closed loop given as unordered connections into a list of landmark indices. */
