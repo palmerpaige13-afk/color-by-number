@@ -134,18 +134,37 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
 
   page.layers.forEach((layer, li) => {
     const { result, scale } = layer;
-    // Pet eyes: already colored in, with a small highlight.
+    // Pet noses and eyes: already colored in, with a small highlight.
+    for (const n of result.noses ?? []) {
+      const nx = layer.x + n.x * scale;
+      const ny = layer.y + n.y * scale;
+      const rx = Math.max(2.5, n.rx * scale);
+      const ry = Math.max(2, n.ry * scale);
+      ctx.fillStyle = "#111";
+      ctx.beginPath();
+      ctx.ellipse(nx, ny, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.beginPath();
+      ctx.ellipse(nx - rx * 0.3, ny - ry * 0.35, rx * 0.3, ry * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
     for (const e of result.eyes ?? []) {
       const ex = layer.x + e.x * scale;
       const ey = layer.y + e.y * scale;
-      const r = Math.max(2, e.r * scale);
+      const r = Math.max(2.5, e.r * scale);
+      // A light rim so the eye still shows on dark fur, then the eye and its shine.
+      ctx.fillStyle = "#c9c2b8";
+      ctx.beginPath();
+      ctx.arc(ex, ey, r + Math.max(1, r * 0.3), 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = "#111";
       ctx.beginPath();
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#fff";
       ctx.beginPath();
-      ctx.arc(ex - r * 0.35, ey - r * 0.35, Math.max(0.8, r * 0.3), 0, Math.PI * 2);
+      ctx.arc(ex - r * 0.35, ey - r * 0.35, Math.max(1, r * 0.35), 0, Math.PI * 2);
       ctx.fill();
     }
     if (view === "colored") return;

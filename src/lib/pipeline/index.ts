@@ -2,7 +2,7 @@
 
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
-import { petEyes } from "./eyes";
+import { petEyes, petNose } from "./eyes";
 import { paintSkin, separateFaces } from "./faces";
 import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
@@ -174,6 +174,13 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const final = labelComponents(colorMap, w, h);
   const labels = Uint16Array.from(final.labels);
   const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
+  const petFaces = (input.animals ?? [])
+    .filter((a) => a.label === "dog" || a.label === "cat")
+    .map((a) => {
+      if (a.face) return a.face;
+      const eyes = petEyes(input.data, a, w, h);
+      return { eyes, nose: petNose(input.data, eyes, w, h) };
+    });
   const detailLines = imp
     ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h, faces?.mask, input.faces, faceStyle === "lines")
     : undefined;
@@ -191,9 +198,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelY: pts.y,
     labelRadius: pts.radius,
     background,
-    eyes: (input.animals ?? [])
-      .filter((a) => a.label === "dog" || a.label === "cat")
-      .flatMap((a) => petEyes(input.data, a, w, h)),
+    eyes: petFaces.flatMap((f) => f.eyes),
+    noses: petFaces.flatMap((f) => f.nose ?? []),
     detailLines,
     timings,
     debug: params.debug

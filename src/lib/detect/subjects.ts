@@ -12,6 +12,7 @@ import {
   ObjectDetector,
 } from "@mediapipe/tasks-vision";
 import type { SubjectBox } from "@/lib/pipeline/importance";
+import { findPetFace } from "@/lib/pipeline/eyes";
 import type { Box, Point, RegionMask } from "@/lib/pipeline/types";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
@@ -25,6 +26,8 @@ const ANIMAL_MODEL = `${MODELS}/image_segmenter/deeplab_v3/float32/latest/deepla
 /** DeepLab category indices for animals: bird, cat, cow, dog, horse, sheep. */
 const ANIMAL_CLASSES = new Set([3, 8, 10, 12, 13, 17]);
 const ANIMAL_SIZE = 257;
+/** Width of the close-up of a pet's head searched for eyes and nose. */
+const PET_FACE_SIZE = 320;
 /** Category indices in the multiclass segmenter's output. */
 const HAIR = 1;
 const FACE_SKIN = 3;
@@ -278,6 +281,10 @@ export async function detectSubjects(
 
   const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
   const animals = animalSeg ? pets.flatMap((p) => traceAnimal(animalSeg, p) ?? []) : [];
+  pets.forEach((p) => {
+    const a = animals.find((m) => m.label === p.label && m.box && Math.abs(m.box.x - p.x * toWork) < 1);
+    if (a && (p.label === "dog" || p.label === "cat")) a.face = petFace(p);
+  });
   if (cutout) for (const a of animals) paint(a, cutout);
 
   const faceBoxes: SubjectBox[] = kept.map((c) => {
@@ -397,6 +404,34 @@ export async function detectSubjects(
         if (m.data[y * m.width + x] && wx >= 0 && wy >= 0 && wx < workW && wy < workH) into[wy * workW + wx] = 1;
       }
     }
+  }
+
+  /**
+   * A dog or cat's eyes and nose, looked for in the full-resolution photo: the top half of its
+   * box (where the head is), enlarged so the eyes are clear spots. In working pixels.
+   */
+  function petFace(p: { x: number; y: number; w: number; h: number }): RegionMask["face"] {
+    const hh = p.h * 0.55;
+    const W = PET_FACE_SIZE;
+    const H = Math.max(8, Math.round((W * hh) / p.w));
+    crop.width = W;
+    crop.height = H;
+    const ctx = crop.getContext("2d", { willReadFrequently: true })!;
+    ctx.drawImage(image, p.x / scale, p.y / scale, p.w / scale, hh / scale, 0, 0, W, H);
+    const found = findPetFace(ctx.getImageData(0, 0, W, H).data, W, H);
+    if (!found) return undefined;
+    const k = p.w / W; // close-up px -> detection-canvas px
+    const toW = (x: number, y: number) => [(p.x + x * k) * toWork, (p.y + y * k) * toWork];
+    return {
+      eyes: found.eyes.map((e) => {
+        const [x, y] = toW(e.x, e.y);
+        return { x, y, r: e.r * k * toWork };
+      }),
+      nose: found.nose && (() => {
+        const [x, y] = toW(found.nose.x, found.nose.y);
+        return { x, y, rx: found.nose.rx * k * toWork, ry: found.nose.ry * k * toWork };
+      })(),
+    };
   }
 
   /** The animal's shape inside its box, from DeepLab's animal classes, cleaned to one blob. */

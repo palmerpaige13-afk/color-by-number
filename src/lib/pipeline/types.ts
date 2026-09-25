@@ -33,6 +33,11 @@ export interface RegionMask {
   label?: string;
   /** The detector's box around it, in working pixels, when known. */
   box?: Box;
+  /** A pet's eyes and nose found in the full-resolution photo (working pixels). */
+  face?: {
+    eyes: { x: number; y: number; r: number }[];
+    nose: { x: number; y: number; rx: number; ry: number } | null;
+  };
 }
 
 export interface PipelineParams {
@@ -86,8 +91,9 @@ export interface PipelineResult {
   labelRadius: Float32Array;
   /** Palette index of the blank background, if the photo was cut out; never numbered. */
   background?: number;
-  /** Pet eyes, printed already colored in (working pixels). */
+  /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
+  noses?: { x: number; y: number; rx: number; ry: number }[];
   /**
    * 1 where a thin feature line should be drawn: an outline in an important area (eyes, brows,
    * lips, window frames) that was too thin to become its own numbered shape.

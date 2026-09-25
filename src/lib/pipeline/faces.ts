@@ -23,11 +23,10 @@ import type { FaceShape, RGB, RegionMask } from "./types";
 const SKIN_TOLERANCE = 20;
 
 /**
- * A face pixel further than this from both skin tones keeps its own color (lips, eyes). Distance
- * counts lightness at only LIGHTNESS_WEIGHT, since shadow mostly darkens skin without changing
- * its hue: a deeply shadowed cheek is still skin, a red lip is not.
+ * Every face pixel takes the nearer of the face's skin tones, so eyes, brows and stray strands of
+ * hair inside the outline don't show up as dark hair-colored spots. Distance counts lightness at
+ * only LIGHTNESS_WEIGHT, since shadow mostly darkens skin without changing its hue.
  */
-const FEATURE_DISTANCE = 22;
 const LIGHTNESS_WEIGHT = 0.35;
 /**
  * A face in shadow (backlit, under a hat) has truly dark pixels, but people see it as normal
@@ -215,12 +214,8 @@ export function separateFaces(
           best = t;
         }
       }
-      // Skin (lit or shadowed) takes a skin tone; a distinct feature keeps its own color,
-      // unless the face is drawn faceless.
-      if (style === "faceless" || bestD <= FEATURE_DISTANCE * FEATURE_DISTANCE) {
-        indices[p] = face.ids[best];
-        continue;
-      }
+      indices[p] = face.ids[best];
+      continue;
     }
     const base = indices[p];
     if (group[base] !== 0) continue; // already a part color
