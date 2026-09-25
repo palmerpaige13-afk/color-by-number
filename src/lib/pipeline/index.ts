@@ -2,7 +2,7 @@
 
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
-import { flattenFaces } from "./faces";
+import { separateFaces } from "./faces";
 import { featureLines } from "./lines";
 import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
@@ -64,8 +64,14 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     params.smoothPasses > 0 ? bilateralSmooth(input.data, w, h, params.smoothPasses) : input.data;
   lap("smooth");
 
-  const { indices, palette, paletteLab } = quantize(smoothed, w, h, params.paletteSize, imp);
-  if (input.faces?.length) flattenFaces(indices, smoothed, input.faces, paletteLab, w, h);
+  const q = quantize(smoothed, w, h, params.paletteSize, imp);
+  const { indices } = q;
+  const faces = input.faces?.length
+    ? separateFaces(indices, smoothed, input.faces, q.palette, q.paletteLab, w, h, input.faceless)
+    : null;
+  const palette = faces?.palette ?? q.palette;
+  const paletteLab = faces?.paletteLab ?? q.paletteLab;
+  const group = faces?.group;
   lap("quantize");
 
   let colorMap = majorityFilter(indices, w, h, palette.length, params.boundaryPasses);
@@ -89,6 +95,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     h,
     paletteLab,
     (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id])),
+    group,
   );
 
   // Pass 2: merge regions too thin to fit a number. Radius is only known for the original
@@ -104,7 +111,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const tooThin = (id: number) =>
       pts.radius[id] < radiusLimit(keepFactor(sizedImp[id], contrast[id]));
     let thin = 0;
-    for (let i = 0; i < sized.count; i++) if (tooThin(i)) thin++;
+    for (let i = 0; i < sized.count; i++) if (tooThin(i) && !group?.[sized.color[i]]) thin++;
     if (thin === 0) break;
     colorMap = mergeRegions(
       sized,
@@ -112,6 +119,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       h,
       paletteLab,
       (id, area) => area === sized.area[id] && tooThin(id),
+      group,
     );
   }
   lap("merge");
@@ -119,7 +127,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const final = labelComponents(colorMap, w, h);
   const labels = Uint16Array.from(final.labels);
   const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
-  const detailLines = imp ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h) : undefined;
+  const detailLines = imp
+    ? featureLines(smoothed, labels, imp, LINE_LEVEL, w, h, faces?.mask, input.faces, input.faceless)
+    : undefined;
   lap("labels");
 
   return {

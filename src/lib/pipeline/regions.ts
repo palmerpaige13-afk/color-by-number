@@ -105,6 +105,11 @@ class Heap {
  * flagged region remains or a flagged region has no neighbors. Returns a new color map.
  *
  * `needsMerge` is evaluated against the region's *current* (possibly grown) area.
+ *
+ * `group` (per palette color) keeps faces apart from the background: a region only merges
+ * into a neighbor of its own group. A background region with no background neighbor (an eye
+ * enclosed by a face) may merge into anything; a face region with no face neighbor (the whole
+ * face as one shape) is never merged away.
  */
 export function mergeRegions(
   comps: Components,
@@ -112,6 +117,7 @@ export function mergeRegions(
   h: number,
   paletteLab: Float32Array,
   needsMerge: (id: number, area: number) => boolean,
+  group?: Uint8Array,
 ): Uint8Array {
   const { labels, count } = comps;
   const color = Uint8Array.from(comps.color);
@@ -145,6 +151,7 @@ export function mergeRegions(
 
   const flagged = new Uint8Array(count);
   const heap = new Heap();
+  const groupOf = (id: number) => group?.[color[id]] ?? 0;
   for (let i = 0; i < count; i++) {
     if (needsMerge(i, area[i])) {
       flagged[i] = 1;
@@ -160,7 +167,11 @@ export function mergeRegions(
     let target = -1;
     let bestD = Infinity;
     let bestBorder = -1;
+    const g = groupOf(r);
+    const hasSameGroup = [...adj[r].keys()].some((nb) => groupOf(nb) === g);
+    if (!hasSameGroup && g !== 0) continue;
     for (const [nb, border] of adj[r]) {
+      if (hasSameGroup && groupOf(nb) !== g) continue;
       const d = labDist2(paletteLab, color[r] * 3, paletteLab, color[nb] * 3);
       if (d < bestD || (d === bestD && border > bestBorder)) {
         bestD = d;

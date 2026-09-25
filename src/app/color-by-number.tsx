@@ -23,17 +23,28 @@ const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
 
 type View = "outline" | "colored";
 
-/** Palette entries actually used by some region, numbered 1..n dark to light. */
+/**
+ * Palette entries actually used by some region, numbered 1..n dark to light. Face skin has its
+ * own palette entries (so faces keep their outline) but shares a number with its color twin.
+ */
 function usedPalette(result: PipelineResult): { number: Uint8Array; key: { n: number; rgb: RGB }[] } {
   const used = new Uint8Array(result.palette.length);
   for (let i = 0; i < result.regionCount; i++) used[result.regionColor[i]] = 1;
   const number = new Uint8Array(result.palette.length);
   const key: { n: number; rgb: RGB }[] = [];
-  result.palette.forEach((rgb, i) => {
-    if (!used[i]) return;
-    number[i] = key.length + 1;
-    key.push({ n: key.length + 1, rgb });
-  });
+  const byColor = new Map<string, number>();
+  // Base palette entries come first, already dark to light; face entries follow.
+  for (const [i, rgb] of result.palette.entries()) {
+    if (!used[i]) continue;
+    const id = rgb.join(",");
+    let n = byColor.get(id);
+    if (n === undefined) {
+      n = key.length + 1;
+      byColor.set(id, n);
+      key.push({ n, rgb });
+    }
+    number[i] = n;
+  }
   return { number, key };
 }
 
@@ -174,7 +185,10 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
     bitmap.close();
     const faces = subjects.filter((s) => s.kind === "face");
-    setResult(runPipeline({ ...pixels, importance, faces }, DIFFICULTY_PARAMS[difficulty]));
+    // Faces are drawn faceless: one smooth, outlined shape each, no eyes, nose or mouth.
+    setResult(
+      runPipeline({ ...pixels, importance, faces, faceless: true }, DIFFICULTY_PARAMS[difficulty]),
+    );
     setView("outline");
     setBusy(null);
   }

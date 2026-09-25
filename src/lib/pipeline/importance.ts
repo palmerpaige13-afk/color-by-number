@@ -3,10 +3,10 @@
 // that picks out buildings: dense, straight, strong edges (windows, walls, rooflines) as
 // opposed to foliage and grass, whose edges are just as strong but point every which way.
 
-import type { Box } from "./types";
+import type { FaceShape } from "./types";
 
-/** Detected subject box, in working-raster pixels. */
-export interface SubjectBox extends Box {
+/** Detected subject box, in working-raster pixels (faces may carry landmark contours). */
+export interface SubjectBox extends FaceShape {
   kind: "face" | "person" | "animal";
 }
 

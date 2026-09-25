@@ -8,6 +8,18 @@ export interface Box {
   height: number;
 }
 
+export type Point = [number, number];
+
+/** A detected face, with landmark contours (working-raster pixels) when available. */
+export interface FaceShape extends Box {
+  /** Closed polygon around the face: jaw, chin and hairline. */
+  outline?: Point[];
+  /** Open polylines for eyes, eyebrows, nose and lips. */
+  features?: Point[][];
+  /** Face-skin mask from segmentation (1 = face), covering the given working-pixel rectangle. */
+  skin?: { x: number; y: number; width: number; height: number; data: Uint8Array };
+}
+
 export interface PipelineParams {
   /** Number of palette colors (8–24). */
   paletteSize: number;
@@ -30,8 +42,10 @@ export interface PipelineInput {
   data: Uint8ClampedArray;
   /** Optional 0..1 per pixel; higher keeps more detail (faces, people, buildings). */
   importance?: Float32Array;
-  /** Detected faces; their skin is flattened to a single color. */
-  faces?: Box[];
+  /** Detected faces; each is kept as its own outlined area. */
+  faces?: FaceShape[];
+  /** Draw faces as one smooth outlined shape with no eyes, nose or mouth. */
+  faceless?: boolean;
 }
 
 export interface PipelineResult {

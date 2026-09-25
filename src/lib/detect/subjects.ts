@@ -1,25 +1,73 @@
-// Finds faces, people and animals with MediaPipe, entirely in the browser.
-// Models (~5 MB total) are fetched on first use and cached by the browser.
+// Finds faces, people and animals with MediaPipe, entirely in the browser. Face candidates are
+// confirmed with the face landmarker, and each face's exact shape (at any angle, without hair)
+// comes from a face/hair/skin segmenter.
+// Models (~9 MB, plus ~16 MB for the segmenter when a photo has faces) are fetched on first
+// use and cached by the browser.
 
-import { FaceDetector, FilesetResolver, ObjectDetector } from "@mediapipe/tasks-vision";
+import {
+  FaceDetector,
+  FaceLandmarker,
+  FilesetResolver,
+  ImageSegmenter,
+  ObjectDetector,
+} from "@mediapipe/tasks-vision";
 import type { SubjectBox } from "@/lib/pipeline/importance";
+import type { Point } from "@/lib/pipeline/types";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
 const OBJECT_MODEL = `${MODELS}/object_detector/efficientdet_lite0/int8/latest/efficientdet_lite0.tflite`;
 const FACE_MODEL = `${MODELS}/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite`;
+const LANDMARK_MODEL = `${MODELS}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`;
+const SEGMENT_MODEL = `${MODELS}/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite`;
+/** Category index of face skin in the multiclass segmenter's output. */
+const FACE_SKIN = 3;
+/** Segmenter input size, and how much around the face it looks at (x face size). */
+const SEGMENT_SIZE = 256;
+const SEGMENT_PAD = 3;
+
+/** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
+const SURE_FACE = 0.75;
+/** Size of the square crop handed to the landmarker. */
+const TRACE_SIZE = 384;
+
+/** Bottom of the nose: left nostril, base of the nose, right nostril (landmark indices). */
+const NOSE: number[] = [98, 2, 327];
 
 const ANIMALS = ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"];
 
 /** Long edge of the image handed to the detectors; bigger finds smaller faces. */
 const DETECT_SIZE = 1280;
 
-let detectors: Promise<{ objects: ObjectDetector; faces: FaceDetector }> | null = null;
+let segmenter: Promise<ImageSegmenter> | null = null;
+
+function loadSegmenter() {
+  segmenter ??= FilesetResolver.forVisionTasks(WASM_URL)
+    .then((fileset) =>
+      ImageSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: SEGMENT_MODEL },
+        runningMode: "IMAGE",
+        outputCategoryMask: true,
+        outputConfidenceMasks: false,
+      }),
+    )
+    .catch((err) => {
+      segmenter = null;
+      throw err;
+    });
+  return segmenter;
+}
+
+let detectors: Promise<{
+  objects: ObjectDetector;
+  faces: FaceDetector;
+  landmarks: FaceLandmarker;
+}> | null = null;
 
 function loadDetectors() {
   detectors ??= (async () => {
     const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
-    const [objects, faces] = await Promise.all([
+    const [objects, faces, landmarks] = await Promise.all([
       ObjectDetector.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: OBJECT_MODEL },
         runningMode: "IMAGE",
@@ -30,10 +78,16 @@ function loadDetectors() {
       FaceDetector.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: FACE_MODEL },
         runningMode: "IMAGE",
-        minDetectionConfidence: 0.5,
+        minDetectionConfidence: 0.3,
+      }),
+      FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: LANDMARK_MODEL },
+        runningMode: "IMAGE",
+        numFaces: 1,
+        minFaceDetectionConfidence: 0.3,
       }),
     ]);
-    return { objects, faces };
+    return { objects, faces, landmarks };
   })().catch((err) => {
     detectors = null; // allow a retry on the next photo
     throw err;
@@ -51,7 +105,7 @@ export async function detectSubjects(
   workW: number,
   workH: number,
 ): Promise<SubjectBox[]> {
-  const { objects, faces } = await loadDetectors();
+  const { objects, faces, landmarks } = await loadDetectors();
 
   const s = Math.min(1, DETECT_SIZE / Math.max(image.width, image.height));
   const canvas = document.createElement("canvas");
@@ -110,14 +164,34 @@ export async function detectSubjects(
     return ix * iy > 0.25 * Math.min(a.w * a.h, b.w * b.h);
   };
   candidates.sort((a, b) => b.score - a.score);
-  let kept: Candidate[] = [];
-  for (const c of candidates) if (!kept.some((k) => overlaps(k, c))) kept.push(c);
+  const unique: Candidate[] = [];
+  for (const c of candidates) if (!unique.some((k) => overlaps(k, c))) unique.push(c);
+
+  // Verify each candidate by tracing it with the landmarker. A traced face is certainly a face
+  // (and gets an exact outline); an untraced one is kept only when the detector is very sure,
+  // which covers side profiles the landmarker can't handle while rejecting bushes and patterns.
+  type Face = Candidate & { lm?: Point[] };
+  const traced: Face[] = unique
+    .map((c): Face => ({ ...c, lm: trace(c) }))
+    .filter((c) => c.lm || c.score >= SURE_FACE)
+    .sort((a, b) => Number(!!b.lm) - Number(!!a.lm) || b.score - a.score);
 
   // When people were found, every real face belongs to one of them: at most one face per
-  // person, in the upper part of their box. Faces on no one (a bouquet, a pattern) are dropped.
-  if (people.length > 0) {
+  // person, in the upper part of their box. Faces on no one are dropped.
+  let kept = traced;
+  if (people.length === 0) {
+    // No people: a "face" on an animal (a parrot's eye and beak) isn't a human face.
+    kept = traced.filter(
+      (c) =>
+        !out.some((a) => {
+          const fx = (c.x + c.w / 2) * toWork;
+          const fy = (c.y + c.h / 2) * toWork;
+          return fx >= a.x && fx <= a.x + a.width && fy >= a.y && fy <= a.y + a.height;
+        }),
+    );
+  } else {
     const taken = new Set<number>();
-    kept = kept.filter((c) => {
+    kept = traced.filter((c) => {
       const fx = c.x + c.w / 2;
       const fy = c.y + c.h / 2;
       const owner = people.findIndex(
@@ -130,17 +204,150 @@ export async function detectSubjects(
     });
   }
 
-  const faceBoxes: SubjectBox[] = kept.map((c) => ({
-    kind: "face",
-    x: c.x * toWork,
-    y: c.y * toWork,
-    width: c.w * toWork,
-    height: c.h * toWork,
-  }));
+  // Face shapes. If the segmenter can't load, faces fall back to landmark outlines.
+  const seg = kept.length ? await loadSegmenter().catch(() => null) : null;
+
+  const faceBoxes: SubjectBox[] = kept.map((c) => {
+    const w = (pt: Point): Point => [pt[0] * toWork, pt[1] * toWork];
+    const box: SubjectBox = { kind: "face", x: c.x * toWork, y: c.y * toWork, width: c.w * toWork, height: c.h * toWork };
+    if (seg) box.skin = segmentFace(seg, c);
+    if (!c.lm) return box;
+    const lm = c.lm;
+    const xs = lm.map((p) => p[0]);
+    const ys = lm.map((p) => p[1]);
+    box.x = Math.min(...xs) * toWork;
+    box.y = Math.min(...ys) * toWork;
+    box.width = (Math.max(...xs) - Math.min(...xs)) * toWork;
+    box.height = (Math.max(...ys) - Math.min(...ys)) * toWork;
+    box.outline = chain(FaceLandmarker.FACE_LANDMARKS_FACE_OVAL).map((i) => w(lm[i]));
+    box.features = [
+      FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+      FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+      FaceLandmarker.FACE_LANDMARKS_LIPS,
+    ]
+      .flatMap((conns) => conns.map((c): Point[] => [w(lm[c.start]), w(lm[c.end])]))
+      .concat([NOSE.map((i) => w(lm[i]))]);
+    return box;
+  });
+
+  /**
+   * Face-skin mask for candidate `c`, in working pixels: the segmenter's face-skin pixels in a
+   * square around the face, keeping only the blob at the face's center, with holes filled.
+   */
+  function segmentFace(model: ImageSegmenter, c: Candidate): SubjectBox["skin"] {
+    const side = Math.max(c.w, c.h) * SEGMENT_PAD;
+    const sx = c.x + c.w / 2 - side / 2;
+    const sy = c.y + c.h / 2 - side / 2;
+    crop.width = crop.height = SEGMENT_SIZE;
+    const ctx = crop.getContext("2d")!;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, SEGMENT_SIZE, SEGMENT_SIZE);
+    ctx.drawImage(canvas, sx, sy, side, side, 0, 0, SEGMENT_SIZE, SEGMENT_SIZE);
+    const result = model.segment(crop);
+    const cats = result.categoryMask?.getAsUint8Array().slice();
+    result.close();
+    if (!cats) return undefined;
+
+    // Resample into working pixels.
+    const x0 = Math.floor(sx * toWork);
+    const y0 = Math.floor(sy * toWork);
+    const size = Math.ceil(side * toWork) + 1;
+    const data = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const u = Math.floor((((x0 + x + 0.5) / toWork - sx) / side) * SEGMENT_SIZE);
+        const v = Math.floor((((y0 + y + 0.5) / toWork - sy) / side) * SEGMENT_SIZE);
+        if (u < 0 || v < 0 || u >= SEGMENT_SIZE || v >= SEGMENT_SIZE) continue;
+        if (cats[v * SEGMENT_SIZE + u] === FACE_SKIN) data[y * size + x] = 1;
+      }
+    }
+    return cleanBlob(data, size, (c.x + c.w / 2) * toWork - x0, (c.y + c.h / 2) * toWork - y0)
+      ? { x: x0, y: y0, width: size, height: size, data }
+      : undefined;
+  }
+
+  /** Landmarks (detection-canvas pixels) for the face in candidate `c`, if the landmarker finds it. */
+  function trace(c: Candidate): Point[] | undefined {
+    for (const pad of [2.2, 3]) {
+      const side = Math.max(c.w, c.h) * pad;
+      const sx = c.x + c.w / 2 - side / 2;
+      const sy = c.y + c.h / 2 - side / 2;
+      crop.width = crop.height = TRACE_SIZE;
+      const ctx = crop.getContext("2d")!;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, TRACE_SIZE, TRACE_SIZE);
+      ctx.drawImage(canvas, sx, sy, side, side, 0, 0, TRACE_SIZE, TRACE_SIZE);
+      const lm = landmarks.detect(crop).faceLandmarks[0];
+      if (!lm) continue;
+      const pts = lm.map((l): Point => [sx + l.x * side, sy + l.y * side]);
+      // Must be this candidate's face, not another face that happens to be in the crop.
+      const mx = pts.reduce((t, p) => t + p[0], 0) / pts.length;
+      const my = pts.reduce((t, p) => t + p[1], 0) / pts.length;
+      if (Math.abs(mx - (c.x + c.w / 2)) < c.w && Math.abs(my - (c.y + c.h / 2)) < c.h) return pts;
+    }
+    return undefined;
+  }
 
   return [...out, ...faceBoxes].map((b) => ({
     ...b,
     width: Math.min(b.width, workW - b.x),
     height: Math.min(b.height, workH - b.y),
   }));
+}
+
+/** Orders a closed loop given as unordered connections into a list of landmark indices. */
+function chain(conns: { start: number; end: number }[]): number[] {
+  const next = new Map<number, number>();
+  for (const c of conns) next.set(c.start, c.end);
+  const first = conns[0].start;
+  const out = [first];
+  for (let i = next.get(first); i !== undefined && i !== first && out.length <= conns.length; i = next.get(i)) {
+    out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Keeps only the blob of 1s nearest (cx, cy) and fills its holes (eyes, mouth, a stray curl).
+ * Returns false if there is no blob. Works in place on a size x size grid.
+ */
+function cleanBlob(data: Uint8Array, size: number, cx: number, cy: number): boolean {
+  const n = size * size;
+  let seed = -1;
+  let best = Infinity;
+  for (let p = 0; p < n; p++) {
+    if (!data[p]) continue;
+    const d = ((p % size) - cx) ** 2 + (Math.floor(p / size) - cy) ** 2;
+    if (d < best) {
+      best = d;
+      seed = p;
+    }
+  }
+  if (seed === -1) return false;
+
+  const flood = (start: number[], match: (p: number) => boolean) => {
+    const seen = new Uint8Array(n);
+    const stack = start.filter(match);
+    for (const p of stack) seen[p] = 1;
+    while (stack.length) {
+      const p = stack.pop()!;
+      const x = p % size;
+      for (const q of [x > 0 ? p - 1 : -1, x < size - 1 ? p + 1 : -1, p - size, p + size]) {
+        if (q < 0 || q >= n || seen[q] || !match(q)) continue;
+        seen[q] = 1;
+        stack.push(q);
+      }
+    }
+    return seen;
+  };
+
+  const blob = flood([seed], (p) => data[p] === 1);
+  // Everything not reachable from the border without crossing the blob is a hole.
+  const border: number[] = [];
+  for (let i = 0; i < size; i++) border.push(i, n - 1 - i, i * size, i * size + size - 1);
+  const outside = flood(border, (p) => !blob[p]);
+  for (let p = 0; p < n; p++) data[p] = outside[p] ? 0 : 1;
+  return true;
 }
