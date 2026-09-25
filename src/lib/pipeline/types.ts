@@ -29,6 +29,10 @@ export interface RegionMask {
   width: number;
   height: number;
   data: Uint8Array;
+  /** What it is, when known (e.g. "dog"). */
+  label?: string;
+  /** The detector's box around it, in working pixels, when known. */
+  box?: Box;
 }
 
 export interface PipelineParams {
@@ -82,6 +86,8 @@ export interface PipelineResult {
   labelRadius: Float32Array;
   /** Palette index of the blank background, if the photo was cut out; never numbered. */
   background?: number;
+  /** Pet eyes, printed already colored in (working pixels). */
+  eyes?: { x: number; y: number; r: number }[];
   /**
    * 1 where a thin feature line should be drawn: an outline in an important area (eyes, brows,
    * lips, window frames) that was too thin to become its own numbered shape.

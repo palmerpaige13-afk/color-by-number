@@ -7,25 +7,21 @@ import {
   WORKING_SIZE,
   runPipeline,
   type Difficulty,
-  type PipelineResult,
   type RegionMask,
-  type RGB,
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
+import { buildPage, drawPage, type Layer, type Page } from "@/lib/page";
 
-/** Smallest number drawn, in canvas pixels. Smaller shapes are printed already colored in. */
-const MIN_FONT = 6.5;
-
-/** Output canvas pixels per working-raster pixel. */
+/** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
+/** Largest page width, in pixels (a two-layer page scales up to keep the people's detail). */
+const MAX_PAGE_WIDTH = 2700;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
   { id: "medium", label: "Medium", blurb: "16 colors, more detail" },
   { id: "hard", label: "Hard", blurb: "24 colors, lots of small shapes" },
 ];
-
-type View = "outline" | "colored";
 
 type Background = "remove" | "keep";
 
@@ -60,32 +56,6 @@ function BrushIcon() {
   );
 }
 
-/**
- * Palette entries actually used by some region, numbered 1..n dark to light. Face skin has its
- * own palette entries (so faces keep their outline) but shares a number with its color twin.
- */
-function usedPalette(result: PipelineResult): { number: Uint8Array; key: { n: number; rgb: RGB }[] } {
-  const used = new Uint8Array(result.palette.length);
-  for (let i = 0; i < result.regionCount; i++) used[result.regionColor[i]] = 1;
-  if (result.background !== undefined) used[result.background] = 0;
-  const number = new Uint8Array(result.palette.length);
-  const key: { n: number; rgb: RGB }[] = [];
-  const byColor = new Map<string, number>();
-  // Base palette entries come first, already dark to light; face entries follow.
-  for (const [i, rgb] of result.palette.entries()) {
-    if (!used[i]) continue;
-    const id = rgb.join(",");
-    let n = byColor.get(id);
-    if (n === undefined) {
-      n = key.length + 1;
-      byColor.set(id, n);
-      key.push({ n, rgb });
-    }
-    number[i] = n;
-  }
-  return { number, key };
-}
-
 /** Share of the photo that must be people for the page to be cut out to just them. */
 const MIN_CUTOUT_SHARE = 0.02;
 /** Margin around the people when cropping, as a share of their size. */
@@ -112,22 +82,19 @@ function toWorkingImage(bitmap: ImageBitmap) {
   return { width, height, data: ctx.getImageData(0, 0, width, height).data };
 }
 
+type Rect = { x: number; y: number; width: number; height: number };
+
 /**
- * The photo to work on. For a photo of people: without background, just the area around the
- * main people and their pets (so all the detail is spent on them); with background, the scene
- * framed closer when they're small in it, so their faces (and a pet's) are big enough to color.
- * Any other photo is used whole.
+ * Where the main people (and pets with them) are, and how to frame the page:
+ * - `subjects`: just around them (the whole page without background, the detail layer with it);
+ * - `scene`: with background, the photo framed closer when they're small in it.
+ * Null when it isn't a photo *of* people.
  */
-async function subjectImage(
-  file: File,
-  keepBackground: boolean,
-): Promise<{ bitmap: ImageBitmap; ofPeople: boolean }> {
-  const full = await createImageBitmap(file);
+async function framing(full: ImageBitmap): Promise<{ subjects: Rect; scene: Rect } | null> {
   const found = await findPeople(full).catch(() => ({ people: [], animals: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
-  if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return { bitmap: full, ofPeople: false };
-  // The main people, plus any pet with them.
+  if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return null;
   const keep = [
     ...found.people.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest),
     ...found.animals.filter((b) => area(b) >= PET_SHARE * biggest),
@@ -137,26 +104,72 @@ async function subjectImage(
   const x1 = Math.max(...keep.map((b) => b.x + b.width));
   const y1 = Math.max(...keep.map((b) => b.y + b.height));
 
-  let sx: number, sy: number, sw: number, sh: number;
-  if (keepBackground) {
-    // Same shape as the photo, just big enough that the subjects fill SUBJECT_FILL of it.
-    const zoom = Math.min(1, Math.max((y1 - y0) / full.height, (x1 - x0) / full.width) / SUBJECT_FILL);
-    if (zoom >= 0.95) return { bitmap: full, ofPeople: false };
-    sw = full.width * zoom;
-    sh = full.height * zoom;
-    sx = Math.min(full.width - sw, Math.max(0, (x0 + x1) / 2 - sw / 2));
-    sy = Math.min(full.height - sh, Math.max(0, (y0 + y1) / 2 - sh / 2));
-  } else {
-    const mx = (x1 - x0) * CROP_MARGIN;
-    const my = (y1 - y0) * CROP_MARGIN;
-    sx = Math.max(0, x0 - mx);
-    sy = Math.max(0, y0 - my);
-    sw = Math.min(full.width, x1 + mx) - sx;
-    sh = Math.min(full.height, y1 + my) - sy;
+  const mx = (x1 - x0) * CROP_MARGIN;
+  const my = (y1 - y0) * CROP_MARGIN;
+  const sx = Math.max(0, x0 - mx);
+  const sy = Math.max(0, y0 - my);
+  const subjects = {
+    x: sx,
+    y: sy,
+    width: Math.min(full.width, x1 + mx) - sx,
+    height: Math.min(full.height, y1 + my) - sy,
+  };
+
+  // Same shape as the photo, just big enough that the subjects fill SUBJECT_FILL of it.
+  const zoom = Math.min(1, Math.max((y1 - y0) / full.height, (x1 - x0) / full.width) / SUBJECT_FILL);
+  const sw = full.width * zoom;
+  const sh = full.height * zoom;
+  const scene = {
+    x: Math.min(full.width - sw, Math.max(0, (x0 + x1) / 2 - sw / 2)),
+    y: Math.min(full.height - sh, Math.max(0, (y0 + y1) / 2 - sh / 2)),
+    width: sw,
+    height: sh,
+  };
+  return { subjects, scene };
+}
+
+const crop = (full: ImageBitmap, r: Rect) =>
+  createImageBitmap(full, Math.floor(r.x), Math.floor(r.y), Math.ceil(r.width), Math.ceil(r.height));
+
+/**
+ * The part of the scene not covered by the people layer, in the scene layer's pixels: 1 where
+ * the scene should be drawn. Shrunk by a pixel so scene shapes reach under the people's edge
+ * and no white seam shows where the two layers meet.
+ */
+function sceneMask(
+  scene: { width: number; height: number },
+  sceneRect: Rect,
+  people: { width: number; height: number; cutout: Uint8Array },
+  peopleRect: Rect,
+): Uint8Array {
+  const under = new Uint8Array(scene.width * scene.height);
+  for (let y = 0; y < scene.height; y++) {
+    for (let x = 0; x < scene.width; x++) {
+      // Scene pixel -> photo pixel -> people-layer pixel.
+      const fx = sceneRect.x + ((x + 0.5) / scene.width) * sceneRect.width;
+      const fy = sceneRect.y + ((y + 0.5) / scene.height) * sceneRect.height;
+      const px = Math.floor(((fx - peopleRect.x) / peopleRect.width) * people.width);
+      const py = Math.floor(((fy - peopleRect.y) / peopleRect.height) * people.height);
+      if (px >= 0 && py >= 0 && px < people.width && py < people.height && people.cutout[py * people.width + px]) {
+        under[y * scene.width + x] = 1;
+      }
+    }
   }
-  const cropped = await createImageBitmap(full, Math.floor(sx), Math.floor(sy), Math.ceil(sw), Math.ceil(sh));
-  full.close();
-  return { bitmap: cropped, ofPeople: !keepBackground };
+  const keep = new Uint8Array(under.length);
+  for (let y = 0; y < scene.height; y++) {
+    for (let x = 0; x < scene.width; x++) {
+      const p = y * scene.width + x;
+      // Keep the scene unless this pixel is well inside the people (all 4 neighbors covered).
+      const inside =
+        under[p] &&
+        (x === 0 || under[p - 1]) &&
+        (x === scene.width - 1 || under[p + 1]) &&
+        (y === 0 || under[p - scene.width]) &&
+        (y === scene.height - 1 || under[p + scene.width]);
+      keep[p] = inside ? 0 : 1;
+    }
+  }
+  return keep;
 }
 
 function describeSubjects(subjects: SubjectBox[]): string {
@@ -169,64 +182,11 @@ function describeSubjects(subjects: SubjectBox[]): string {
   return parts.join(", ");
 }
 
-function draw(canvas: HTMLCanvasElement, result: PipelineResult, view: View) {
-  const { width: w, height: h, labels, regionColor, palette } = result;
-  const { number } = usedPalette(result);
-
-  // Paint at working resolution, then scale up with smoothing off for crisp edges.
-  const small = document.createElement("canvas");
-  small.width = w;
-  small.height = h;
-  const sctx = small.getContext("2d")!;
-  const img = sctx.createImageData(w, h);
-  // Shapes too small for a number (a pet's eye, a nose) are printed already colored in.
-  const tiny = new Uint8Array(result.regionCount);
-  for (let i = 0; i < result.regionCount; i++) {
-    tiny[i] = regionColor[i] !== result.background && result.labelRadius[i] * SCALE * 1.1 < MIN_FONT ? 1 : 0;
-  }
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const p = y * w + x;
-      const l = labels[p];
-      const edge = (x < w - 1 && labels[p + 1] !== l) || (y < h - 1 && labels[p + w] !== l);
-      let rgb: RGB = [255, 255, 255];
-      if (tiny[l]) rgb = palette[regionColor[l]];
-      else if (edge) rgb = [70, 70, 70];
-      else if (regionColor[l] === result.background) rgb = [255, 255, 255];
-      else if (result.detailLines?.[p]) rgb = view === "colored" ? [90, 90, 90] : [150, 150, 150];
-      else if (view === "colored") rgb = palette[regionColor[l]];
-      img.data.set([rgb[0], rgb[1], rgb[2], 255], p * 4);
-    }
-  }
-  sctx.putImageData(img, 0, 0);
-
-  canvas.width = w * SCALE;
-  canvas.height = h * SCALE;
-  const ctx = canvas.getContext("2d")!;
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = "#464646";
-  ctx.lineWidth = 1;
-  if (result.background === undefined) ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
-
-  if (view === "colored") return;
-  ctx.fillStyle = "#555";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  for (let i = 0; i < result.regionCount; i++) {
-    if (regionColor[i] === result.background || tiny[i]) continue;
-    const size = Math.min(26, result.labelRadius[i] * SCALE * 1.1);
-    if (size < MIN_FONT) continue;
-    ctx.font = `${Math.round(size)}px Arial, sans-serif`;
-    ctx.fillText(String(number[regionColor[i]]), result.labelX[i] * SCALE, result.labelY[i] * SCALE);
-  }
-}
-
 export default function ColorByNumber() {
   const [file, setFile] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
-  const [result, setResult] = useState<PipelineResult | null>(null);
+  const [result, setResult] = useState<Page | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -238,8 +198,8 @@ export default function ColorByNumber() {
   const paintedRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    if (result && outlineRef.current) draw(outlineRef.current, result, "outline");
-    if (result && paintedRef.current) draw(paintedRef.current, result, "colored");
+    if (result && outlineRef.current) drawPage(outlineRef.current, result, "outline");
+    if (result && paintedRef.current) drawPage(paintedRef.current, result, "colored");
   }, [result]);
 
   function pickFile(f: File | undefined) {
@@ -264,64 +224,94 @@ export default function ColorByNumber() {
     setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
     await new Promise((r) => setTimeout(r, 30));
-    let bitmap: ImageBitmap;
-    let ofPeople: boolean;
+    let full: ImageBitmap;
     try {
-      ({ bitmap, ofPeople } = await subjectImage(file, background === "keep"));
+      full = await createImageBitmap(file);
     } catch {
       setError("Sorry, we couldn't read that photo. Try a different one.");
       setBusy(null);
       return;
     }
-    const pixels = toWorkingImage(bitmap);
+    const frame = await framing(full);
+    const params = DIFFICULTY_PARAMS[difficulty];
+
+    // The main layer: the people (and pets) on their own when there are some, else the photo.
+    const mainRect: Rect =
+      frame?.subjects ?? { x: 0, y: 0, width: full.width, height: full.height };
+    const mainBitmap = frame ? await crop(full, frame.subjects) : full;
+    const main = toWorkingImage(mainBitmap);
     let subjects: SubjectBox[] = [];
     let cutout: Uint8Array | undefined;
     let animals: RegionMask[] = [];
     let note = "";
     try {
-      ({ subjects, cutout, animals } = await detectSubjects(bitmap, pixels.width, pixels.height, {
-        cutOut: ofPeople,
+      ({ subjects, cutout, animals } = await detectSubjects(mainBitmap, main.width, main.height, {
+        cutOut: !!frame,
         sideShare: SIDE_PERSON_SHARE,
       }));
     } catch {
       note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
     }
+    if (mainBitmap !== full) mainBitmap.close();
     // Only cut out when the people were actually found by the segmenter.
     if (cutout && cutout.reduce((n, v) => n + v, 0) < MIN_CUTOUT_SHARE * cutout.length) {
       cutout = undefined;
     }
-    const structure = structureMap(pixels.data, pixels.width, pixels.height);
-    const map = importanceMap(structure, subjects, pixels.width, pixels.height);
-    const { importance } = map;
-    const found = [describeSubjects(subjects), map.buildings ? "buildings" : ""];
-    const list = found.filter(Boolean).join(", ");
-    const kept =
-      background === "remove" && !cutout
-        ? " No main people to cut out, so the whole photo is kept."
-        : "";
+    const structure = structureMap(main.data, main.width, main.height);
+    const map = importanceMap(structure, subjects, main.width, main.height);
+    const list = [describeSubjects(subjects), map.buildings ? "buildings" : ""].filter(Boolean).join(", ");
     setFocusNote(
-      (note ||
+      note ||
         (list
           ? `Kept extra detail on: ${list}.`
-          : "Didn't spot any people or buildings, so the whole photo got the same detail.")) +
-        kept,
+          : "Didn't spot any people or buildings, so the whole photo got the same detail."),
     );
     setBusy("Making your page…");
     await new Promise((r) => setTimeout(r, 30));
-    bitmap.close();
+
     const faces = subjects.filter((s) => s.kind === "face");
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
-    setResult(
-      runPipeline(
-        { ...pixels, importance, faces, faceStyle: "shaded", cutout, animals },
-        DIFFICULTY_PARAMS[difficulty],
-      ),
+    const mainResult = runPipeline(
+      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals },
+      params,
     );
+
+    let page: Page;
+    if (frame && cutout && background === "keep") {
+      // Scene layer underneath: the framed photo, coarser, with the people's area left out.
+      const sceneBitmap = await crop(full, frame.scene);
+      const scene = toWorkingImage(sceneBitmap);
+      sceneBitmap.close();
+      const keep = sceneMask(scene, frame.scene, { ...main, cutout }, mainRect);
+      const sceneResult = runPipeline(
+        { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
+        params,
+      );
+      // Page pixels per photo pixel, set by the people layer drawn at SCALE (capped).
+      const k = Math.min((SCALE * main.width) / mainRect.width, MAX_PAGE_WIDTH / frame.scene.width);
+      const layers: Layer[] = [
+        { result: sceneResult, x: 0, y: 0, scale: (k * frame.scene.width) / scene.width, outlineBlank: false },
+        {
+          result: mainResult,
+          x: (mainRect.x - frame.scene.x) * k,
+          y: (mainRect.y - frame.scene.y) * k,
+          scale: (k * mainRect.width) / main.width,
+          outlineBlank: true,
+        },
+      ];
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers);
+    } else {
+      page = buildPage(main.width * SCALE, main.height * SCALE, [
+        { result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true },
+      ]);
+    }
+    full.close();
+    setResult(page);
     setReveal(50);
     setBusy(null);
   }
 
-  const key = result ? usedPalette(result).key : [];
+  const key = result?.key ?? [];
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
@@ -452,8 +442,7 @@ export default function ColorByNumber() {
               Print
             </button>
             <span className="text-sm text-zinc-500">
-              {result.regionCount - (result.background === undefined ? 0 : 1)} shapes · {key.length}{" "}
-              colors
+              {result.shapes} shapes · {key.length} colors
             </span>
           </div>
 

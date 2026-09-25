@@ -2,6 +2,7 @@
 
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
+import { petEyes } from "./eyes";
 import { paintSkin, separateFaces } from "./faces";
 import type { RegionMask } from "./types";
 import { featureLines } from "./lines";
@@ -226,6 +227,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelY: pts.y,
     labelRadius: pts.radius,
     background,
+    eyes: (input.animals ?? [])
+      .filter((a) => a.label === "dog" || a.label === "cat")
+      .flatMap((a) => petEyes(input.data, a, w, h)),
     detailLines,
     timings,
     debug: params.debug

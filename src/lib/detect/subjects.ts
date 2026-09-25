@@ -177,13 +177,14 @@ export async function detectSubjects(
 
   const out: SubjectBox[] = [];
   const people: { x: number; y: number; w: number; h: number }[] = [];
-  const pets: { x: number; y: number; w: number; h: number }[] = [];
+  const pets: { x: number; y: number; w: number; h: number; label: string }[] = [];
   for (const d of objects.detect(canvas).detections) {
     const b = d.boundingBox;
     const name = d.categories[0]?.categoryName;
     if (!b || !name) continue;
     const kind = name === "person" ? "person" : "animal";
-    (kind === "person" ? people : pets).push({ x: b.originX, y: b.originY, w: b.width, h: b.height });
+    if (kind === "person") people.push({ x: b.originX, y: b.originY, w: b.width, h: b.height });
+    else pets.push({ x: b.originX, y: b.originY, w: b.width, h: b.height, label: name });
     out.push({ kind, x: b.originX * toWork, y: b.originY * toWork, width: b.width * toWork, height: b.height * toWork });
   }
 
@@ -399,7 +400,10 @@ export async function detectSubjects(
   }
 
   /** The animal's shape inside its box, from DeepLab's animal classes, cleaned to one blob. */
-  function traceAnimal(model: ImageSegmenter, p: { x: number; y: number; w: number; h: number }): RegionMask | undefined {
+  function traceAnimal(
+    model: ImageSegmenter,
+    p: { x: number; y: number; w: number; h: number; label: string },
+  ): RegionMask | undefined {
     const side = Math.max(p.w, p.h) * 1.2;
     const sx = p.x + p.w / 2 - side / 2;
     const sy = p.y + p.h / 2 - side / 2;
@@ -426,7 +430,17 @@ export async function detectSubjects(
     }
     const cx = (p.x + p.w / 2) * toWork - x0;
     const cy = (p.y + p.h / 2) * toWork - y0;
-    return cleanBlob(data, size, cx, cy) ? { x: x0, y: y0, width: size, height: size, data } : undefined;
+    return cleanBlob(data, size, cx, cy)
+      ? {
+          x: x0,
+          y: y0,
+          width: size,
+          height: size,
+          data,
+          label: p.label,
+          box: { x: p.x * toWork, y: p.y * toWork, width: p.w * toWork, height: p.h * toWork },
+        }
+      : undefined;
   }
 
   /**
