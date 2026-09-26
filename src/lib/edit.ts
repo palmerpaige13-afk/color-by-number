@@ -94,14 +94,24 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Pag
   return { ...page, layers, shapes };
 }
 
-/**
- * The page with `spot` colored as number `n` (1-based, from the key). Touching shapes that
- * already have that number join it, so no line is left between two areas of the same color.
- */
+/** The page with `spot` colored as number `n` (1-based, from the key). */
 export function recolor(page: Page, spot: Spot, n: number): Page {
+  return rebuild(page, spot.layer, (region) => region, new Map([[spot.region, n]]));
+}
+
+/** How many touching shapes have the same number as `spot` (a line between them could go). */
+export function sameColorNeighbors(page: Page, spot: Spot): number {
   const r = page.layers[spot.layer].result;
+  const n = r.regionColor[spot.region];
+  return [...neighbors(r, spot.region).keys()].filter((nb) => r.regionColor[nb] === n).length;
+}
+
+/** The page with every touching shape of the same number joined into `spot`. */
+export function joinSameColor(page: Page, spot: Spot): Page {
+  const r = page.layers[spot.layer].result;
+  const n = r.regionColor[spot.region];
   const same = new Set([...neighbors(r, spot.region).keys()].filter((nb) => r.regionColor[nb] === n));
-  return rebuild(page, spot.layer, (region) => (same.has(region) ? spot.region : region), new Map([[spot.region, n]]));
+  return rebuild(page, spot.layer, (region) => (same.has(region) ? spot.region : region));
 }
 
 /**

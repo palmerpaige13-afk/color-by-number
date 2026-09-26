@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { cleanUp, drawHighlight, join, recolor, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { cleanUp, drawHighlight, join, joinSameColor, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
@@ -340,6 +340,10 @@ export default function ColorByNumber() {
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
   const [hint, setHint] = useState<string | null>(null);
+  /** Where the shape being recolored was tapped (page pixels), to find it again afterwards. */
+  const pickedAt = useRef<[number, number] | null>(null);
+  /** A recolored shape that now matches a touching shape: offer to join them. */
+  const [offer, setOffer] = useState<Spot | null>(null);
   /** The line being drawn with the line tool, in page pixels. */
   const drawn = useRef<[number, number][] | null>(null);
   // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
@@ -375,7 +379,21 @@ export default function ColorByNumber() {
     if (result) setHistory((h) => [...h.slice(-(MAX_UNDO - 1)), result]);
     setResult(next);
     setPicked(null);
+    setOffer(null);
     setHint(TOOLS.find((t) => t.id === tool)?.hint ?? null);
+  }
+
+  /** Changes the picked shape's color; if it now matches a touching shape, asks about joining. */
+  function recolorPicked(n: number) {
+    if (!result || !picked) return;
+    const next = recolor(result, picked, n);
+    apply(next);
+    const at = pickedAt.current;
+    const spot = at && shapeAt(next, at[0], at[1]);
+    if (spot && sameColorNeighbors(next, spot) > 0) {
+      setOffer(spot);
+      setHint("It's now the same color as a shape it touches. Remove the line between them?");
+    }
   }
 
   function undo() {
@@ -384,6 +402,7 @@ export default function ColorByNumber() {
     setHistory((h) => h.slice(0, -1));
     setResult(last);
     setPicked(null);
+    setOffer(null);
   }
 
   /** A point on the picture, in page pixels. */
@@ -546,6 +565,8 @@ export default function ColorByNumber() {
     else if (tool === "join" && picked) apply(join(result, picked, spot));
     else {
       setPicked(spot);
+      setOffer(null);
+      pickedAt.current = pt;
       setHint(tool === "join" ? "Now tap a shape touching it to join them." : "Now tap the color it should be in the key below.");
     }
   }
@@ -553,6 +574,7 @@ export default function ColorByNumber() {
   function chooseTool(t: Tool) {
     setTool(t);
     setPicked(null);
+    setOffer(null);
     setHint(TOOLS.find((x) => x.id === t)?.hint ?? null);
   }
 
@@ -976,7 +998,32 @@ export default function ColorByNumber() {
                   </button>
                 </span>
               </div>
-              {hint && <p className="text-sm text-violet-900 dark:text-violet-200">{hint}</p>}
+              {hint && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm text-violet-900 dark:text-violet-200">{hint}</p>
+                  {offer && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => result && apply(joinSameColor(result, offer))}
+                        className="rounded-full bg-violet-600 px-3 py-1 text-sm font-semibold text-white hover:bg-violet-700"
+                      >
+                        Join them
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOffer(null);
+                          setHint(TOOLS.find((t) => t.id === tool)?.hint ?? null);
+                        }}
+                        className="rounded-full border border-violet-300 px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-white dark:text-violet-200 dark:hover:bg-zinc-900"
+                      >
+                        Keep the line
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1047,7 +1094,7 @@ export default function ColorByNumber() {
                     <button
                       type="button"
                       disabled={!choosing}
-                      onClick={() => picked && apply(recolor(result, picked, n))}
+                      onClick={() => recolorPicked(n)}
                       className={`flex items-center gap-2 rounded-lg p-0.5 ${choosing ? "cursor-pointer ring-violet-400 hover:ring-2" : "cursor-default"}`}
                     >
                       <span
