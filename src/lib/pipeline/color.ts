@@ -35,26 +35,3 @@ export function labDist2(a: Float32Array, ai: number, b: Float32Array, bi: numbe
   const db = a[ai + 2] - b[bi + 2];
   return dl * dl + da * da + db * db;
 }
-
-/** CIE Lab -> sRGB (0–255). `inGamut` is false when the color had to be clipped. */
-export function labToRgb(L: number, a: number, b: number): { rgb: [number, number, number]; inGamut: boolean } {
-  const fy = (L + 16) / 116;
-  const fx = fy + a / 500;
-  const fz = fy - b / 200;
-  const inv = (t: number) => (t > 6 / 29 ? t * t * t : 3 * (6 / 29) ** 2 * (t - 4 / 29));
-  const X = inv(fx) * XN;
-  const Y = inv(fy);
-  const Z = inv(fz) * ZN;
-  const lin = [
-    3.2404542 * X - 1.5371385 * Y - 0.4985314 * Z,
-    -0.969266 * X + 1.8760108 * Y + 0.041556 * Z,
-    0.0556434 * X - 0.2040259 * Y + 1.0572252 * Z,
-  ];
-  let inGamut = true;
-  const rgb = lin.map((c) => {
-    if (c < -0.001 || c > 1.001) inGamut = false;
-    const v = Math.min(1, Math.max(0, c));
-    return Math.round(255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055));
-  }) as [number, number, number];
-  return { rgb, inGamut };
-}

@@ -25,13 +25,11 @@ const PRINT_DPI = 300;
 const MAX_PRINT_PX = 6000;
 /** Resolution of the color-key sheet. */
 const KEY_DPI = 150;
-/** How many colors the key aims for, per difficulty. */
-const KEY_COLORS: Record<Difficulty, number> = { easy: 8, medium: 16, hard: 25 };
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
   { id: "medium", label: "Medium", blurb: "16 colors, more detail" },
-  { id: "hard", label: "Hard", blurb: "25 colors, lots of small shapes" },
+  { id: "hard", label: "Hard", blurb: "24 colors, lots of small shapes" },
 ];
 
 type Background = "remove" | "keep";
@@ -399,17 +397,14 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      // The scene (layer 0) is where extra color variations may go.
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_COLORS[difficulty], 0);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, params.paletteSize);
     } else {
       page = buildPage(
         main.width * SCALE,
         main.height * SCALE,
         [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
         fontFrac,
-        KEY_COLORS[difficulty],
-        // Variations only go in a background: never on a cut-out of people.
-        mainResult.background === undefined ? 0 : undefined,
+        params.paletteSize,
       );
     }
     full.close();
