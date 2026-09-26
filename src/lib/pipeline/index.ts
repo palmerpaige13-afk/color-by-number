@@ -35,6 +35,8 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
 const BUDGET_PART_DIST = 20;
 /** Within one person's clothes, colors closer than this (ΔE) are light and shadow on one piece. */
 const CLOTHES_SHADE = 22;
+/** A pattern patch is at most this share of the piece of clothing it's on. */
+const PATTERN_SHARE = 0.5;
 
 /** Region-merge group of the blank background of a cut-out photo. */
 const BACKGROUND_GROUP = BLANK_GROUP;
@@ -206,11 +208,21 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       colorMap = mergeRegions(comps, w, h, paletteLab, (id, area) => !!shade[id] && area === comps.area[id], group, 0, CLOTHES_SHADE);
     }
 
-    // A pattern (flowers, a logo) inside one piece of clothing: a patch whose only neighbor is
-    // one bigger patch of the same person's clothes is part of it, whatever its color.
+    // A pattern (flowers, a logo) on one piece of clothing: a patch of a person's clothes
+    // whose only neighbor among their clothes is one bigger patch, and that touches none of
+    // their skin or hair (a top always touches arms or a neck), is part of that piece, whatever
+    // its color. Touching the background or someone else doesn't matter.
     const comps = labelComponents(colorMap, w, h);
-    const only = new Int32Array(comps.count).fill(-1); // the one neighbor, or -2 for several
+    const only = new Int32Array(comps.count).fill(-1); // the one clothes neighbor, or -2
     const note = (a: number, b: number) => {
+      const ca = comps.color[a];
+      const cb = comps.color[b];
+      if (kind[ca] !== PartKind.clothes) return;
+      if (kind[cb] === PartKind.face || kind[cb] === PartKind.hair) {
+        if (group?.[cb] !== undefined) only[a] = -2;
+        return;
+      }
+      if (kind[cb] !== PartKind.clothes || group?.[ca] !== group?.[cb]) return;
       if (only[a] === -1) only[a] = b;
       else if (only[a] !== b) only[a] = -2;
     };
@@ -218,7 +230,6 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       for (let x = 0; x < w; x++) {
         const p = y * w + x;
         const a = comps.labels[p];
-        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) only[a] = -2; // touches the edge
         for (const q of [x < w - 1 ? p + 1 : -1, y < h - 1 ? p + w : -1]) {
           if (q < 0 || comps.labels[q] === a) continue;
           note(a, comps.labels[q]);
@@ -228,13 +239,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     }
     const inside = (id: number) => {
       const nb = only[id];
-      const c = comps.color[id];
-      return (
-        nb >= 0 &&
-        kind[c] === PartKind.clothes &&
-        group?.[c] === group?.[comps.color[nb]] &&
-        comps.area[id] < comps.area[nb]
-      );
+      return nb >= 0 && comps.area[id] < comps.area[nb] * PATTERN_SHARE;
     };
     colorMap = mergeRegions(comps, w, h, paletteLab, (id, area) => area === comps.area[id] && inside(id), group);
   }
