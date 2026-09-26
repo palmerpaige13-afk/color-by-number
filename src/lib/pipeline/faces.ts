@@ -48,6 +48,8 @@ const SKIN_DISTANCE_WEIGHT = 5;
 /** Growing a face into missed skin: within this share of its size from its center, and this ΔE. */
 const FACE_GROW_REACH = 0.6;
 const FACE_GROW_TOLERANCE = 9;
+/** Unclaimed bits of a person up to this share of a face's height from a part join it. */
+const GAP_REACH = 0.5;
 /** Bites out of a face's outline up to this share of its size are filled in. */
 const FACE_SMOOTH = 0.12;
 const DOUBLE_FACE_WIDTH = 1.5;
@@ -184,6 +186,8 @@ export function separateFaces(
   h: number,
   style: "lines" | "shaded" | "faceless" = "lines",
   bodySkin?: RegionMask,
+  person?: Uint8Array,
+  hairTones: 1 | 2 = 2,
 ): FaceRegions {
   faces = faces.flatMap(splitDoubleFace);
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
@@ -256,6 +260,8 @@ export function separateFaces(
     paintSkin(a, parts, next++, w, h);
   }
 
+  if (person) fillGaps(parts, person, w, h, Math.max(4, ...faces.map((f) => f.height * GAP_REACH)));
+
   const palette = [...basePalette];
   const labs: number[] = Array.from(baseLab);
   const group: number[] = basePalette.map(() => 0);
@@ -280,7 +286,7 @@ export function separateFaces(
     };
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
     faces.forEach((_, i) => shade(mask, i + 1, faceTones, true));
-    for (const k of hairParts.keys()) shade(parts, k, 2, false);
+    for (const k of hairParts.keys()) shade(parts, k, hairTones, false);
     for (const [piece, k] of skinPieces) {
       const tone = faceTone.get(k);
       if (!tone) continue;
@@ -463,6 +469,28 @@ function splitDoubleFace(f: FaceShape): FaceShape[] {
   // The hair goes with the face the original box is centered on.
   const onLeft = f.x + f.width / 2 - skin.x < cut;
   return onLeft ? [l, { ...r, hair: undefined }] : [r, { ...l, hair: undefined }];
+}
+
+/**
+ * Bits of a person that no part claimed (light hair on a shoulder the segmenter missed, a
+ * patch of chest) would get the background's colors and show up as odd spots. Each such
+ * pixel within `reach` of a part joins the nearest part.
+ */
+function fillGaps(parts: Uint8Array, person: Uint8Array, w: number, h: number, reach: number) {
+  let frontier: number[] = [];
+  for (let p = 0; p < parts.length; p++) if (parts[p]) frontier.push(p);
+  for (let step = 0; step < reach && frontier.length; step++) {
+    const next: number[] = [];
+    for (const p of frontier) {
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= w * h || parts[q] || !person[q]) continue;
+        parts[q] = parts[p];
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
 }
 
 /**

@@ -125,6 +125,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
           h,
           faceStyle,
           params.oneSkinTone ? input.bodySkin : undefined,
+          input.cutout,
+          params.flatClothes ? 1 : 2,
         )
       : null;
   let palette = faces?.palette ?? q.palette;

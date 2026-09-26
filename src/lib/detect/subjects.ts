@@ -44,7 +44,7 @@ const HAIR_COLOR_STEP = 2;
 /** Owner of clothes no face reaches (held things, someone with no face found). */
 const LEFT_OVER = 250;
 /** Growing clothes between people: extra steps per ΔE of color change crossed. */
-const CLOTHES_EDGE_COST = 0.5;
+const CLOTHES_EDGE_COST = 2;
 const HAIR_SIDEWAYS = 2.5;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */

@@ -74,6 +74,8 @@ const MIN_CUTOUT_SHARE = 0.02;
 const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 };
 /** Separate bits of the cut-out smaller than this share of the picture are dropped. */
 const MIN_CUTOUT_PIECE = 0.002;
+/** Holes inside the people smaller than this share of the picture are filled in. */
+const MAX_CUTOUT_HOLE = 0.001;
 /** Margin around the people when cropping, as a share of their size. */
 const CROP_MARGIN = 0.06;
 /** The biggest person must fill this share of the photo for it to count as a photo *of* people. */
@@ -199,27 +201,35 @@ function sceneMask(
 }
 
 /**
- * Removes tiny separate bits from a cut-out (a speck the segmenter picked up), so they are
- * painted as part of the scene instead of becoming an unreadable shape of their own.
+ * Tidies a cut-out: tiny separate bits (a speck the segmenter picked up) are dropped, so they
+ * are painted as part of the scene instead of becoming an unreadable shape of their own, and
+ * small holes inside the people are filled.
  */
 function dropSpecks(mask: Uint8Array, w: number) {
-  const minArea = mask.length * MIN_CUTOUT_PIECE;
+  const h = mask.length / w;
   const seen = new Uint8Array(mask.length);
   for (let start = 0; start < mask.length; start++) {
-    if (!mask[start] || seen[start]) continue;
+    if (seen[start]) continue;
+    const v = mask[start];
     const piece = [start];
     seen[start] = 1;
+    let edge = false;
     for (let i = 0; i < piece.length; i++) {
       const p = piece[i];
       const x = p % w;
+      const y = (p - x) / w;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) edge = true;
       for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
-        if (q >= 0 && q < mask.length && mask[q] && !seen[q]) {
+        if (q >= 0 && q < mask.length && mask[q] === v && !seen[q]) {
           seen[q] = 1;
           piece.push(q);
         }
       }
     }
-    if (piece.length < minArea) for (const p of piece) mask[p] = 0;
+    // A speck of person on its own goes; so does a small hole inside a person (a bright patch
+    // of hair or skin the segmenter took for background), which would let the scene show through.
+    if (v && piece.length < mask.length * MIN_CUTOUT_PIECE) for (const p of piece) mask[p] = 0;
+    if (!v && !edge && piece.length < mask.length * MAX_CUTOUT_HOLE) for (const p of piece) mask[p] = 1;
   }
 }
 
