@@ -49,6 +49,9 @@ const ANIMALS = ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bea
 /** Long edge of the image handed to the detectors; bigger finds smaller faces. */
 const DETECT_SIZE = 1280;
 
+/** Lets the page update (and respond) between the heavier detection steps. */
+const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+
 let segmenter: Promise<ImageSegmenter> | null = null;
 
 function loadSegmenter() {
@@ -212,6 +215,7 @@ export async function detectSubjects(
     }
   };
   addFaces(canvas, 0, 0, 1);
+  await breathe();
 
   // Look for faces in the top part of each person, upscaled so the face fills the frame.
   const crop = document.createElement("canvas");
@@ -240,6 +244,7 @@ export async function detectSubjects(
   // (and gets an exact outline); an untraced one is kept only when the detector is very sure,
   // which covers side profiles the landmarker can't handle while rejecting bushes and patterns.
   type Face = Candidate & { lm?: Point[] };
+  await breathe();
   const traced: Face[] = unique
     .map((c): Face => ({ ...c, lm: trace(c) }))
     .filter((c) => c.lm || c.score >= SURE_FACE)
@@ -285,10 +290,12 @@ export async function detectSubjects(
     (p) => p.w * p.h >= sideShare * Math.max(...people.map((q) => q.w * q.h)),
   );
   const wantCutout = cutOut && mainPeople.length > 0;
+  await breathe();
   const seg = kept.length || wantCutout ? await loadSegmenter().catch(() => null) : null;
   const peopleCut = seg && wantCutout ? cutOutPeople(seg) : undefined;
   const cutout = peopleCut?.mask;
 
+  await breathe();
   const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
   const animals = animalSeg ? pets.flatMap((p) => traceAnimal(animalSeg, p) ?? []) : [];
   pets.forEach((p) => {
@@ -401,6 +408,7 @@ export async function detectSubjects(
 
   // Faces the detectors missed (profiles, a kiss, a face turned away) are still labeled as
   // face skin by the segmenter: those become faces too.
+  await breathe();
   if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
 
   const subjects = [...out, ...faceBoxes].map((b) => ({

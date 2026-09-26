@@ -5,13 +5,13 @@ import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
   WORKING_SIZE,
-  runPipeline,
   type Difficulty,
   type RegionMask,
 } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
 import { buildPage, drawPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 import { canvasJpeg, makePdf, type PdfPage } from "@/lib/pdf";
+import { runPipelineAsync } from "@/lib/run-pipeline";
 import { PRINT_SIZES, fitOnPaper, fontFraction, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
@@ -293,7 +293,7 @@ export default function ColorByNumber() {
 
   async function generate() {
     if (!file) return;
-    setBusy("Finding people and buildings…");
+    setBusy("Finding people and faces…");
     setError(null);
     setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
@@ -341,7 +341,6 @@ export default function ColorByNumber() {
           ? `Kept extra detail on: ${list}.`
           : "Didn't spot any people or buildings, so the whole photo got the same detail."),
     );
-    setBusy("Making your page…");
     await new Promise((r) => setTimeout(r, 30));
 
     const faces = subjects.filter((s) => s.kind === "face");
@@ -368,7 +367,8 @@ export default function ColorByNumber() {
     });
 
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
-    const mainResult = runPipeline(
+    setBusy(twoLayers ? "Building the people…" : "Building your shapes…");
+    const mainResult = await runPipelineAsync(
       { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes },
       { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
@@ -384,7 +384,8 @@ export default function ColorByNumber() {
       // The scene gets whatever part of the budget the people didn't use.
       const peopleShapes = mainResult.regionCount - (mainResult.background === undefined ? 0 : 1);
       const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
-      const sceneResult = runPipeline(
+      setBusy("Building the background…");
+      const sceneResult = await runPipelineAsync(
         { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
         { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
       );
@@ -585,7 +586,14 @@ export default function ColorByNumber() {
             disabled={!file || !!busy}
             className="rounded-full bg-violet-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ?? "5. Make my color-by-number"}
+            {busy ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                {busy}
+              </span>
+            ) : (
+              "5. Make my color-by-number"
+            )}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
           {error && <span className="text-sm text-red-600">{error}</span>}
