@@ -29,6 +29,10 @@ const SKIN_TOLERANCE = 20;
  */
 const TWO_TONE_DISTANCE = 10;
 const MIN_SHADOW_SHARE = 0.25;
+/** A color must cover at least this share of someone's hair to be one of the hair's colors. */
+const HAIR_MAIN_SHARE = 0.06;
+/** Colors within this ΔE of a face's skin are skin, never one of that person's hair colors. */
+const SKIN_LIKE = 8;
 /**
  * A face in shadow (backlit, under a hat) has truly dark pixels, but people see it as normal
  * skin, and a flat dark-brown face reads as wrong. Faces whose lit tone is darker than this
@@ -169,7 +173,12 @@ export function separateFaces(
   });
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
-  for (const f of faces) if (f.hair && next < 250) paintSkin(f.hair, parts, next++, w, h);
+  const hairParts = new Map<number, number>(); // hair part -> its face's part
+  faces.forEach((f, i) => {
+    if (!f.hair || next >= 250) return;
+    hairParts.set(next, i + 1);
+    paintSkin(f.hair, parts, next++, w, h);
+  });
   for (const a of animals) if (next < 250) paintSkin(a, parts, next++, w, h);
 
   const palette = [...basePalette];
@@ -195,6 +204,44 @@ export function separateFaces(
     });
   }
 
+  // Hair keeps only its own main colors: skin showing through a part, or any color covering
+  // less than HAIR_MAIN_SHARE of the hair (a stray highlight), takes the nearest hair color.
+  const hairColor = new Map<number, Map<number, number>>(); // part -> base color -> hair color
+  for (const [k, face] of hairParts) {
+    const counts = new Map<number, number>();
+    const skinCounts = new Map<number, number>();
+    let total = 0;
+    for (let p = 0; p < parts.length; p++) {
+      if (parts[p] === k) {
+        counts.set(indices[p], (counts.get(indices[p]) ?? 0) + 1);
+        total++;
+      } else if (parts[p] === face) {
+        skinCounts.set(indices[p], (skinCounts.get(indices[p]) ?? 0) + 1);
+      }
+    }
+    const skin = [...skinCounts].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const isSkin = (c: number) =>
+      skin !== undefined && labDist2(baseLab, c * 3, baseLab, skin * 3) < SKIN_LIKE * SKIN_LIKE;
+    const main = [...counts]
+      .filter(([c, n]) => n >= total * HAIR_MAIN_SHARE && !isSkin(c))
+      .map(([c]) => c);
+    if (main.length === 0) continue;
+    const map = new Map<number, number>();
+    for (const c of counts.keys()) {
+      let best = main[0];
+      let bestD = Infinity;
+      for (const m of main) {
+        const d = labDist2(baseLab, c * 3, baseLab, m * 3);
+        if (d < bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      map.set(c, best);
+    }
+    hairColor.set(k, map);
+  }
+
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
@@ -204,7 +251,7 @@ export function separateFaces(
       indices[p] = face.ids[face.tone.get(p) ?? 0];
       continue;
     }
-    const base = indices[p];
+    const base = hairColor.get(k)?.get(indices[p]) ?? indices[p];
     if (group[base] !== 0) continue; // already a part color
     const id = k * 256 + base;
     let twin = twins.get(id);
