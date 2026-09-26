@@ -38,6 +38,8 @@ const FACE_MIN_LUMA = 150;
 const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
+/** A separate piece of one tone smaller than this share of the face or hair joins the other tone. */
+const MIN_TONE_PIECE = 0.2;
 /**
  * Matching bare skin (arms, legs, feet) to a face: color difference (ΔE) plus this much per
  * face height of distance, so a patch goes to the face that looks most like it and is nearby.
@@ -187,7 +189,8 @@ export function separateFaces(
   style: "lines" | "shaded" | "faceless" = "lines",
   bodySkin?: RegionMask,
   person?: Uint8Array,
-  hairTones: 1 | 2 = 2,
+  /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
+  hairTones: 1 | 2 = 1,
 ): FaceRegions {
   faces = faces.flatMap(splitDoubleFace);
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
@@ -787,6 +790,25 @@ function faceShading(
     // [shadow, lit]: soften the shadow toward the lit tone.
     means = [shadow!.map((v, c) => v + (lit![c] - v) * SHADOW_SOFTEN) as RGB, lit!];
     px.forEach((p, i) => tone.set(p, soft[i] >= mid ? 1 : 0));
+    // A small separate piece of one tone (a strip of shade along an edge) joins the other
+    // tone, so only big, natural areas of light and shade remain.
+    const seen = new Set<number>();
+    for (const start of px) {
+      if (seen.has(start)) continue;
+      const t = tone.get(start)!;
+      const piece = [start];
+      seen.add(start);
+      for (let i = 0; i < piece.length; i++) {
+        const p = piece[i];
+        const x = p % w;
+        for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+          if (q < 0 || seen.has(q) || mask[q] !== k || tone.get(q) !== t) continue;
+          seen.add(q);
+          piece.push(q);
+        }
+      }
+      if (piece.length < px.length * MIN_TONE_PIECE) for (const p of piece) tone.set(p, 1 - t);
+    }
   } else {
     means = [meanOf(() => true) ?? [200, 160, 140]];
     px.forEach((p) => tone.set(p, 0));

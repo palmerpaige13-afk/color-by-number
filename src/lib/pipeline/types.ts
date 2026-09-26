@@ -72,7 +72,7 @@ export interface PipelineParams {
    */
   partMinArea?: number;
   partMinRadius?: number;
-  /** Each piece of clothing, and each person's hair, is one color (light and shadow merged). */
+  /** Each piece of clothing is one color (light and shadow merged). */
   flatClothes?: boolean;
 }
 
