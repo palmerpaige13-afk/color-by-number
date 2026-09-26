@@ -72,6 +72,12 @@ const MIN_CUTOUT_SHARE = 0.02;
  * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
  */
 const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 };
+/**
+ * How much the background's muted tones are nudged toward soft greens and blues (0–1), so
+ * harder pages get some subtle green and blue shapes among the tans instead of everything
+ * being close in color.
+ */
+const COOL_BOOST: Record<Difficulty, number> = { easy: 0, medium: 0.4, hard: 0.8 };
 /** Separate bits of the cut-out smaller than this share of the picture are dropped. */
 const MIN_CUTOUT_PIECE = 0.002;
 /** Holes inside the people smaller than this share of the picture are filled in. */
@@ -443,7 +449,7 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty]);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty]);
     } else {
       page = buildPage(
         main.width * SCALE,
@@ -451,6 +457,7 @@ export default function ColorByNumber() {
         [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
         fontFrac,
         KEY_DISTINCT[difficulty],
+        COOL_BOOST[difficulty],
       );
     }
     full.close();

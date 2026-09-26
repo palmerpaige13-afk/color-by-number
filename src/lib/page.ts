@@ -55,6 +55,44 @@ function lively(c: { lab: Float32Array; faces: boolean; hair: boolean }): RGB {
   return labToRgb(L, a * k, b * k * warm);
 }
 
+/**
+ * Background colors in a warm photo (golden light on dry brush) all come out as tans and
+ * browns, close to each other. With `cool` > 0, some are nudged toward cooler colors, the way
+ * a painter would: muted olive and khaki tones (foliage washed out by warm light) turn toward
+ * soft sage green, and pale washed-out tones get a light blue tint. Saturated golds and warm
+ * browns stay as they are. `cool` 0 leaves everything alone; 1 is the full nudge.
+ */
+function coolBoost(rgb: RGB, cool: number): RGB {
+  if (cool <= 0) return rgb;
+  const lab = new Float32Array(3);
+  rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+  const L = lab[0];
+  let a = lab[1];
+  let b = lab[2];
+  const chroma = Math.hypot(a, b);
+  const hue = (Math.atan2(b, a) * 180) / Math.PI;
+  if (chroma < COOL_OLIVE_CHROMA && hue > 55 && hue < 120 && L > 20 && L < 80) {
+    // Olive and khaki: turn toward sage green, more for the more muted.
+    const t = cool * (1 - chroma / COOL_OLIVE_CHROMA);
+    const h = ((hue + (COOL_GREEN_HUE - hue) * Math.min(1, t * 1.2)) * Math.PI) / 180;
+    const c = Math.max(chroma, 10 * t) * (1 + 0.3 * t);
+    a = c * Math.cos(h);
+    b = c * Math.sin(h);
+  } else if (L >= 80 && chroma < COOL_PALE_CHROMA) {
+    // Pale and washed out: a light blue tint.
+    a -= 2 * cool;
+    b -= 9 * cool;
+  } else {
+    return rgb;
+  }
+  return labToRgb(L, a, b);
+}
+/** Foliage tones: Lab chroma below this; they turn toward this hue (degrees, a sage green). */
+const COOL_OLIVE_CHROMA = 30;
+const COOL_GREEN_HUE = 135;
+/** Pale tones: Lab chroma below this get a blue tint. */
+const COOL_PALE_CHROMA = 14;
+
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
@@ -79,6 +117,7 @@ export function buildPage(
   layers: Layer[],
   fontFrac: number,
   distinct = DISTINCT,
+  cool = 0,
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
@@ -89,7 +128,9 @@ export function buildPage(
     for (let i = 0; i < result.regionCount; i++) area[result.regionColor[i]] += result.regionArea[i] * scale * scale;
     if (result.background !== undefined) area[result.background] = 0;
     result.palette.forEach((rgb, index) => {
-      if (area[index] > 0) entries.push({ layer, index, rgb, area: area[index], kind: result.partKind?.[index] ?? 0 });
+      if (area[index] <= 0) return;
+      const kind = result.partKind?.[index] ?? 0;
+      entries.push({ layer, index, rgb: kind ? rgb : coolBoost(rgb, cool), area: area[index], kind });
     });
   });
 
