@@ -395,6 +395,10 @@ export async function detectSubjects(
     return undefined;
   }
 
+  // Faces the detectors missed (profiles, a kiss, a face turned away) are still labeled as
+  // face skin by the segmenter: those become faces too.
+  if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
+
   const subjects = [...out, ...faceBoxes].map((b) => ({
     ...b,
     width: Math.min(b.width, workW - b.x),
@@ -489,6 +493,106 @@ export async function detectSubjects(
    * segmenter run on a square around each person. The background-confidence mask is sampled
    * bilinearly so the cut-out edge stays smooth at working resolution.
    */
+  /**
+   * Face-skin areas the segmenter finds in the head area of each person (the top of their box,
+   * sampled from the full-resolution photo), not already covered by a detected face. Each big
+   * enough area becomes a face, with the hair around it as its hair.
+   */
+  function facesFromSegmentation(model: ImageSegmenter, known: SubjectBox[]): SubjectBox[] {
+    const skin = new Uint8Array(workW * workH);
+    const hair = new Uint8Array(workW * workH);
+    const N = SEGMENT_SIZE;
+    for (const p of mainPeople) {
+      const side = p.w * 1.1;
+      const sx = p.x + p.w / 2 - side / 2;
+      const sy = p.y - side * 0.08;
+      crop.width = crop.height = N;
+      const ctx = crop.getContext("2d")!;
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, N, N);
+      drawSharp(ctx, sx, sy, side, N);
+      const result = model.segment(crop);
+      const cats = result.categoryMask?.getAsUint8Array().slice();
+      result.close();
+      if (!cats) continue;
+      const x0 = Math.max(0, Math.floor(sx * toWork));
+      const y0 = Math.max(0, Math.floor(sy * toWork));
+      const x1 = Math.min(workW - 1, Math.ceil((sx + side) * toWork));
+      const y1 = Math.min(workH - 1, Math.ceil((sy + side) * toWork));
+      for (let y = y0; y <= y1; y++) {
+        const v = Math.floor((((y + 0.5) / toWork - sy) / side) * N);
+        if (v < 0 || v >= N) continue;
+        for (let x = x0; x <= x1; x++) {
+          const u = Math.floor((((x + 0.5) / toWork - sx) / side) * N);
+          if (u < 0 || u >= N) continue;
+          const cat = cats[v * N + u];
+          if (cat === FACE_SKIN) skin[y * workW + x] = 1;
+          else if (cat === HAIR) hair[y * workW + x] = 1;
+        }
+      }
+    }
+    // Leave out what detected faces already cover.
+    for (const f of known) {
+      const pad = 0.3;
+      const fx0 = Math.max(0, Math.floor(f.x - f.width * pad));
+      const fy0 = Math.max(0, Math.floor(f.y - f.height * pad));
+      const fx1 = Math.min(workW - 1, Math.ceil(f.x + f.width * (1 + pad)));
+      const fy1 = Math.min(workH - 1, Math.ceil(f.y + f.height * (1 + pad)));
+      for (let y = fy0; y <= fy1; y++) for (let x = fx0; x <= fx1; x++) skin[y * workW + x] = 0;
+    }
+
+    // Each sizable connected face-skin area is a face.
+    const minArea = (Math.min(workW, workH) * 0.02) ** 2;
+    const seen = new Uint8Array(workW * workH);
+    const found: SubjectBox[] = [];
+    for (let start = 0; start < skin.length; start++) {
+      if (!skin[start] || seen[start]) continue;
+      const stack = [start];
+      seen[start] = 1;
+      const pix: number[] = [];
+      while (stack.length) {
+        const q = stack.pop()!;
+        pix.push(q);
+        const x = q % workW;
+        for (const r of [x > 0 ? q - 1 : -1, x < workW - 1 ? q + 1 : -1, q - workW, q + workW]) {
+          if (r >= 0 && r < skin.length && skin[r] && !seen[r]) {
+            seen[r] = 1;
+            stack.push(r);
+          }
+        }
+      }
+      if (pix.length < minArea) continue;
+      let bx0 = workW, bx1 = 0, by0 = workH, by1 = 0;
+      for (const q of pix) {
+        const x = q % workW;
+        const y = (q - x) / workW;
+        bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); by0 = Math.min(by0, y); by1 = Math.max(by1, y);
+      }
+      const bw = bx1 - bx0 + 1;
+      const bh = by1 - by0 + 1;
+      const data = new Uint8Array(bw * bh);
+      for (const q of pix) data[(Math.floor(q / workW) - by0) * bw + (q % workW) - bx0] = 1;
+      cleanBlob(data, bw, bw / 2, bh / 2);
+      // Hair around this face: within 70% of its size on every side.
+      const hx0 = Math.max(0, Math.floor(bx0 - bw * 0.7));
+      const hy0 = Math.max(0, Math.floor(by0 - bh * 0.7));
+      const hw = Math.min(workW - hx0, Math.ceil(bw * 2.4));
+      const hh = Math.min(workH - hy0, Math.ceil(bh * 2.4));
+      const hairData = new Uint8Array(hw * hh);
+      for (let y = 0; y < hh; y++) for (let x = 0; x < hw; x++) hairData[y * hw + x] = hair[(hy0 + y) * workW + hx0 + x];
+      found.push({
+        kind: "face",
+        x: bx0,
+        y: by0,
+        width: bw,
+        height: bh,
+        skin: { x: bx0, y: by0, width: bw, height: bh, data },
+        hair: { x: hx0, y: hy0, width: hw, height: hh, data: hairData },
+      });
+    }
+    return found;
+  }
+
   function cutOutPeople(model: ImageSegmenter): Uint8Array {
     const mask = new Uint8Array(workW * workH);
     const N = SEGMENT_SIZE;

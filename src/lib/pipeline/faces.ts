@@ -29,10 +29,6 @@ const SKIN_TOLERANCE = 20;
  */
 const TWO_TONE_DISTANCE = 10;
 const MIN_SHADOW_SHARE = 0.25;
-/** A color must cover at least this share of someone's hair to be one of the hair's colors. */
-const HAIR_MAIN_SHARE = 0.06;
-/** Colors within this ΔE of a face's skin are skin, never one of that person's hair colors. */
-const SKIN_LIKE = 8;
 /**
  * A face in shadow (backlit, under a hat) has truly dark pixels, but people see it as normal
  * skin, and a flat dark-brown face reads as wrong. Faces whose lit tone is darker than this
@@ -192,54 +188,19 @@ export function separateFaces(
     return palette.length - 1;
   };
 
-  // Faces: one or two of their own skin tones, as smooth lit/shadow areas.
+  // Faces: one or two of their own skin tones, as smooth lit/shadow areas. Hair the same way,
+  // in the hair's own colors (without the brightening faces in shadow get), so skin showing
+  // through a part or a stray highlight is just hair.
   const faceTone = new Map<number, { ids: number[]; tone: Map<number, number> }>();
   if (style !== "lines") {
-    faces.forEach((_, i) => {
-      const k = i + 1;
-      const shading = faceShading(smoothed, mask, k, w, style === "faceless" ? 1 : 2);
+    const shade = (source: Uint8Array, k: number, maxTones: 1 | 2, brighten: boolean) => {
+      const shading = faceShading(smoothed, source, k, w, maxTones, brighten);
       if (!shading) return;
       const ids = shading.rgb.map((rgb, t) => add(rgb, shading.lab.subarray(t * 3, t * 3 + 3), k));
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
-    });
-  }
-
-  // Hair keeps only its own main colors: skin showing through a part, or any color covering
-  // less than HAIR_MAIN_SHARE of the hair (a stray highlight), takes the nearest hair color.
-  const hairColor = new Map<number, Map<number, number>>(); // part -> base color -> hair color
-  for (const [k, face] of hairParts) {
-    const counts = new Map<number, number>();
-    const skinCounts = new Map<number, number>();
-    let total = 0;
-    for (let p = 0; p < parts.length; p++) {
-      if (parts[p] === k) {
-        counts.set(indices[p], (counts.get(indices[p]) ?? 0) + 1);
-        total++;
-      } else if (parts[p] === face) {
-        skinCounts.set(indices[p], (skinCounts.get(indices[p]) ?? 0) + 1);
-      }
-    }
-    const skin = [...skinCounts].sort((a, b) => b[1] - a[1])[0]?.[0];
-    const isSkin = (c: number) =>
-      skin !== undefined && labDist2(baseLab, c * 3, baseLab, skin * 3) < SKIN_LIKE * SKIN_LIKE;
-    const main = [...counts]
-      .filter(([c, n]) => n >= total * HAIR_MAIN_SHARE && !isSkin(c))
-      .map(([c]) => c);
-    if (main.length === 0) continue;
-    const map = new Map<number, number>();
-    for (const c of counts.keys()) {
-      let best = main[0];
-      let bestD = Infinity;
-      for (const m of main) {
-        const d = labDist2(baseLab, c * 3, baseLab, m * 3);
-        if (d < bestD) {
-          bestD = d;
-          best = m;
-        }
-      }
-      map.set(c, best);
-    }
-    hairColor.set(k, map);
+    };
+    faces.forEach((_, i) => shade(mask, i + 1, style === "faceless" ? 1 : 2, true));
+    for (const k of hairParts.keys()) shade(parts, k, 2, false);
   }
 
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
@@ -251,7 +212,7 @@ export function separateFaces(
       indices[p] = face.ids[face.tone.get(p) ?? 0];
       continue;
     }
-    const base = hairColor.get(k)?.get(indices[p]) ?? indices[p];
+    const base = indices[p];
     if (group[base] !== 0) continue; // already a part color
     const id = k * 256 + base;
     let twin = twins.get(id);
@@ -279,6 +240,7 @@ function faceShading(
   k: number,
   w: number,
   maxTones: 1 | 2,
+  brighten = true,
 ): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
   const lab = new Float32Array(3);
   const px: number[] = [];
@@ -375,7 +337,7 @@ function faceShading(
 
   const litTone = means[means.length - 1];
   const litLuma = 0.299 * litTone[0] + 0.587 * litTone[1] + 0.114 * litTone[2];
-  const boost = Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma)));
+  const boost = brighten ? Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma))) : 1;
   const rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
   const out = new Float32Array(rgb.length * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
