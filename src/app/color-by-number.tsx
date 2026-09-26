@@ -408,8 +408,9 @@ export default function ColorByNumber() {
         [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
         fontFrac,
         KEY_COLORS[difficulty],
-        // Variations only go in a background: never on a cut-out of people.
-        mainResult.background === undefined ? 0 : undefined,
+        // Variations go in the background, or on clothing when there's none (never on faces,
+        // hair or pets).
+        0,
       );
     }
     full.close();
