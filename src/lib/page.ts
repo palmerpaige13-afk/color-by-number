@@ -6,6 +6,7 @@
 import { labDist2, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
+import { traceOutlines, type Outline } from "@/lib/outlines";
 import type { PipelineResult, RGB } from "@/lib/pipeline";
 
 export interface Layer {
@@ -193,7 +194,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     const color = (index: number) => page.key[page.numbers[li][index] - 1]?.rgb ?? result.palette[index];
     const blank = (l: number) => regionColor[l] === result.background;
 
-    // Walk the layer's area in page pixels, so lines are one page pixel wide at any scale.
+    // Fill each shape (at page resolution); outlines are drawn afterwards as smooth lines.
     const x0 = Math.max(0, Math.floor(layer.x));
     const y0 = Math.max(0, Math.floor(layer.y));
     const x1 = Math.min(W, Math.ceil(layer.x + w * scale));
@@ -205,17 +206,9 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     };
     for (let Y = y0; Y < y1; Y++) {
       for (let X = x0; X < x1; X++) {
-        const p = at(X, Y);
-        const l = labels[p];
-        const right = X + t < x1 ? labels[at(X + t, Y)] : l;
-        const down = Y + t < y1 ? labels[at(X, Y + t)] : l;
-        const edgeWith = (o: number) => o !== l && (layer.outlineBlank || (!blank(o) && !blank(l)));
-        const edge = edgeWith(right) || edgeWith(down);
-        let rgb: RGB | null;
-        if (blank(l)) rgb = edge ? EDGE : null;
-        else if (edge) rgb = EDGE;
-        else rgb = view === "colored" ? color(regionColor[l]) : [255, 255, 255];
-        if (!rgb) continue; // leave whatever is underneath
+        const l = labels[at(X, Y)];
+        if (blank(l)) continue; // leave whatever is underneath
+        const rgb: RGB = view === "colored" ? color(regionColor[l]) : [255, 255, 255];
         const q = (Y * W + X) * 4;
         img.data[q] = rgb[0];
         img.data[q + 1] = rgb[1];
@@ -224,6 +217,22 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     }
   });
   ctx.putImageData(img, 0, 0);
+
+  // Outlines: smooth lines along every border between shapes (and around a cut-out).
+  ctx.strokeStyle = `rgb(${EDGE.join(",")})`;
+  ctx.lineWidth = Math.max(1, W / 1500);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  placed.forEach((layer) => {
+    ctx.beginPath();
+    for (const line of layerOutlines(layer.result, layer.outlineBlank)) {
+      ctx.moveTo(layer.x + line[0] * layer.scale, layer.y + line[1] * layer.scale);
+      for (let i = 2; i < line.length; i += 2) {
+        ctx.lineTo(layer.x + line[i] * layer.scale, layer.y + line[i + 1] * layer.scale);
+      }
+    }
+    ctx.stroke();
+  });
 
   // Frame a full scene; a cut-out stands on its own.
   const bottom = page.layers[0]?.result;
@@ -263,4 +272,21 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       );
     }
   });
+}
+
+/** Traced outlines per layer result (they don't depend on the drawing size, so reuse them). */
+const outlineCache = new WeakMap<PipelineResult, Map<boolean, Outline[]>>();
+
+function layerOutlines(result: PipelineResult, outlineBlank: boolean): Outline[] {
+  let byMode = outlineCache.get(result);
+  if (!byMode) outlineCache.set(result, (byMode = new Map()));
+  let lines = byMode.get(outlineBlank);
+  if (!lines) {
+    const { regionColor, background } = result;
+    const blank = (l: number) => regionColor[l] === background;
+    // A scene under a cut-out doesn't outline its hole: the people layer on top does.
+    lines = traceOutlines(result.labels, result.width, result.height, (a, b) => outlineBlank || (!blank(a) && !blank(b)));
+    byMode.set(outlineBlank, lines);
+  }
+  return lines;
 }
