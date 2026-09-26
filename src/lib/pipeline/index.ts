@@ -211,7 +211,6 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelY: pts.y,
     labelRadius: pts.radius,
     background,
-    partColor: group && Uint8Array.from(group, (g) => (g !== 0 && g !== BACKGROUND_GROUP ? 1 : 0)),
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),
     timings,

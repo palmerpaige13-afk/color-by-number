@@ -236,12 +236,10 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
 }
 
 /**
- * Adds colors until there are `target`, each a gentle variation of a background (or, on a
- * page of just people, a clothing) color with
+ * Adds colors until there are `target`, each a gentle variation of a background color with
  * the same hue: the farther (upper) half of that color's shapes gets a slightly lighter,
  * softer version, as distance haze would give it (or, if that's too close to another color, a
- * slightly darker, richer or softer one). Greens stay green and blues stay blue. Faces, hair
- * and pets are never varied. A variation is
+ * slightly darker, richer or softer one). Greens stay green and blues stay blue. A variation is
  * always clearly different from every other color but stays close to the color it came from. `regionColor` (color index per region) is updated.
  */
 function addVariations(
@@ -257,7 +255,7 @@ function addVariations(
     const count = new Uint32Array(colors.length);
     for (let i = 0; i < result.regionCount; i++) {
       const c = regionColor[i];
-      if (c < 0 || tried.has(c) || result.partColor?.[result.regionColor[i]]) continue;
+      if (c < 0 || tried.has(c)) continue;
       area[c] += result.regionArea[i];
       count[c]++;
     }
@@ -291,14 +289,11 @@ function addVariations(
 
     // The upper (farther) half of this color's shapes, by area, takes the variation.
     const shapes = [];
-    for (let i = 0; i < result.regionCount; i++) {
-      if (regionColor[i] === pick && !result.partColor?.[result.regionColor[i]]) shapes.push(i);
-    }
+    for (let i = 0; i < result.regionCount; i++) if (regionColor[i] === pick) shapes.push(i);
     shapes.sort((i, j) => result.labelY[i] - result.labelY[j]);
     const half = area[pick] / 2;
     const index = colors.length;
     colors.push({ rgb: variant.rgb, lab: toLab(variant.rgb) });
-    tried.add(index); // a variation is never varied again, so nothing drifts far from the photo
     let moved = 0;
     for (const i of shapes) {
       if (moved >= half && moved > 0) break;

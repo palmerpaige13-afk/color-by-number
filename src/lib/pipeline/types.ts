@@ -98,8 +98,6 @@ export interface PipelineResult {
   labelRadius: Float32Array;
   /** Palette index of the blank background, if the photo was cut out; never numbered. */
   background?: number;
-  /** Per palette index: 1 for a face, hair or pet color (never given color variations). */
-  partColor?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];
