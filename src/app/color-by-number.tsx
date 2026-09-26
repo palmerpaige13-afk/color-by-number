@@ -27,9 +27,9 @@ const MAX_PRINT_PX = 6000;
 const KEY_DPI = 150;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
-  { id: "easy", label: "Easy", blurb: "12 colors, big shapes" },
-  { id: "medium", label: "Medium", blurb: "16 colors, more detail" },
-  { id: "hard", label: "Hard", blurb: "24 colors, lots of small shapes" },
+  { id: "easy", label: "Easy", blurb: "Big, simple shapes" },
+  { id: "medium", label: "Medium", blurb: "More shapes and detail" },
+  { id: "hard", label: "Hard", blurb: "Lots of small shapes" },
 ];
 
 type Background = "remove" | "keep";

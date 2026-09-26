@@ -571,6 +571,16 @@ export async function detectSubjects(
         }
       }
       if (pix.length < minArea) continue;
+      // Skin right next to a known face (the neck, an ear) is part of that person, not a face.
+      const touchesKnown = known.some((f) => {
+        const pad = 0.6;
+        return pix.some((q) => {
+          const x = q % workW;
+          const y = (q - x) / workW;
+          return x >= f.x - f.width * pad && x <= f.x + f.width * (1 + pad) && y >= f.y - f.height * pad && y <= f.y + f.height * (1 + pad);
+        });
+      });
+      if (touchesKnown) continue;
       let bx0 = workW, bx1 = 0, by0 = workH, by1 = 0;
       for (const q of pix) {
         const x = q % workW;

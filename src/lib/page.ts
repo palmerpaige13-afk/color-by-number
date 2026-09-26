@@ -4,6 +4,8 @@
 // pixels; the color key is shared, so the same color gets the same number in every layer.
 
 import { labDist2, rgbToLab } from "@/lib/pipeline/color";
+import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
+import { labelComponents } from "@/lib/pipeline/regions";
 import type { PipelineResult, RGB } from "@/lib/pipeline";
 
 export interface Layer {
@@ -35,7 +37,7 @@ export interface Page {
  * Every pair of colors in the key must differ by at least this (ΔE, where about 10 is the
  * smallest difference that's easy to see on paper); closer colors share one number.
  */
-const DISTINCT = 14;
+const DISTINCT = 10;
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
@@ -127,11 +129,42 @@ export function buildPage(
     return { n: i + 1, rgb: c.rgb };
   });
 
+  // Neighboring shapes that ended up with the same number become one shape: in each layer,
+  // shapes are re-found from the numbers themselves. Each layer's palette becomes the key
+  // (index = number, 0 = blank background).
+  const palette: RGB[] = [[255, 255, 255], ...key.map((k) => k.rgb)];
+  const merged = layers.map((layer, li) => {
+    const { result } = layer;
+    const { width: w, height: h, labels } = result;
+    const byNumber = new Uint8Array(w * h);
+    for (let p = 0; p < byNumber.length; p++) {
+      const c = result.regionColor[labels[p]];
+      byNumber[p] = c === result.background ? 0 : numbers[li][c];
+    }
+    const comps = labelComponents(byNumber, w, h);
+    const newLabels = Uint16Array.from(comps.labels);
+    const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h));
+    const next: PipelineResult = {
+      ...result,
+      palette,
+      labels: newLabels,
+      regionCount: comps.count,
+      regionColor: comps.color,
+      regionArea: comps.area,
+      labelX: pts.x,
+      labelY: pts.y,
+      labelRadius: pts.radius,
+      background: result.background === undefined ? undefined : 0,
+    };
+    return { ...layer, result: next };
+  });
+  const identity = merged.map(() => Uint8Array.from(palette, (_, i) => i));
+
   let shapes = 0;
-  for (const { result } of layers) {
-    for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== result.background) shapes++;
+  for (const { result } of merged) {
+    for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== 0) shapes++;
   }
-  return { width, height, layers, numbers, key, shapes, fontFrac };
+  return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac };
 }
 
 const EDGE: RGB = [70, 70, 70];
