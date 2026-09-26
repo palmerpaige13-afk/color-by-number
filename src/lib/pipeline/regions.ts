@@ -14,7 +14,7 @@ export interface Components {
 /** 4-connected component labeling via iterative flood fill. */
 /**
  * Connected areas of one color. With `owner`, areas of the same color that belong to different
- * owners (two people's skin) stay apart; owner 0 belongs to no one.
+ * owners (two people's skin, hair and the background behind it) stay apart.
  */
 export function labelComponents(colorMap: Uint8Array, w: number, h: number, owner?: Uint8Array): Components {
   const n = w * h;
@@ -28,7 +28,7 @@ export function labelComponents(colorMap: Uint8Array, w: number, h: number, owne
     const c = colorMap[start];
     const o = owner?.[start] ?? 0;
     const joins = (q: number) =>
-      labels[q] === -1 && colorMap[q] === c && (!owner || !o || !owner[q] || owner[q] === o);
+      labels[q] === -1 && colorMap[q] === c && (!owner || owner[q] === o);
     let top = 0;
     stack[top++] = start;
     labels[start] = count;
@@ -60,6 +60,9 @@ export function labelComponents(colorMap: Uint8Array, w: number, h: number, owne
   }
   return { labels, count, color: Uint8Array.from(colors), area: Uint32Array.from(areas) };
 }
+
+/** Merge group of a cut-out photo's blank background: nothing else ever merges into it. */
+export const BLANK_GROUP = 255;
 
 /** Min-heap of [priority, id] pairs with lazy deletion. */
 class Heap {
@@ -118,6 +121,9 @@ class Heap {
  * into a neighbor of its own group. A background region with no background neighbor (an eye
  * enclosed by a face) may merge into anything; a face region with no face neighbor (the whole
  * face as one shape) is never merged away.
+ *
+ * `maxPartDist`: a region of a part (face, hair, clothes) never merges into a neighbor whose
+ * color is further than this (ΔE), so a white shirt doesn't swallow blue jeans.
  */
 export function mergeRegions(
   comps: Components,
@@ -127,6 +133,7 @@ export function mergeRegions(
   needsMerge: (id: number, area: number) => boolean,
   group?: Uint8Array,
   budget = 0,
+  maxPartDist = Infinity,
 ): Uint8Array {
   const { labels, count } = comps;
   let live = count;
@@ -183,6 +190,7 @@ export function mergeRegions(
     if (!hasSameGroup && g !== 0) continue;
     for (const [nb, border] of adj[r]) {
       if (hasSameGroup && groupOf(nb) !== g) continue;
+      if (groupOf(nb) === BLANK_GROUP && g !== BLANK_GROUP) continue;
       const d = labDist2(paletteLab, color[r] * 3, paletteLab, color[nb] * 3);
       if (d < bestD || (d === bestD && border > bestBorder)) {
         bestD = d;
@@ -190,6 +198,8 @@ export function mergeRegions(
         target = nb;
       }
     }
+
+    if (target < 0 || (g !== 0 && bestD > maxPartDist * maxPartDist)) continue;
 
     // Absorb r into target.
     parent[r] = target;

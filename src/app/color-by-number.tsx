@@ -67,6 +67,8 @@ function BrushIcon() {
 
 /** Share of the photo that must be people for the page to be cut out to just them. */
 const MIN_CUTOUT_SHARE = 0.02;
+/** Separate bits of the cut-out smaller than this share of the picture are dropped. */
+const MIN_CUTOUT_PIECE = 0.002;
 /** Margin around the people when cropping, as a share of their size. */
 const CROP_MARGIN = 0.06;
 /** The biggest person must fill this share of the photo for it to count as a photo *of* people. */
@@ -189,6 +191,31 @@ function sceneMask(
     }
   }
   return keep;
+}
+
+/**
+ * Removes tiny separate bits from a cut-out (a speck the segmenter picked up), so they are
+ * painted as part of the scene instead of becoming an unreadable shape of their own.
+ */
+function dropSpecks(mask: Uint8Array, w: number) {
+  const minArea = mask.length * MIN_CUTOUT_PIECE;
+  const seen = new Uint8Array(mask.length);
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    const piece = [start];
+    seen[start] = 1;
+    for (let i = 0; i < piece.length; i++) {
+      const p = piece[i];
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q >= 0 && q < mask.length && mask[q] && !seen[q]) {
+          seen[q] = 1;
+          piece.push(q);
+        }
+      }
+    }
+    if (piece.length < minArea) for (const p of piece) mask[p] = 0;
+  }
 }
 
 function describeSubjects(subjects: SubjectBox[]): string {
@@ -333,6 +360,7 @@ export default function ColorByNumber() {
     if (cutout && cutout.reduce((n, v) => n + v, 0) < MIN_CUTOUT_SHARE * cutout.length) {
       cutout = undefined;
     }
+    if (cutout) dropSpecks(cutout, main.width);
     const structure = structureMap(main.data, main.width, main.height);
     const map = importanceMap(structure, subjects, main.width, main.height);
     const list = [describeSubjects(subjects), map.buildings ? "buildings" : ""].filter(Boolean).join(", ");

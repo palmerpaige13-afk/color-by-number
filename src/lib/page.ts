@@ -42,6 +42,7 @@ const DISTINCT = 10;
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
+const CLOTHES = 3;
 const PET = 4;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
@@ -132,8 +133,9 @@ export function buildPage(
   });
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,
-  // shapes are re-found from the numbers themselves. Different people's skin, hair or pets stay
-  // apart even with the same number, so each person keeps their outline. Each layer's palette becomes the key
+  // shapes are re-found from the numbers themselves. A person's skin, hair and clothes (and a
+  // pet) stay apart from each other and from the background even with the same number, so
+  // every person keeps their outline. Each layer's palette becomes the key
   // (index = number, 0 = blank background).
   const palette: RGB[] = [[255, 255, 255], ...key.map((k) => k.rgb)];
   const merged = layers.map((layer, li) => {
@@ -143,7 +145,7 @@ export function buildPage(
     const owner = new Uint8Array(w * h);
     const ownerOf = (c: number) => {
       const kind = result.partKind?.[c];
-      return kind === FACE || kind === HAIR || kind === PET ? (result.partGroup?.[c] ?? 0) : 0;
+      return kind === FACE || kind === HAIR || kind === CLOTHES || kind === PET ? (result.partGroup?.[c] ?? 0) : 0;
     };
     for (let p = 0; p < byNumber.length; p++) {
       const c = result.regionColor[labels[p]];

@@ -4,7 +4,7 @@ import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
 import { paintSkin, separateFaces } from "./faces";
-import { labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
+import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
 import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult } from "./types";
 
@@ -27,8 +27,14 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
   return sum;
 }
 
+/**
+ * Merging for the shape budget never joins two clearly different colors within a person
+ * (shirt and jeans, a white dress and a dark suit), even if that leaves a few more shapes.
+ */
+const BUDGET_PART_DIST = 20;
+
 /** Region-merge group of the blank background of a cut-out photo. */
-const BACKGROUND_GROUP = 255;
+const BACKGROUND_GROUP = BLANK_GROUP;
 
 
 /** Long edge of the working raster, in px. */
@@ -148,7 +154,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   if (params.maxShapes) {
     const counted = labelComponents(colorMap, w, h);
     if (counted.count > params.maxShapes) {
-      colorMap = mergeRegions(counted, w, h, paletteLab, () => true, group, params.maxShapes);
+      colorMap = mergeRegions(counted, w, h, paletteLab, () => true, group, params.maxShapes, BUDGET_PART_DIST);
     }
   }
 
