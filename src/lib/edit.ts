@@ -49,17 +49,30 @@ function neighbors(r: PipelineResult, region: number): Map<number, number> {
  */
 function rebuild(page: Page, li: number, into: (region: number) => number, color?: Map<number, number>): Page {
   const r = page.layers[li].result;
+  const labels = Uint32Array.from(r.labels, into);
+  const colors = Array.from(r.regionColor, (c, region) => color?.get(region) ?? c);
+  return finish(page, li, labels, colors);
+}
+
+/**
+ * The page with one layer's shapes replaced: `ids` gives each pixel's shape (any numbering,
+ * gaps allowed) and `colors` each shape's number. Shapes are renumbered from 0 and their
+ * number spots found again.
+ */
+function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Page {
+  const r = page.layers[li].result;
   const { width: w, height: h } = r;
-  const remap = new Int32Array(r.regionCount).fill(-1);
+  const remap = new Map<number, number>();
   const regionColor: number[] = [];
-  const labels = new Uint16Array(r.labels.length);
-  for (let p = 0; p < labels.length; p++) {
-    const to = into(r.labels[p]);
-    if (remap[to] < 0) {
-      remap[to] = regionColor.length;
-      regionColor.push(color?.get(to) ?? r.regionColor[to]);
+  const labels = new Uint16Array(ids.length);
+  for (let p = 0; p < ids.length; p++) {
+    let to = remap.get(ids[p]);
+    if (to === undefined) {
+      to = regionColor.length;
+      remap.set(ids[p], to);
+      regionColor.push(colors[ids[p]]);
     }
-    labels[p] = remap[to];
+    labels[p] = to;
   }
   const count = regionColor.length;
   const area = new Uint32Array(count);
@@ -119,6 +132,120 @@ export function cleanUp(page: Page, spot: Spot): Page | string {
   if (best < 0) return "There's nothing next to that shape to blend it into.";
   return rebuild(page, spot.layer, (region) => (region === spot.region ? best : region));
 }
+
+/**
+ * The page with the shape under a drawn line cut in two along it, or a reason it can't be done.
+ * `line` is the path of the finger in page pixels (x, y pairs). A line that stops short of the
+ * shape's edges is carried straight on to them.
+ */
+export function splitAlong(page: Page, line: [number, number][]): Page | string {
+  let length = 0;
+  for (let i = 1; i < line.length; i++) length += Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]);
+  // A tap or a tiny slip of the finger isn't a line.
+  if (length < page.width * MIN_LINE) return "Drag a longer line across the shape you want to cut.";
+  const mid = line[Math.floor(line.length / 2)];
+  const spot = shapeAt(page, mid[0], mid[1]);
+  if (!spot) return "Draw the line across a shape.";
+  const { result: r, x: lx, y: ly, scale } = page.layers[spot.layer];
+  const { width: w, height: h, labels } = r;
+  const inShape = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < w && y < h && labels[Math.floor(y) * w + Math.floor(x)] === spot.region;
+
+  // The line in the layer's pixels, carried on past each end until it leaves the shape.
+  const pts = line.map(([x, y]) => [(x - lx) / scale, (y - ly) / scale] as [number, number]);
+  const extend = (from: [number, number], toward: [number, number]) => {
+    const dx = from[0] - toward[0];
+    const dy = from[1] - toward[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-3) return from;
+    let [x, y] = from;
+    for (let i = 0; i < Math.max(w, h) && inShape(x, y); i++) {
+      x += dx / len;
+      y += dy / len;
+    }
+    return [x, y] as [number, number];
+  };
+  const back = Math.min(pts.length - 1, 4);
+  pts.unshift(extend(pts[0], pts[back]));
+  pts.push(extend(pts[pts.length - 1], pts[pts.length - 1 - back]));
+
+  // Mark the cut: every pixel of the shape the line passes through (sampled finely enough that
+  // the cut has no gaps a shape could leak through).
+  const cut = new Uint8Array(w * h);
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, ay] = pts[i - 1];
+    const [bx, by] = pts[i];
+    const steps = Math.ceil(Math.hypot(bx - ax, by - ay) * 2) + 1;
+    for (let s = 0; s <= steps; s++) {
+      const x = ax + ((bx - ax) * s) / steps;
+      const y = ay + ((by - ay) * s) / steps;
+      if (inShape(x, y)) cut[Math.floor(y) * w + Math.floor(x)] = 1;
+    }
+  }
+
+  // The pieces of the shape on either side of the cut.
+  const piece = new Int32Array(w * h).fill(-1);
+  const sizes: number[] = [];
+  for (let start = 0; start < labels.length; start++) {
+    if (labels[start] !== spot.region || cut[start] || piece[start] >= 0) continue;
+    const id = sizes.length;
+    const stack = [start];
+    piece[start] = id;
+    let n = 0;
+    while (stack.length) {
+      const p = stack.pop()!;
+      n++;
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= w * h || piece[q] >= 0 || cut[q] || labels[q] !== spot.region) continue;
+        piece[q] = id;
+        stack.push(q);
+      }
+    }
+    sizes.push(n);
+  }
+  const real = sizes.filter((n) => n >= MIN_PIECE).length;
+  if (real < 2) return "Draw the line all the way across the shape, from one edge to the other.";
+
+  // Crumbs (tiny pieces) and the cut itself join a neighboring real piece.
+  const keep = (id: number) => id >= 0 && sizes[id] >= MIN_PIECE;
+  let left = true;
+  for (let round = 0; left && round < w + h; round++) {
+    left = false;
+    for (let p = 0; p < labels.length; p++) {
+      if (labels[p] !== spot.region || keep(piece[p])) continue;
+      const x = p % w;
+      const nb = [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w].find((q) => q >= 0 && q < w * h && keep(piece[q]));
+      if (nb === undefined) left = true;
+      else piece[p] = piece[nb];
+    }
+  }
+
+  // The biggest piece stays the shape; the others become new shapes of the same number.
+  let biggest = 0;
+  sizes.forEach((n, id) => {
+    if (n > sizes[biggest]) biggest = id;
+  });
+  const colors = Array.from(r.regionColor);
+  const ids = Uint32Array.from(labels);
+  const newId = new Map<number, number>();
+  for (let p = 0; p < labels.length; p++) {
+    if (labels[p] !== spot.region || piece[p] === biggest) continue;
+    let id = newId.get(piece[p]);
+    if (id === undefined) {
+      id = colors.length;
+      colors.push(r.regionColor[spot.region]);
+      newId.set(piece[p], id);
+    }
+    ids[p] = id;
+  }
+  return finish(page, spot.layer, ids, colors);
+}
+
+/** Shortest line that counts, as a share of the page width. */
+const MIN_LINE = 0.03;
+/** Pieces smaller than this (layer pixels) left by a wobbly line don't count as pieces. */
+const MIN_PIECE = 12;
 
 /** Draws a see-through highlight over the given shapes (page-sized canvas, like drawPage). */
 export function drawHighlight(canvas: HTMLCanvasElement, page: Page, spots: Spot[]) {

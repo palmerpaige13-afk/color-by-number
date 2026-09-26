@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { cleanUp, drawHighlight, join, recolor, shapeAt, type Spot } from "@/lib/edit";
+import { cleanUp, drawHighlight, join, recolor, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
@@ -72,12 +72,13 @@ const MIN_CUTOUT_SHARE = 0.02;
  * How different two paint colors must be (ΔE) to get their own numbers. Easy keeps colors
  * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
  */
-type Tool = "color" | "join" | "clean";
+type Tool = "color" | "join" | "clean" | "line";
 /** Hand fixes, with what to do first. */
 const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: "color", label: "Change color", hint: "Tap the shape whose color is wrong." },
   { id: "join", label: "Join", hint: "Tap a shape, then a shape touching it, to remove the line between them." },
   { id: "clean", label: "Clean up a speck", hint: "Tap a small spot to blend it into what's around it." },
+  { id: "line", label: "Add a line", hint: "Drag your finger across a shape to cut it in two." },
 ];
 /** How many fixes can be undone. */
 const MAX_UNDO = 30;
@@ -337,6 +338,8 @@ export default function ColorByNumber() {
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
   const [hint, setHint] = useState<string | null>(null);
+  /** The line being drawn with the line tool, in page pixels. */
+  const drawn = useRef<[number, number][] | null>(null);
 
   useEffect(() => {
     if (result && outlineRef.current) drawPage(outlineRef.current, result, "outline");
@@ -367,15 +370,53 @@ export default function ColorByNumber() {
     setPicked(null);
   }
 
+  /** A point on the picture, in page pixels. */
+  function pagePoint(e: { clientX: number; clientY: number }): [number, number] | null {
+    if (!result || !outlineRef.current) return null;
+    const box = outlineRef.current.getBoundingClientRect();
+    return [((e.clientX - box.left) / box.width) * result.width, ((e.clientY - box.top) / box.height) * result.height];
+  }
+
+  /** Drawing a line with the line tool: shown as it's drawn, then the shape is cut along it. */
+  function lineStart(e: React.PointerEvent<HTMLDivElement>) {
+    if (!fixing || tool !== "line") return;
+    const pt = pagePoint(e);
+    if (!pt) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId); // keep getting the line if the finger strays
+    } catch {
+      // not a real pointer (nothing to capture)
+    }
+    drawn.current = [pt];
+  }
+  function lineMove(e: React.PointerEvent<HTMLDivElement>) {
+    const line = drawn.current;
+    const pt = pagePoint(e);
+    if (!line || !pt || !highlightRef.current) return;
+    line.push(pt);
+    const ctx = highlightRef.current.getContext("2d")!;
+    ctx.strokeStyle = "#7c3aed";
+    ctx.lineWidth = Math.max(3, highlightRef.current.width / 250);
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(...line[line.length - 2]);
+    ctx.lineTo(...pt);
+    ctx.stroke();
+  }
+  function lineEnd() {
+    const line = drawn.current;
+    drawn.current = null;
+    if (!line || !result) return;
+    const next = splitAlong(result, line);
+    if (typeof next === "string" && highlightRef.current) drawHighlight(highlightRef.current, result, []);
+    apply(next);
+  }
+
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
   function tapPicture(e: React.MouseEvent<HTMLDivElement>) {
-    if (!fixing || !result || !outlineRef.current) return;
-    const box = outlineRef.current.getBoundingClientRect();
-    const spot = shapeAt(
-      result,
-      ((e.clientX - box.left) / box.width) * result.width,
-      ((e.clientY - box.top) / box.height) * result.height,
-    );
+    if (!fixing || !result || tool === "line") return;
+    const pt = pagePoint(e);
+    const spot = pt && shapeAt(result, pt[0], pt[1]);
     if (!spot) return;
     if (tool === "clean") apply(cleanUp(result, spot));
     else if (tool === "join" && picked) apply(join(result, picked, spot));
@@ -789,7 +830,14 @@ export default function ColorByNumber() {
           {/* Before/after: drag the brush to paint the numbered page into the finished picture. */}
           <div
             onClick={tapPicture}
-            className={`relative select-none overflow-hidden rounded-lg bg-white shadow-sm ${fixing ? "cursor-pointer ring-2 ring-violet-500" : ""}`}
+            onPointerDown={lineStart}
+            onPointerMove={lineMove}
+            onPointerUp={lineEnd}
+            onPointerCancel={lineEnd}
+            style={{ touchAction: fixing && tool === "line" ? "none" : undefined }}
+            className={`relative select-none overflow-hidden rounded-lg bg-white shadow-sm ${
+              fixing ? (tool === "line" ? "cursor-crosshair ring-2 ring-violet-500" : "cursor-pointer ring-2 ring-violet-500") : ""
+            }`}
           >
             <canvas ref={outlineRef} className="block h-auto w-full" />
             <canvas
