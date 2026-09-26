@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { cleanUp, drawHighlight, join, recolor, shapeAt, type Spot } from "@/lib/edit";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
@@ -71,6 +72,16 @@ const MIN_CUTOUT_SHARE = 0.02;
  * How different two paint colors must be (ΔE) to get their own numbers. Easy keeps colors
  * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
  */
+type Tool = "color" | "join" | "clean";
+/** Hand fixes, with what to do first. */
+const TOOLS: { id: Tool; label: string; hint: string }[] = [
+  { id: "color", label: "Change color", hint: "Tap the shape whose color is wrong." },
+  { id: "join", label: "Join", hint: "Tap a shape, then a shape touching it, to remove the line between them." },
+  { id: "clean", label: "Clean up a speck", hint: "Tap a small spot to blend it into what's around it." },
+];
+/** How many fixes can be undone. */
+const MAX_UNDO = 30;
+
 const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 };
 /**
  * How much the background's muted tones are nudged toward soft greens and blues (0–1), so
@@ -318,11 +329,67 @@ export default function ColorByNumber() {
   const [dragging, setDragging] = useState(false);
   const outlineRef = useRef<HTMLCanvasElement>(null);
   const paintedRef = useRef<HTMLCanvasElement>(null);
+  const highlightRef = useRef<HTMLCanvasElement>(null);
+  // Fixing the page by hand: the chosen tool, the shape picked first, and earlier versions of
+  // the page for undo.
+  const [fixing, setFixing] = useState(false);
+  const [tool, setTool] = useState<Tool>("color");
+  const [picked, setPicked] = useState<Spot | null>(null);
+  const [history, setHistory] = useState<Page[]>([]);
+  const [hint, setHint] = useState<string | null>(null);
 
   useEffect(() => {
     if (result && outlineRef.current) drawPage(outlineRef.current, result, "outline");
     if (result && paintedRef.current) drawPage(paintedRef.current, result, "colored");
   }, [result]);
+
+  useEffect(() => {
+    if (result && highlightRef.current) drawHighlight(highlightRef.current, result, fixing && picked ? [picked] : []);
+  }, [result, picked, fixing]);
+
+  /** Makes a fix: the new page replaces the current one, which is kept for undo. */
+  function apply(next: Page | string) {
+    if (typeof next === "string") {
+      setHint(next);
+      return;
+    }
+    if (result) setHistory((h) => [...h.slice(-(MAX_UNDO - 1)), result]);
+    setResult(next);
+    setPicked(null);
+    setHint(TOOLS.find((t) => t.id === tool)?.hint ?? null);
+  }
+
+  function undo() {
+    const last = history[history.length - 1];
+    if (!last) return;
+    setHistory((h) => h.slice(0, -1));
+    setResult(last);
+    setPicked(null);
+  }
+
+  /** A tap on the picture while fixing: pick or change the shape under the finger. */
+  function tapPicture(e: React.MouseEvent<HTMLDivElement>) {
+    if (!fixing || !result || !outlineRef.current) return;
+    const box = outlineRef.current.getBoundingClientRect();
+    const spot = shapeAt(
+      result,
+      ((e.clientX - box.left) / box.width) * result.width,
+      ((e.clientY - box.top) / box.height) * result.height,
+    );
+    if (!spot) return;
+    if (tool === "clean") apply(cleanUp(result, spot));
+    else if (tool === "join" && picked) apply(join(result, picked, spot));
+    else {
+      setPicked(spot);
+      setHint(tool === "join" ? "Now tap a shape touching it to join them." : "Now tap the color it should be in the key below.");
+    }
+  }
+
+  function chooseTool(t: Tool) {
+    setTool(t);
+    setPicked(null);
+    setHint(TOOLS.find((x) => x.id === t)?.hint ?? null);
+  }
 
   function pickFile(f: File | undefined) {
     if (!f) return;
@@ -462,6 +529,9 @@ export default function ColorByNumber() {
     }
     full.close();
     setFit(pageFit);
+    setHistory([]);
+    setFixing(false);
+    setPicked(null);
     setResult(page);
     setReveal(50);
     setBusy(null);
@@ -666,32 +736,88 @@ export default function ColorByNumber() {
             <span className="text-sm text-zinc-500">
               {result.shapes} shapes · {key.length} colors
             </span>
+            <button
+              type="button"
+              onClick={() => {
+                setFixing((f) => !f);
+                setPicked(null);
+                setHint(fixing ? null : (TOOLS.find((t) => t.id === tool)?.hint ?? null));
+              }}
+              className={`ml-auto rounded-full border-2 px-4 py-1.5 text-sm font-semibold transition-colors ${
+                fixing
+                  ? "border-violet-600 bg-violet-600 text-white hover:bg-violet-700"
+                  : "border-violet-500 text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30"
+              }`}
+            >
+              {fixing ? "Done fixing" : "Fix it"}
+            </button>
           </div>
+
+          {fixing && (
+            <div className="flex flex-col gap-2 rounded-xl border border-violet-200 bg-violet-50 p-3 print:hidden dark:border-violet-900 dark:bg-violet-950/30">
+              <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Fix tool">
+                {TOOLS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={tool === t.id}
+                    onClick={() => chooseTool(t.id)}
+                    className={`rounded-full border-2 px-3 py-1.5 text-sm font-semibold transition-colors ${
+                      tool === t.id
+                        ? "border-violet-600 bg-white text-violet-700 dark:bg-zinc-900 dark:text-violet-300"
+                        : "border-transparent text-zinc-700 hover:border-violet-300 dark:text-zinc-300"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={undo}
+                  disabled={!history.length}
+                  className="ml-auto rounded-full px-3 py-1.5 text-sm font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  ↶ Undo
+                </button>
+              </div>
+              {hint && <p className="text-sm text-violet-900 dark:text-violet-200">{hint}</p>}
+            </div>
+          )}
 
           {focusNote && <p className="text-sm text-zinc-600 print:hidden dark:text-zinc-400">{focusNote}</p>}
           {/* Before/after: drag the brush to paint the numbered page into the finished picture. */}
-          <div className="relative select-none overflow-hidden rounded-lg bg-white shadow-sm">
+          <div
+            onClick={tapPicture}
+            className={`relative select-none overflow-hidden rounded-lg bg-white shadow-sm ${fixing ? "cursor-pointer ring-2 ring-violet-500" : ""}`}
+          >
             <canvas ref={outlineRef} className="block h-auto w-full" />
             <canvas
               ref={paintedRef}
               className="pointer-events-none absolute inset-0 h-full w-full print:hidden"
-              style={{ clipPath: `inset(0 ${100 - reveal}% 0 0)` }}
+              style={{ clipPath: `inset(0 ${fixing ? 0 : 100 - reveal}% 0 0)` }}
             />
+            <canvas ref={highlightRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />
             <div
-              className="pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden"
+              className={`pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden ${fixing ? "hidden" : ""}`}
               style={{ left: `${reveal}%` }}
             >
               <div className="absolute top-1/2 left-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 -rotate-12 items-center justify-center rounded-full border-2 border-white bg-violet-600 text-white shadow-lg">
                 <BrushIcon />
               </div>
             </div>
-            <span className="pointer-events-none absolute top-2 left-2 rounded-full bg-violet-600/90 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
-              Painted
-            </span>
-            <span className="pointer-events-none absolute top-2 right-2 rounded-full bg-zinc-900/75 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
-              Numbers
-            </span>
+            {!fixing && (
+              <>
+                <span className="pointer-events-none absolute top-2 left-2 rounded-full bg-violet-600/90 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
+                  Painted
+                </span>
+                <span className="pointer-events-none absolute top-2 right-2 rounded-full bg-zinc-900/75 px-2.5 py-1 text-xs font-semibold text-white print:hidden">
+                  Numbers
+                </span>
+              </>
+            )}
             <input
+              hidden={fixing}
               type="range"
               min={0}
               max={100}
@@ -706,15 +832,25 @@ export default function ColorByNumber() {
           <div>
             <h2 className="mb-2 font-semibold">Color key</h2>
             <ul className="grid grid-cols-4 gap-2 sm:grid-cols-7">
-              {key.map(({ n, rgb }) => (
-                <li key={n} className="flex items-center gap-2">
-                  <span
-                    className="h-7 w-7 shrink-0 rounded-md border border-zinc-300 print:[print-color-adjust:exact]"
-                    style={{ background: `rgb(${rgb.join(",")})` }}
-                  />
-                  <span className="font-mono text-sm font-semibold">{n}</span>
-                </li>
-              ))}
+              {key.map(({ n, rgb }) => {
+                const choosing = fixing && tool === "color" && !!picked;
+                return (
+                  <li key={n}>
+                    <button
+                      type="button"
+                      disabled={!choosing}
+                      onClick={() => picked && apply(recolor(result, picked, n))}
+                      className={`flex items-center gap-2 rounded-lg p-0.5 ${choosing ? "cursor-pointer ring-violet-400 hover:ring-2" : "cursor-default"}`}
+                    >
+                      <span
+                        className="h-7 w-7 shrink-0 rounded-md border border-zinc-300 print:[print-color-adjust:exact]"
+                        style={{ background: `rgb(${rgb.join(",")})` }}
+                      />
+                      <span className="font-mono text-sm font-semibold">{n}</span>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         </section>
