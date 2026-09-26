@@ -43,6 +43,15 @@ const SHADOW_SOFTEN = 0.45;
  * face height of distance, so a patch goes to the face that looks most like it and is nearby.
  */
 const SKIN_DISTANCE_WEIGHT = 5;
+/** A face-skin area this many times wider than tall, pinched to this share of its halves'
+ * height between them, is two faces. */
+const DOUBLE_FACE_WIDTH = 1.35;
+const DOUBLE_FACE_WAIST = 0.8;
+/** Bare skin is split where color changes by this ΔE across 2 x SKIN_EDGE_SPAN pixels. */
+const SKIN_EDGE = 6;
+const SKIN_EDGE_SPAN = 2;
+/** Smallest piece of bare skin, as a share of the picture. */
+const SKIN_MIN_PIECE = 0.0006;
 
 export interface FaceRegions {
   palette: RGB[];
@@ -171,11 +180,23 @@ export function separateFaces(
   style: "lines" | "shaded" | "faceless" = "lines",
   bodySkin?: RegionMask,
 ): FaceRegions {
+  faces = faces.flatMap(splitDoubleFace);
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
   // where masks overlap.
   const parts = new Uint8Array(w * h);
+  // Two faces cheek to cheek can share one face-skin area: each face keeps only the pixels
+  // nearer its own center than any other face's (measured in face widths).
+  const nearer = (k: number, x: number, y: number) => {
+    const d = (f: FaceShape) => Math.hypot(x - (f.x + f.width / 2), y - (f.y + f.height / 2)) / Math.max(1, f.width);
+    const own = d(faces[k]);
+    return faces.every((g, j) => j === k || d(g) >= own);
+  };
   faces.forEach((f, k) => {
-    if (f.skin) paintSkin(f.skin, parts, k + 1, w, h);
+    if (f.skin) {
+      const skin = f.skin;
+      const data = skin.data.map((v, i) => (v && nearer(k, skin.x + (i % skin.width), skin.y + Math.floor(i / skin.width)) ? 1 : 0));
+      paintSkin({ ...skin, data }, parts, k + 1, w, h);
+    }
     else if (f.outline && f.outline.length >= 3) fillPolygon(f.outline, parts, k + 1, w, h);
     else floodSkin(f, smoothed, parts, k + 1, w, h);
   });
@@ -187,8 +208,13 @@ export function separateFaces(
     hairParts.set(next, i + 1);
     paintSkin(f.hair, parts, next++, w, h);
   });
-  if (bodySkin && faces.length) matchBodySkin(bodySkin, parts, mask, faces.length, smoothed, w, h);
+  // Bare skin: pieces of their own (so arms and legs that touch another person keep a line
+  // between them), each colored like the face it belongs to.
+  const skinPieces =
+    bodySkin && faces.length ? matchBodySkin(bodySkin, parts, mask, faces.length, smoothed, w, h, next, 250) : new Map<number, number>();
+  next += skinPieces.size;
   const kindOf = new Map<number, number>();
+  for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
   faces.forEach((_, i) => kindOf.set(i + 1, PartKind.face));
   for (const k of hairParts.keys()) kindOf.set(k, PartKind.hair);
   if (clothes && next < 250) {
@@ -226,6 +252,13 @@ export function separateFaces(
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
     faces.forEach((_, i) => shade(mask, i + 1, faceTones, true));
     for (const k of hairParts.keys()) shade(parts, k, 2, false);
+    for (const [piece, k] of skinPieces) {
+      const tone = faceTone.get(k);
+      if (!tone) continue;
+      const base = tone.ids[0];
+      const id = add(palette[base], labs.slice(base * 3, base * 3 + 3), piece);
+      if (id >= 0) faceTone.set(piece, { ids: [id], tone: new Map() });
+    }
   }
 
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
@@ -258,8 +291,50 @@ export function separateFaces(
 }
 
 /**
- * Gives each patch of bare skin (a connected stretch of neck, arm, hand, leg or foot) to one
- * face, painting it into `parts` with that face's part id, so the person is one skin color.
+ * Two faces cheek to cheek often come out as one face-skin area, much wider than a face and
+ * pinched in between the two. Such an area is cut at its narrowest column into two faces
+ * (the hair stays with the first).
+ */
+function splitDoubleFace(f: FaceShape): FaceShape[] {
+  const skin = f.skin;
+  if (!skin) return [f];
+  const { width: bw, height: bh, data } = skin;
+  const cols = new Int32Array(bw);
+  let x0 = bw, x1 = -1, y0 = bh, y1 = -1;
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      if (!data[y * bw + x]) continue;
+      cols[x]++;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+  }
+  const w = x1 - x0 + 1;
+  const h = y1 - y0 + 1;
+  if (w < DOUBLE_FACE_WIDTH * h) return [f];
+  let cut = -1;
+  for (let x = Math.round(x0 + w * 0.3); x <= x0 + w * 0.7; x++) if (cut < 0 || cols[x] < cols[cut]) cut = x;
+  let left = 0, right = 0;
+  for (let x = x0; x < cut; x++) left = Math.max(left, cols[x]);
+  for (let x = cut + 1; x <= x1; x++) right = Math.max(right, cols[x]);
+  if (cols[cut] > DOUBLE_FACE_WAIST * Math.min(left, right)) return [f];
+  const half = (keep: (x: number) => boolean): FaceShape => {
+    const part = data.map((v, i) => (v && keep(i % bw) ? 1 : 0));
+    let a = bw, b = -1;
+    for (let x = 0; x < bw; x++) if (keep(x) && cols[x]) { a = Math.min(a, x); b = Math.max(b, x); }
+    return { ...f, x: skin.x + a, width: b - a + 1, outline: undefined, features: undefined, skin: { ...skin, data: part } };
+  };
+  const l = half((x) => x < cut);
+  const r = half((x) => x >= cut);
+  // The hair goes with the face the original box is centered on.
+  const onLeft = f.x + f.width / 2 - skin.x < cut;
+  return onLeft ? [l, { ...r, hair: undefined }] : [r, { ...l, hair: undefined }];
+}
+
+/**
+ * Splits bare skin (neck, arms, hands, legs, feet) into pieces along the edges visible in the
+ * photo, so where one person's arm touches another's back or foot there is still a line, and
+ * gives each piece to the face it most likely belongs to (similar color, nearby). Pieces are
+ * painted into `parts` with ids from `firstId` (below `limit`); returns piece id -> face part.
  */
 function matchBodySkin(
   skin: RegionMask,
@@ -269,22 +344,100 @@ function matchBodySkin(
   smoothed: Uint8ClampedArray,
   w: number,
   h: number,
-) {
-  const lab = new Float32Array(3);
-  const labAt = (p: number) => rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
+  firstId: number,
+  limit: number,
+): Map<number, number> {
+  const n = w * h;
+  const inSkin = new Uint8Array(n);
+  paintSkin(skin, inSkin, 1, w, h);
+  for (let p = 0; p < n; p++) if (parts[p]) inSkin[p] = 0;
+
+  const lab = new Float32Array(n * 3);
+  for (let p = 0; p < n; p++) {
+    if (inSkin[p] || faceMask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
+  }
+  const dE = (a: number, b: number) => Math.sqrt(labDist2(lab, a * 3, lab, b * 3));
+
+  // Edges: a clear change in color across a couple of pixels (one limb in front of another).
+  const S = SKIN_EDGE_SPAN;
+  const edge = new Uint8Array(n);
+  for (let y = S; y < h - S; y++) {
+    for (let x = S; x < w - S; x++) {
+      const p = y * w + x;
+      if (!inSkin[p]) continue;
+      const across = (a: number, b: number) => inSkin[a] && inSkin[b] && dE(a, b) > SKIN_EDGE;
+      if (across(p - S, p + S) || across(p - S * w, p + S * w)) edge[p] = 1;
+    }
+  }
+
+  // Pieces: skin areas between edges, big enough to be a real arm, leg, hand or foot.
+  const piece = new Int32Array(n).fill(-1);
+  const minPiece = Math.max(40, n * SKIN_MIN_PIECE);
+  const found: { pixels: number[] }[] = [];
+  const stack: number[] = [];
+  const flood = (start: number, ok: (q: number) => boolean) => {
+    const pixels = [start];
+    const seen = new Set([start]);
+    stack.length = 0;
+    stack.push(start);
+    while (stack.length) {
+      const p = stack.pop()!;
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= n || seen.has(q) || !ok(q)) continue;
+        seen.add(q);
+        pixels.push(q);
+        stack.push(q);
+      }
+    }
+    return pixels;
+  };
+  const tried = new Uint8Array(n);
+  for (let p = 0; p < n; p++) {
+    if (!inSkin[p] || edge[p] || tried[p]) continue;
+    const pixels = flood(p, (q) => inSkin[q] === 1 && !edge[q]);
+    for (const q of pixels) tried[q] = 1;
+    if (pixels.length >= minPiece) found.push({ pixels });
+  }
+  found.sort((a, b) => b.pixels.length - a.pixels.length);
+  found.length = Math.min(found.length, limit - firstId);
+  found.forEach((f, i) => f.pixels.forEach((q) => (piece[q] = i)));
+
+  // The rest (edges, specks) joins the nearest piece; skin that touches no piece is a piece.
+  const grow = () => {
+    let frontier: number[] = [];
+    for (let p = 0; p < n; p++) if (piece[p] >= 0) frontier.push(p);
+    while (frontier.length) {
+      const nextFront: number[] = [];
+      for (const p of frontier) {
+        const x = p % w;
+        for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+          if (q < 0 || q >= n || !inSkin[q] || piece[q] >= 0) continue;
+          piece[q] = piece[p];
+          nextFront.push(q);
+        }
+      }
+      frontier = nextFront;
+    }
+  };
+  grow();
+  for (let p = 0; p < n && found.length < limit - firstId; p++) {
+    if (!inSkin[p] || piece[p] >= 0) continue;
+    const pixels = flood(p, (q) => inSkin[q] === 1 && piece[q] < 0);
+    pixels.forEach((q) => (piece[q] = found.length));
+    found.push({ pixels });
+  }
+  grow();
 
   // Each face's typical color, center and height.
   const sum = new Float64Array(faceCount * 6); // L, a, b, x, y, n
   const top = new Float64Array(faceCount).fill(Infinity);
   const bottom = new Float64Array(faceCount).fill(-Infinity);
-  for (let p = 0; p < faceMask.length; p++) {
+  for (let p = 0; p < n; p++) {
     const k = faceMask[p] - 1;
     if (k < 0) continue;
-    labAt(p);
     const y = Math.floor(p / w);
-    sum[k * 6] += lab[0];
-    sum[k * 6 + 1] += lab[1];
-    sum[k * 6 + 2] += lab[2];
+    for (let c = 0; c < 3; c++) sum[k * 6 + c] += lab[p * 3 + c];
     sum[k * 6 + 3] += p % w;
     sum[k * 6 + 4] += y;
     sum[k * 6 + 5]++;
@@ -294,46 +447,38 @@ function matchBodySkin(
   let faceH = 1;
   for (let k = 0; k < faceCount; k++) if (sum[k * 6 + 5]) faceH = Math.max(faceH, bottom[k] - top[k] + 1);
 
-  const inSkin = new Uint8Array(w * h);
-  paintSkin(skin, inSkin, 1, w, h);
-  const seen = new Uint8Array(w * h);
-  for (let start = 0; start < inSkin.length; start++) {
-    if (!inSkin[start] || seen[start] || parts[start]) continue;
-    // One connected patch of bare skin not already claimed by a face or hair.
-    const patch: number[] = [];
-    const stack = [start];
-    seen[start] = 1;
-    let L = 0, A = 0, B = 0, X = 0, Y = 0;
-    while (stack.length) {
-      const p = stack.pop()!;
-      patch.push(p);
-      labAt(p);
-      L += lab[0]; A += lab[1]; B += lab[2];
-      const x = p % w;
-      const y = (p - x) / w;
-      X += x; Y += y;
-      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
-        if (q < 0 || q >= inSkin.length || seen[q] || !inSkin[q] || parts[q]) continue;
-        seen[q] = 1;
-        stack.push(q);
-      }
-    }
-    const n = patch.length;
+  const owner = new Map<number, number>();
+  const pieceSum = new Float64Array(found.length * 6);
+  for (let p = 0; p < n; p++) {
+    const i = piece[p];
+    if (i < 0 || !inSkin[p]) continue;
+    for (let c = 0; c < 3; c++) pieceSum[i * 6 + c] += lab[p * 3 + c];
+    pieceSum[i * 6 + 3] += p % w;
+    pieceSum[i * 6 + 4] += Math.floor(p / w);
+    pieceSum[i * 6 + 5]++;
+  }
+  found.forEach((_, i) => {
+    const m = pieceSum[i * 6 + 5];
+    if (!m) return;
     let best = -1;
     let bestScore = Infinity;
     for (let k = 0; k < faceCount; k++) {
-      const m = sum[k * 6 + 5];
-      if (!m) continue;
-      const dE = Math.hypot(L / n - sum[k * 6] / m, A / n - sum[k * 6 + 1] / m, B / n - sum[k * 6 + 2] / m);
-      const dist = Math.hypot(X / n - sum[k * 6 + 3] / m, Y / n - sum[k * 6 + 4] / m) / faceH;
-      const score = dE + SKIN_DISTANCE_WEIGHT * dist;
+      const f = sum[k * 6 + 5];
+      if (!f) continue;
+      const color = Math.hypot(...[0, 1, 2].map((c) => pieceSum[i * 6 + c] / m - sum[k * 6 + c] / f));
+      const dist = Math.hypot(pieceSum[i * 6 + 3] / m - sum[k * 6 + 3] / f, pieceSum[i * 6 + 4] / m - sum[k * 6 + 4] / f) / faceH;
+      const score = color + SKIN_DISTANCE_WEIGHT * dist;
       if (score < bestScore) {
         bestScore = score;
         best = k;
       }
     }
-    if (best >= 0) for (const p of patch) parts[p] = best + 1;
+    if (best >= 0) owner.set(firstId + i, best + 1);
+  });
+  for (let p = 0; p < n; p++) {
+    if (inSkin[p] && piece[p] >= 0 && owner.has(firstId + piece[p])) parts[p] = firstId + piece[p];
   }
+  return owner;
 }
 
 /**
