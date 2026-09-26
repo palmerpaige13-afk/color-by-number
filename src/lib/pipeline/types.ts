@@ -85,7 +85,10 @@ export interface PipelineInput {
   cutout?: Uint8Array;
   /** Animal masks: each is outlined as its own part. */
   animals?: RegionMask[];
-  /** The people's clothes: kept as their own shapes, apart from skin and background. */
+  /**
+   * The people's clothes, per pixel which person's (1, 2, …) or 0: each person's clothes are
+   * kept as their own shapes, apart from skin, background and other people's clothes.
+   */
   clothes?: RegionMask;
   /** The people's bare skin other than faces (neck, arms, legs, feet). */
   bodySkin?: RegionMask;

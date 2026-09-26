@@ -163,7 +163,7 @@ export interface Detection {
   cutout?: Uint8Array;
   /** Each animal's shape, in working pixels. */
   animals: RegionMask[];
-  /** The people's clothes (all of them), when cut out. */
+  /** The people's clothes, when cut out: per pixel, which person's (1, 2, …) or 0. */
   clothes?: RegionMask;
   /** The people's bare skin other than faces (neck, arms, hands, legs, feet), when cut out. */
   bodySkin?: RegionMask;
@@ -628,10 +628,14 @@ export async function detectSubjects(
   function cutOutPeople(model: ImageSegmenter): { mask: Uint8Array; clothes: Uint8Array; bodySkin: Uint8Array } {
     const mask = new Uint8Array(workW * workH);
     const clothes = new Uint8Array(workW * workH);
+    // Where two people's boxes overlap, clothes go to the person whose box is centered nearer.
+    const clothesFit = new Float32Array(workW * workH).fill(Infinity);
     const bodySkin = new Uint8Array(workW * workH);
     const N = SEGMENT_SIZE;
-    for (const p of mainPeople) {
+    mainPeople.slice(0, 250).forEach((p, person) => {
       const side = Math.max(p.w, p.h) * 1.15;
+      const cx = (p.x + p.w / 2) * toWork;
+      const cy = (p.y + p.h / 2) * toWork;
       const sx = p.x + p.w / 2 - side / 2;
       const sy = p.y + p.h / 2 - side / 2;
       crop.width = crop.height = N;
@@ -644,7 +648,7 @@ export async function detectSubjects(
       const cl = result.confidenceMasks?.[CLOTHES]?.getAsFloat32Array().slice();
       const sk = result.confidenceMasks?.[BODY_SKIN]?.getAsFloat32Array().slice();
       result.close();
-      if (!bg) continue;
+      if (!bg) return;
       const clamp = (u: number, v: number) => Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u));
       const at = (u: number, v: number) => bg[clamp(u, v)];
       const clAt = (u: number, v: number) => (cl ? cl[clamp(u, v)] : 0);
@@ -668,14 +672,20 @@ export async function detectSubjects(
           const c =
             (clAt(ui, vi) * (1 - fu) + clAt(ui + 1, vi) * fu) * (1 - fv) +
             (clAt(ui, vi + 1) * (1 - fu) + clAt(ui + 1, vi + 1) * fu) * fv;
-          if (c >= 0.5) clothes[y * workW + x] = 1;
+          if (c >= 0.5) {
+            const fit = Math.abs(x - cx) / (p.w * toWork) + (0.5 * Math.abs(y - cy)) / (p.h * toWork);
+            if (fit < clothesFit[y * workW + x]) {
+              clothesFit[y * workW + x] = fit;
+              clothes[y * workW + x] = person + 1;
+            }
+          }
           const s =
             (skAt(ui, vi) * (1 - fu) + skAt(ui + 1, vi) * fu) * (1 - fv) +
             (skAt(ui, vi + 1) * (1 - fu) + skAt(ui + 1, vi + 1) * fu) * fv;
           if (s >= 0.5) bodySkin[y * workW + x] = 1;
         }
       }
-    }
+    });
     return { mask, clothes, bodySkin };
   }
 }
