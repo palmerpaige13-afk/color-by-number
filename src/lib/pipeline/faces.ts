@@ -153,6 +153,7 @@ export function separateFaces(
   smoothed: Uint8ClampedArray,
   faces: FaceShape[],
   animals: RegionMask[],
+  clothes: RegionMask | undefined,
   basePalette: RGB[],
   baseLab: Float32Array,
   w: number,
@@ -175,6 +176,7 @@ export function separateFaces(
     hairParts.set(next, i + 1);
     paintSkin(f.hair, parts, next++, w, h);
   });
+  if (clothes && next < 250) paintSkin(clothes, parts, next++, w, h);
   for (const a of animals) if (next < 250) paintSkin(a, parts, next++, w, h);
 
   const palette = [...basePalette];

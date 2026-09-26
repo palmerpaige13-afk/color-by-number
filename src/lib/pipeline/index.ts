@@ -44,7 +44,7 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
 });
 
 export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
-  easy: tuned({ paletteSize: 8, minArea: 900, minRadius: 9, smoothPasses: 3, boundaryPasses: 3, maxShapes: 60 }),
+  easy: tuned({ paletteSize: 12, minArea: 450, minRadius: 7, smoothPasses: 2, boundaryPasses: 2, maxShapes: 90 }),
   medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150 }),
   hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1, maxShapes: 280 }),
 };
@@ -80,12 +80,13 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const q = quantize(smoothed, w, h, params.paletteSize, imp, exclude);
   const { indices } = q;
   const faces =
-    input.faces?.length || input.animals?.length
+    input.faces?.length || input.animals?.length || input.clothes
       ? separateFaces(
           indices,
           smoothed,
           input.faces ?? [],
           input.animals ?? [],
+          input.clothes,
           q.palette,
           q.paletteLab,
           w,

@@ -78,8 +78,10 @@ export interface PipelineInput {
   faceStyle?: "lines" | "shaded" | "faceless";
   /** 1 on the subject (people and pets), 0 on background. Background is left blank: no shapes. */
   cutout?: Uint8Array;
-  /** Animal masks: each is outlined as its own part, with its shadows lifted. */
+  /** Animal masks: each is outlined as its own part. */
   animals?: RegionMask[];
+  /** The people's clothes: kept as their own shapes, apart from skin and background. */
+  clothes?: RegionMask;
 }
 
 export interface PipelineResult {

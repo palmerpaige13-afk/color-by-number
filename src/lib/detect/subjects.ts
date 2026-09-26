@@ -31,6 +31,7 @@ const PET_FACE_SIZE = 320;
 /** Category indices in the multiclass segmenter's output. */
 const HAIR = 1;
 const FACE_SKIN = 3;
+const CLOTHES = 4;
 /** Segmenter input size, and how much around the face it looks at (x face size). */
 const SEGMENT_SIZE = 256;
 const SEGMENT_PAD = 3;
@@ -158,6 +159,8 @@ export interface Detection {
   cutout?: Uint8Array;
   /** Each animal's shape, in working pixels. */
   animals: RegionMask[];
+  /** The people's clothes (all of them), when cut out. */
+  clothes?: RegionMask;
 }
 
 /**
@@ -283,7 +286,8 @@ export async function detectSubjects(
   );
   const wantCutout = cutOut && mainPeople.length > 0;
   const seg = kept.length || wantCutout ? await loadSegmenter().catch(() => null) : null;
-  const cutout = seg && wantCutout ? cutOutPeople(seg) : undefined;
+  const peopleCut = seg && wantCutout ? cutOutPeople(seg) : undefined;
+  const cutout = peopleCut?.mask;
 
   const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
   const animals = animalSeg ? pets.flatMap((p) => traceAnimal(animalSeg, p) ?? []) : [];
@@ -404,7 +408,12 @@ export async function detectSubjects(
     width: Math.min(b.width, workW - b.x),
     height: Math.min(b.height, workH - b.y),
   }));
-  return { subjects, cutout, animals };
+  return {
+    subjects,
+    cutout,
+    animals,
+    clothes: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.clothes },
+  };
 
   function paint(m: RegionMask, into: Uint8Array) {
     for (let y = 0; y < m.height; y++) {
@@ -593,8 +602,10 @@ export async function detectSubjects(
     return found;
   }
 
-  function cutOutPeople(model: ImageSegmenter): Uint8Array {
+  /** The people (anything that's part of them) and, within that, their clothes. */
+  function cutOutPeople(model: ImageSegmenter): { mask: Uint8Array; clothes: Uint8Array } {
     const mask = new Uint8Array(workW * workH);
+    const clothes = new Uint8Array(workW * workH);
     const N = SEGMENT_SIZE;
     for (const p of mainPeople) {
       const side = Math.max(p.w, p.h) * 1.15;
@@ -607,9 +618,12 @@ export async function detectSubjects(
       ctx.drawImage(canvas, sx, sy, side, side, 0, 0, N, N);
       const result = model.segment(crop);
       const bg = result.confidenceMasks?.[0]?.getAsFloat32Array().slice();
+      const cl = result.confidenceMasks?.[CLOTHES]?.getAsFloat32Array().slice();
       result.close();
       if (!bg) continue;
-      const at = (u: number, v: number) => bg[Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u))];
+      const clamp = (u: number, v: number) => Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u));
+      const at = (u: number, v: number) => bg[clamp(u, v)];
+      const clAt = (u: number, v: number) => (cl ? cl[clamp(u, v)] : 0);
       const x0 = Math.max(0, Math.floor(sx * toWork));
       const y0 = Math.max(0, Math.floor(sy * toWork));
       const x1 = Math.min(workW - 1, Math.ceil((sx + side) * toWork));
@@ -626,10 +640,14 @@ export async function detectSubjects(
             (at(ui, vi) * (1 - fu) + at(ui + 1, vi) * fu) * (1 - fv) +
             (at(ui, vi + 1) * (1 - fu) + at(ui + 1, vi + 1) * fu) * fv;
           if (b < 0.5) mask[y * workW + x] = 1;
+          const c =
+            (clAt(ui, vi) * (1 - fu) + clAt(ui + 1, vi) * fu) * (1 - fv) +
+            (clAt(ui, vi + 1) * (1 - fu) + clAt(ui + 1, vi + 1) * fu) * fv;
+          if (c >= 0.5) clothes[y * workW + x] = 1;
         }
       }
     }
-    return mask;
+    return { mask, clothes };
   }
 }
 

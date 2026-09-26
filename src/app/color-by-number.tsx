@@ -27,7 +27,7 @@ const MAX_PRINT_PX = 6000;
 const KEY_DPI = 150;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
-  { id: "easy", label: "Easy", blurb: "8 colors, big shapes" },
+  { id: "easy", label: "Easy", blurb: "12 colors, big shapes" },
   { id: "medium", label: "Medium", blurb: "16 colors, more detail" },
   { id: "hard", label: "Hard", blurb: "24 colors, lots of small shapes" },
 ];
@@ -317,9 +317,10 @@ export default function ColorByNumber() {
     let subjects: SubjectBox[] = [];
     let cutout: Uint8Array | undefined;
     let animals: RegionMask[] = [];
+    let clothes: RegionMask | undefined;
     let note = "";
     try {
-      ({ subjects, cutout, animals } = await detectSubjects(mainBitmap, main.width, main.height, {
+      ({ subjects, cutout, animals, clothes } = await detectSubjects(mainBitmap, main.width, main.height, {
         cutOut: !!frame,
         sideShare: SIDE_PERSON_SHARE,
       }));
@@ -368,7 +369,7 @@ export default function ColorByNumber() {
 
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     const mainResult = runPipeline(
-      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals },
+      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes },
       { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
 
