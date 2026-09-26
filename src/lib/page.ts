@@ -3,7 +3,7 @@
 // laid over a separate, coarser paint-by-number of the scene. Each layer is placed in page
 // pixels; the color key is shared, so the same color gets the same number in every layer.
 
-import { labDist2, rgbToLab } from "@/lib/pipeline/color";
+import { labDist2, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
@@ -39,6 +39,22 @@ export interface Page {
  * smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 10;
+/**
+ * Photos lose some color on the way to a handful of paints (averaging, smoothing), so the
+ * paint colors are made livelier: more saturated, by LIVELY (skin a little less, so faces
+ * don't turn orange). Grays stay gray. Light warm colors (blond hair, sand, sunlit grass) get
+ * a little extra yellow.
+ */
+const LIVELY = 1.3;
+const LIVELY_SKIN = 1.12;
+const WARM_YELLOW = 1.12;
+function lively(c: { lab: Float32Array; faces: boolean; hair: boolean }): RGB {
+  const [L, a, b] = c.lab;
+  const k = c.faces ? LIVELY_SKIN : LIVELY;
+  const warm = !c.faces && L > 55 && b > 8 && b > a ? WARM_YELLOW : 1;
+  return labToRgb(L, a * k, b * k * warm);
+}
+
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
@@ -129,7 +145,7 @@ export function buildPage(
   const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
   const key = clusters.map((c, i) => {
     for (const m of c.members) numbers[m.layer][m.index] = i + 1;
-    return { n: i + 1, rgb: c.rgb };
+    return { n: i + 1, rgb: lively(c) };
   });
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,

@@ -14,6 +14,7 @@ import {
 import type { SubjectBox } from "@/lib/pipeline/importance";
 import { findPetFace } from "@/lib/pipeline/eyes";
 import type { Box, Point, RegionMask } from "@/lib/pipeline/types";
+import { rgbToLab } from "@/lib/pipeline/color";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
@@ -38,6 +39,9 @@ const SEGMENT_SIZE = 256;
 const SEGMENT_PAD = 3;
 /** A face's own hair starts within this much of its size around the face. */
 const HAIR_SEED_PAD = 0.35;
+/** Growing hair: each ΔE this big between a pixel and the head's hair color costs one more step. */
+const HAIR_COLOR_STEP = 2;
+const HAIR_SIDEWAYS = 2.5;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
 const SURE_FACE = 0.75;
@@ -642,14 +646,17 @@ export async function detectSubjects(
     const reach = new Float32Array(n).fill(Infinity);
     faces.forEach((f, i) => {
       if (!f.hair) return;
-      const pad = Math.max(f.width, f.height) * HAIR_SEED_PAD;
+      // A face box can come out too narrow (half a face); treat it as a normal face shape.
+      const fw = Math.max(f.width, f.height * 0.8);
+      const fx = f.x + f.width / 2 - fw / 2;
+      const pad = Math.max(fw, f.height) * HAIR_SEED_PAD;
       const cx = f.x + f.width / 2;
       const cy = f.y + f.height / 2;
       for (let y = Math.max(0, Math.floor(f.y - pad)); y <= Math.min(workH - 1, f.y + f.height + pad); y++) {
-        for (let x = Math.max(0, Math.floor(f.x - pad)); x <= Math.min(workW - 1, f.x + f.width + pad); x++) {
+        for (let x = Math.max(0, Math.floor(fx - pad)); x <= Math.min(workW - 1, fx + fw + pad); x++) {
           const p = y * workW + x;
           if (!isHair[p]) continue;
-          const d = Math.hypot((x - cx) / f.width, (y - cy) / f.height);
+          const d = Math.hypot((x - cx) / fw, (y - cy) / f.height);
           if (d < reach[p]) {
             reach[p] = d;
             owner[p] = i + 1;
@@ -657,19 +664,53 @@ export async function detectSubjects(
         }
       }
     });
-    let frontier: number[] = [];
-    for (let p = 0; p < n; p++) if (owner[p]) frontier.push(p);
-    while (frontier.length) {
-      const next: number[] = [];
-      for (const p of frontier) {
-        const x = p % workW;
-        for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
-          if (q < 0 || q >= n || owner[q] || !isHair[q]) continue;
-          owner[q] = owner[p];
-          next.push(q);
+    // The photo's colors at working size, and each head's own hair color (from its seeds).
+    const work = document.createElement("canvas");
+    work.width = workW;
+    work.height = workH;
+    const wctx = work.getContext("2d", { willReadFrequently: true })!;
+    wctx.drawImage(image, 0, 0, workW, workH);
+    const rgba = wctx.getImageData(0, 0, workW, workH).data;
+    const lab = new Float32Array(n * 3);
+    for (let p = 0; p < n; p++) if (isHair[p]) rgbToLab(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2], lab, p * 3);
+    const own = new Float32Array((faces.length + 1) * 4);
+    for (let p = 0; p < n; p++) {
+      const o = owner[p];
+      if (!o) continue;
+      for (let c = 0; c < 3; c++) own[o * 4 + c] += lab[p * 3 + c];
+      own[o * 4 + 3]++;
+    }
+    for (let o = 1; o <= faces.length; o++) for (let c = 0; c < 3; c++) own[o * 4 + c] /= own[o * 4 + 3] || 1;
+
+    // Grow outward, cheapest first: a step costs more the further its color is from the
+    // head's own hair color, so where a blonde and a brunette's hair meet, the line follows
+    // the color change rather than falling halfway between their heads. Hair hangs down, so a
+    // sideways step (into the hair of the person standing next to you) costs more too.
+    const cost = new Float64Array(n).fill(Infinity);
+    const heap = new MinHeap();
+    for (let p = 0; p < n; p++) {
+      if (!owner[p]) continue;
+      cost[p] = 0;
+      heap.push(0, p);
+    }
+    const done = new Uint8Array(n);
+    while (heap.size) {
+      const [d, p] = heap.pop();
+      if (done[p] || d > cost[p]) continue;
+      done[p] = 1;
+      const o = owner[p];
+      const x = p % workW;
+      for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
+        if (q < 0 || q >= n || done[q] || !isHair[q]) continue;
+        const dE = Math.hypot(lab[q * 3] - own[o * 4], lab[q * 3 + 1] - own[o * 4 + 1], lab[q * 3 + 2] - own[o * 4 + 2]);
+        const step = q === p - 1 || q === p + 1 ? HAIR_SIDEWAYS : 1;
+        const c = d + step * (1 + dE / HAIR_COLOR_STEP);
+        if (c < cost[q]) {
+          cost[q] = c;
+          owner[q] = o;
+          heap.push(c, q);
         }
       }
-      frontier = next;
     }
     faces.forEach((f, i) => {
       if (!f.hair) return;
@@ -822,4 +863,49 @@ function cleanBlob(data: Uint8Array, size: number, cx: number, cy: number): bool
   const outside = flood(border, (p) => !blob[p]);
   for (let p = 0; p < n; p++) data[p] = outside[p] ? 0 : 1;
   return true;
+}
+
+/** Min-heap of (priority, id) pairs. */
+class MinHeap {
+  private pri: number[] = [];
+  private ids: number[] = [];
+  get size() {
+    return this.ids.length;
+  }
+  push(p: number, id: number) {
+    const { pri, ids } = this;
+    let i = ids.length;
+    pri.push(p);
+    ids.push(id);
+    while (i > 0) {
+      const up = (i - 1) >> 1;
+      if (pri[up] <= p) break;
+      pri[i] = pri[up];
+      ids[i] = ids[up];
+      i = up;
+    }
+    pri[i] = p;
+    ids[i] = id;
+  }
+  pop(): [number, number] {
+    const { pri, ids } = this;
+    const top: [number, number] = [pri[0], ids[0]];
+    const p = pri.pop()!;
+    const id = ids.pop()!;
+    if (ids.length) {
+      let i = 0;
+      for (;;) {
+        let m = i * 2 + 1;
+        if (m >= ids.length) break;
+        if (m + 1 < ids.length && pri[m + 1] < pri[m]) m++;
+        if (pri[m] >= p) break;
+        pri[i] = pri[m];
+        ids[i] = ids[m];
+        i = m;
+      }
+      pri[i] = p;
+      ids[i] = id;
+    }
+    return top;
+  }
 }

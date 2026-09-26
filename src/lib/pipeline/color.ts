@@ -35,3 +35,23 @@ export function labDist2(a: Float32Array, ai: number, b: Float32Array, bi: numbe
   const db = a[ai + 2] - b[bi + 2];
   return dl * dl + da * da + db * db;
 }
+
+/** CIE Lab -> sRGB (0–255), clamped to what a screen can show. */
+export function labToRgb(L: number, a: number, b: number): [number, number, number] {
+  const fy = (L + 16) / 116;
+  const fx = fy + a / 500;
+  const fz = fy - b / 200;
+  const inv = (t: number) => (t ** 3 > 216 / 24389 ? t ** 3 : (116 * t - 16) / (24389 / 27));
+  const x = inv(fx) * XN;
+  const y = inv(fy);
+  const z = inv(fz) * ZN;
+  const lin = [
+    x * 3.2404542 - y * 1.5371385 - z * 0.4985314,
+    -x * 0.969266 + y * 1.8760108 + z * 0.041556,
+    x * 0.0556434 - y * 0.2040259 + z * 1.0572252,
+  ];
+  return lin.map((v) => {
+    const c = v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(Math.max(0, v), 1 / 2.4) - 0.055;
+    return Math.round(Math.min(255, Math.max(0, c * 255)));
+  }) as [number, number, number];
+}

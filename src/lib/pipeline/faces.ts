@@ -45,8 +45,13 @@ const SHADOW_SOFTEN = 0.45;
 const SKIN_DISTANCE_WEIGHT = 5;
 /** A face-skin area this many times wider than tall, pinched to this share of its halves'
  * height between them, is two faces. */
-const DOUBLE_FACE_WIDTH = 1.35;
-const DOUBLE_FACE_WAIST = 0.8;
+/** Growing a face into missed skin: within this share of its size from its center, and this ΔE. */
+const FACE_GROW_REACH = 0.6;
+const FACE_GROW_TOLERANCE = 9;
+/** Bites out of a face's outline up to this share of its size are filled in. */
+const FACE_SMOOTH = 0.12;
+const DOUBLE_FACE_WIDTH = 1.5;
+const DOUBLE_FACE_WAIST = 0.65;
 /** Bare skin is split where color changes by this ΔE across 2 x PIECE_EDGE_SPAN pixels. */
 const PIECE_EDGE = 6;
 const PIECE_EDGE_SPAN = 2;
@@ -184,12 +189,15 @@ export function separateFaces(
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
   // where masks overlap.
   const parts = new Uint8Array(w * h);
-  // Two faces cheek to cheek can share one face-skin area: each face keeps only the pixels
-  // nearer its own center than any other face's (measured in face widths).
+  // Two faces cheek to cheek can share one face-skin area: where two faces' skin overlaps,
+  // each pixel goes to the face whose center is nearer (measured in face sizes).
+  const covers = (m: RegionMask | undefined, x: number, y: number) =>
+    !!m && x >= m.x && y >= m.y && x < m.x + m.width && y < m.y + m.height && !!m.data[(y - m.y) * m.width + x - m.x];
   const nearer = (k: number, x: number, y: number) => {
-    const d = (f: FaceShape) => Math.hypot(x - (f.x + f.width / 2), y - (f.y + f.height / 2)) / Math.max(1, f.width);
+    const d = (f: FaceShape) =>
+      Math.hypot(x - (f.x + f.width / 2), y - (f.y + f.height / 2)) / Math.max(1, f.width, f.height);
     const own = d(faces[k]);
-    return faces.every((g, j) => j === k || d(g) >= own);
+    return faces.every((g, j) => j === k || !covers(g.skin, x, y) || d(g) >= own);
   };
   faces.forEach((f, k) => {
     if (f.skin) {
@@ -200,6 +208,7 @@ export function separateFaces(
     else if (f.outline && f.outline.length >= 3) fillPolygon(f.outline, parts, k + 1, w, h);
     else floodSkin(f, smoothed, parts, k + 1, w, h);
   });
+  growFaces(parts, faces, smoothed, w, h);
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
   const hairParts = new Map<number, number>(); // hair part -> its face's part
@@ -216,7 +225,7 @@ export function separateFaces(
   }
   const skinPieces =
     bodySkin && faces.length ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250) : new Map<number, number>();
-  next += skinPieces.size;
+  for (const k of skinPieces.keys()) next = Math.max(next, k + 1);
   const kindOf = new Map<number, number>();
   for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
   faces.forEach((_, i) => kindOf.set(i + 1, PartKind.face));
@@ -311,6 +320,112 @@ export function separateFaces(
 }
 
 /**
+ * The segmenter sometimes misses part of a face (a cheek in bright light next to blond hair,
+ * or a face whose box came out too narrow), leaving it to the background colors. Each face is
+ * grown into neighboring pixels of its own skin color, only within a face-sized circle around
+ * its center.
+ */
+function growFaces(parts: Uint8Array, faces: FaceShape[], smoothed: Uint8ClampedArray, w: number, h: number) {
+  const lab = new Float32Array(3);
+  const ref = new Float32Array(3);
+  faces.forEach((f, i) => {
+    const k = i + 1;
+    let L = 0, A = 0, B = 0, n = 0, cx = 0, cy = 0;
+    const px: number[] = [];
+    for (let p = 0; p < parts.length; p++) {
+      if (parts[p] !== k) continue;
+      rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
+      L += lab[0]; A += lab[1]; B += lab[2]; n++;
+      cx += p % w; cy += Math.floor(p / w);
+      px.push(p);
+    }
+    if (n < 8) return;
+    ref[0] = L / n; ref[1] = A / n; ref[2] = B / n;
+    cx /= n; cy /= n;
+    const r = Math.max(f.width, f.height) * FACE_GROW_REACH;
+    const tol2 = FACE_GROW_TOLERANCE * FACE_GROW_TOLERANCE;
+    for (let s = 0; s < px.length; s++) {
+      const p = px[s];
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= parts.length || parts[q]) continue;
+        const qx = q % w;
+        const qy = Math.floor(q / w);
+        if (Math.hypot(qx - cx, qy - cy) > r || qy >= h) continue;
+        rgbToLab(smoothed[q * 4], smoothed[q * 4 + 1], smoothed[q * 4 + 2], lab, 0);
+        if (labDist2(lab, 0, ref, 0) > tol2) continue;
+        parts[q] = k;
+        px.push(q);
+      }
+    }
+    // Fill what the face now encloses (eyes, a smile): anything inside its box that can't be
+    // reached from the box's edge without crossing the face.
+    let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (const p of px) {
+      const x = p % w;
+      const y = (p - x) / w;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    const bw = x1 - x0 + 1;
+    const bh = y1 - y0 + 1;
+    const outside = new Uint8Array(bw * bh);
+    const stack: number[] = [];
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        if ((x > 0 && y > 0 && x < bw - 1 && y < bh - 1) || parts[(y0 + y) * w + x0 + x] === k) continue;
+        outside[y * bw + x] = 1;
+        stack.push(y * bw + x);
+      }
+    }
+    while (stack.length) {
+      const b = stack.pop()!;
+      const x = b % bw;
+      for (const c of [x > 0 ? b - 1 : -1, x < bw - 1 ? b + 1 : -1, b - bw, b + bw]) {
+        if (c < 0 || c >= outside.length || outside[c]) continue;
+        if (parts[(y0 + Math.floor(c / bw)) * w + x0 + (c % bw)] === k) continue;
+        outside[c] = 1;
+        stack.push(c);
+      }
+    }
+    for (let b = 0; b < outside.length; b++) {
+      const p = (y0 + Math.floor(b / bw)) * w + x0 + (b % bw);
+      if (!outside[b] && !parts[p]) parts[p] = k;
+    }
+
+    // Smooth the outline where strands of hair or shadow bit into it (a closing: grow the
+    // face by a few pixels, then shrink it back), taking only pixels no other part has.
+    const R = Math.max(2, Math.round(Math.max(f.width, f.height) * FACE_SMOOTH));
+    const ox = Math.max(0, x0 - R), oy = Math.max(0, y0 - R);
+    const ow = Math.min(w - 1, x1 + R) - ox + 1, oh = Math.min(h - 1, y1 + R) - oy + 1;
+    const inside = new Uint8Array(ow * oh);
+    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) inside[y * ow + x] = parts[(oy + y) * w + ox + x] === k ? 1 : 0;
+    const disk: [number, number][] = [];
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) if (dx * dx + dy * dy <= R * R) disk.push([dx, dy]);
+    const grown = new Uint8Array(ow * oh);
+    for (let y = 0; y < oh; y++) {
+      for (let x = 0; x < ow; x++) {
+        if (!inside[y * ow + x]) continue;
+        for (const [dx, dy] of disk) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && ny >= 0 && nx < ow && ny < oh) grown[ny * ow + nx] = 1;
+        }
+      }
+    }
+    for (let y = 0; y < oh; y++) {
+      for (let x = 0; x < ow; x++) {
+        const p = (oy + y) * w + ox + x;
+        if (inside[y * ow + x] || parts[p] || !grown[y * ow + x]) continue;
+        const kept = disk.every(([dx, dy]) => {
+          const nx = x + dx, ny = y + dy;
+          return nx < 0 || ny < 0 || nx >= ow || ny >= oh || grown[ny * ow + nx];
+        });
+        if (kept) parts[p] = k;
+      }
+    }
+  });
+}
+
+/**
  * Two faces cheek to cheek often come out as one face-skin area, much wider than a face and
  * pinched in between the two. Such an area is cut at its narrowest column into two faces
  * (the hair stays with the first).
@@ -391,7 +506,19 @@ function matchBodySkin(
   let faceH = 1;
   for (let k = 0; k < faceCount; k++) if (sum[k * 6 + 5]) faceH = Math.max(faceH, bottom[k] - top[k] + 1);
 
+  // Skin touching a face (a neck, or part of the face the face mask missed) is that face's.
+  const touch = new Int32Array(count * faceCount);
+  for (let p = 0; p < n; p++) {
+    const i = piece[p];
+    if (i < 0 || !inSkin[p]) continue;
+    const x = p % w;
+    for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+      if (q >= 0 && q < n && faceMask[q]) touch[i * faceCount + faceMask[q] - 1]++;
+    }
+  }
+
   const owner = new Map<number, number>();
+  const inFace = new Set<number>();
   const pieceSum = new Float64Array(count * 6);
   for (let p = 0; p < n; p++) {
     const i = piece[p];
@@ -404,6 +531,16 @@ function matchBodySkin(
   for (let i = 0; i < count; i++) {
     const m = pieceSum[i * 6 + 5];
     if (!m) continue;
+    let touched = -1;
+    for (let k = 0; k < faceCount; k++) {
+      if (touch[i * faceCount + k] > (touched < 0 ? 0 : touch[i * faceCount + touched])) touched = k;
+    }
+    if (touched >= 0) {
+      // Beside the face rather than below the chin: it is the face itself.
+      owner.set(firstId + i, touched + 1);
+      if (pieceSum[i * 6 + 4] / m < bottom[touched]) inFace.add(i);
+      continue;
+    }
     let best = -1;
     let bestScore = Infinity;
     for (let k = 0; k < faceCount; k++) {
@@ -420,8 +557,14 @@ function matchBodySkin(
     if (best >= 0) owner.set(firstId + i, best + 1);
   }
   for (let p = 0; p < n; p++) {
-    if (inSkin[p] && piece[p] >= 0 && owner.has(firstId + piece[p])) parts[p] = firstId + piece[p];
+    const i = piece[p];
+    if (!inSkin[p] || i < 0 || !owner.has(firstId + i)) continue;
+    if (inFace.has(i)) {
+      parts[p] = owner.get(firstId + i)!;
+      faceMask[p] = parts[p];
+    } else parts[p] = firstId + i;
   }
+  for (const i of inFace) owner.delete(firstId + i);
   return owner;
 }
 
