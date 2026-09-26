@@ -45,6 +45,9 @@ const HAIR_SIDEWAYS = 2.5;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
 const SURE_FACE = 0.75;
+/** A person the detector missed, estimated from their face: this many face widths wide and face heights tall. */
+const MISSED_PERSON_WIDTH = 3.5;
+const MISSED_PERSON_HEIGHT = 8;
 /** Size of the square crop handed to the landmarker. */
 const TRACE_SIZE = 384;
 
@@ -148,17 +151,64 @@ function detectionCanvas(image: ImageBitmap) {
   return { canvas, scale: s };
 }
 
+type Found = { x: number; y: number; w: number; h: number; name: string };
+
+/**
+ * People and animals on the detection canvas. The detector looks at a small copy of the whole
+ * photo and can miss someone at the edge of a group, so it also looks at each half of the
+ * photo up close; a person found there that wasn't found before is added.
+ */
+function detectObjects(objects: ObjectDetector, canvas: HTMLCanvasElement): Found[] {
+  const found: Found[] = [];
+  const add = (d: ReturnType<ObjectDetector["detect"]>["detections"][number], ox: number, oy: number, k: number) => {
+    const b = d.boundingBox;
+    const name = d.categories[0]?.categoryName;
+    if (!b || !name) return null;
+    return { x: ox + b.originX / k, y: oy + b.originY / k, w: b.width / k, h: b.height / k, name };
+  };
+  for (const d of objects.detect(canvas).detections) {
+    const f = add(d, 0, 0, 1);
+    if (f) found.push(f);
+  }
+  const W = canvas.width;
+  const H = canvas.height;
+  const wide = W >= H;
+  const len = (wide ? W : H) * 0.6;
+  const tile = document.createElement("canvas");
+  for (const start of [0, (wide ? W : H) - len]) {
+    const [tx, ty, tw, th] = wide ? [start, 0, len, H] : [0, start, W, len];
+    tile.width = Math.round(tw);
+    tile.height = Math.round(th);
+    tile.getContext("2d")!.drawImage(canvas, tx, ty, tw, th, 0, 0, tile.width, tile.height);
+    for (const d of objects.detect(tile).detections) {
+      const f = add(d, tx, ty, 1);
+      if (!f || f.name !== "person") continue;
+      // Skip people cut by the tile's inner edge, and anyone already found.
+      const cut = wide
+        ? (start > 0 && f.x <= tx + 2) || (start === 0 && f.x + f.w >= tx + tw - 2)
+        : (start > 0 && f.y <= ty + 2) || (start === 0 && f.y + f.h >= ty + th - 2);
+      if (cut) continue;
+      const seen = found.some((g) => {
+        if (g.name !== "person") return false;
+        const ix = Math.max(0, Math.min(f.x + f.w, g.x + g.w) - Math.max(f.x, g.x));
+        const iy = Math.max(0, Math.min(f.y + f.h, g.y + g.h) - Math.max(f.y, g.y));
+        return ix * iy > 0.4 * Math.min(f.w * f.h, g.w * g.h);
+      });
+      if (!seen) found.push(f);
+    }
+  }
+  return found;
+}
+
 /** People and animals in the photo, as boxes in the image's own pixels. Used to crop to the subject. */
 export async function findPeople(image: ImageBitmap): Promise<{ people: Box[]; animals: Box[] }> {
   const { objects } = await loadDetectors();
   const { canvas, scale } = detectionCanvas(image);
   const people: Box[] = [];
   const animals: Box[] = [];
-  for (const d of objects.detect(canvas).detections) {
-    const b = d.boundingBox;
-    if (!b) continue;
-    const box = { x: b.originX / scale, y: b.originY / scale, width: b.width / scale, height: b.height / scale };
-    (d.categories[0]?.categoryName === "person" ? people : animals).push(box);
+  for (const f of detectObjects(objects, canvas)) {
+    const box = { x: f.x / scale, y: f.y / scale, width: f.w / scale, height: f.h / scale };
+    (f.name === "person" ? people : animals).push(box);
   }
   return { people, animals };
 }
@@ -196,14 +246,11 @@ export async function detectSubjects(
   const out: SubjectBox[] = [];
   const people: { x: number; y: number; w: number; h: number }[] = [];
   const pets: { x: number; y: number; w: number; h: number; label: string }[] = [];
-  for (const d of objects.detect(canvas).detections) {
-    const b = d.boundingBox;
-    const name = d.categories[0]?.categoryName;
-    if (!b || !name) continue;
-    const kind = name === "person" ? "person" : "animal";
-    if (kind === "person") people.push({ x: b.originX, y: b.originY, w: b.width, h: b.height });
-    else pets.push({ x: b.originX, y: b.originY, w: b.width, h: b.height, label: name });
-    out.push({ kind, x: b.originX * toWork, y: b.originY * toWork, width: b.width * toWork, height: b.height * toWork });
+  for (const f of detectObjects(objects, canvas)) {
+    const kind = f.name === "person" ? "person" : "animal";
+    if (kind === "person") people.push({ x: f.x, y: f.y, w: f.w, h: f.h });
+    else pets.push({ x: f.x, y: f.y, w: f.w, h: f.h, label: f.name });
+    out.push({ kind, x: f.x * toWork, y: f.y * toWork, width: f.w * toWork, height: f.h * toWork });
   }
 
   // Face candidates from the whole photo and from zoomed-in crops of each person; the same
@@ -286,6 +333,18 @@ export async function detectSubjects(
     };
     kept = traced.filter((c) => {
       const mine = owners(c);
+      if (mine.length === 0 && c.lm) {
+        // A certain face on no one: the object detector missed this person (it happens at
+        // the edge of a group). Add a person, sized from the face, standing below it.
+        const w = Math.min(canvas.width, c.w * MISSED_PERSON_WIDTH);
+        const x = Math.max(0, c.x + c.w / 2 - w / 2);
+        const y = Math.max(0, c.y - c.h * 0.4);
+        const h = Math.min(canvas.height - y, c.h * MISSED_PERSON_HEIGHT);
+        people.push({ x, y, w, h });
+        out.push({ kind: "person", x: x * toWork, y: y * toWork, width: w * toWork, height: h * toWork });
+        taken.add(people.length - 1);
+        return true;
+      }
       if (mine.length === 0) return false;
       const free = mine.find((i) => !taken.has(i));
       if (free !== undefined) taken.add(free);

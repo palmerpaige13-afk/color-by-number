@@ -547,7 +547,11 @@ function matchBodySkin(
       const f = sum[k * 6 + 5];
       if (!f) continue;
       const color = Math.hypot(...[0, 1, 2].map((c) => pieceSum[i * 6 + c] / m - sum[k * 6 + c] / f));
-      const dist = Math.hypot(pieceSum[i * 6 + 3] / m - sum[k * 6 + 3] / f, pieceSum[i * 6 + 4] / m - sum[k * 6 + 4] / f) / faceH;
+      // People stand side by side and their arms and legs hang below their own face, so
+      // sideways distance counts double.
+      const dx = (pieceSum[i * 6 + 3] / m - sum[k * 6 + 3] / f) * 2;
+      const dy = pieceSum[i * 6 + 4] / m - sum[k * 6 + 4] / f;
+      const dist = Math.hypot(dx, dy) / faceH;
       const score = color + SKIN_DISTANCE_WEIGHT * dist;
       if (score < bestScore) {
         bestScore = score;
