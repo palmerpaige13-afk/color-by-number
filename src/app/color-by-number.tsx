@@ -25,7 +25,7 @@ const PRINT_DPI = 300;
 const MAX_PRINT_PX = 6000;
 /** Resolution of the color-key sheet. */
 const KEY_DPI = 150;
-/** The fewest colors the key aims for, per difficulty (a colorful photo may have more). */
+/** How many colors the key aims for, per difficulty. */
 const KEY_COLORS: Record<Difficulty, number> = { easy: 8, medium: 16, hard: 25 };
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [

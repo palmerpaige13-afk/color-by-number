@@ -36,12 +36,6 @@ export interface Page {
  * smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 14;
-/**
- * To keep a page from falling under its fewest colors, colors are only merged below that count
- * when they're closer than this (hard to tell apart at all); background variations may also go
- * this close to other colors.
- */
-const MIN_DISTINCT = 9;
 /** A background variation stays within this ΔE of the color it varies. */
 const VARIATION_MAX = 20;
 /**
@@ -58,8 +52,8 @@ export const minLabelRadius = (pageWidth: number, scale: number, fontFrac: numbe
 const MAX_FONT_RATIO = 2.4;
 
 /**
- * `colors` is the fewest colors the key should have: a colorful photo may have more, and one
- * with fewer distinct colors gets gentle variations in the background (layer `vary`).
+ * `colors` is how many colors the key should have: never more, and when the photo has fewer
+ * distinct colors, gentle variations are added in the background (layer `vary`) to get there.
  */
 export function buildPage(
   width: number,
@@ -69,6 +63,7 @@ export function buildPage(
   colors = Infinity,
   vary?: number,
 ): Page {
+  const maxColors = colors;
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number };
   const entries: Entry[] = [];
@@ -82,8 +77,8 @@ export function buildPage(
   });
 
   // Merge the two closest colors (their color becomes the area-weighted mix) until every pair
-  // is easy to tell apart, or, once at the page's fewest colors, until no two are nearly the
-  // same. Shapes don't change; colors that were barely different just share a number.
+  // is easy to tell apart and there are no more than `maxColors`. Shapes don't change; colors
+  // that were barely different just share a number.
   type Cluster = { members: Entry[]; rgb: RGB; lab: Float32Array; area: number };
   const toLab = (rgb: RGB) => {
     const lab = new Float32Array(3);
@@ -105,8 +100,7 @@ export function buildPage(
         }
       }
     }
-    if (bi < 0 || bd >= DISTINCT * DISTINCT) break;
-    if (clusters.length <= colors && bd >= MIN_DISTINCT * MIN_DISTINCT) break;
+    if (bi < 0 || (bd >= DISTINCT * DISTINCT && clusters.length <= maxColors)) break;
     const [a, b] = [clusters[bi], clusters[bj]];
     const area = a.area + b.area;
     const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
@@ -283,7 +277,7 @@ function addVariations(
         (v) =>
           v.inGamut &&
           labDist2(v.lab, 0, base, 0) <= VARIATION_MAX * VARIATION_MAX &&
-          colors.every((c) => labDist2(v.lab, 0, c.lab, 0) >= MIN_DISTINCT * MIN_DISTINCT),
+          colors.every((c) => labDist2(v.lab, 0, c.lab, 0) >= DISTINCT * DISTINCT),
       );
     if (!variant) continue;
 
