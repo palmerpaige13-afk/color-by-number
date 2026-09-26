@@ -67,6 +67,11 @@ function BrushIcon() {
 
 /** Share of the photo that must be people for the page to be cut out to just them. */
 const MIN_CUTOUT_SHARE = 0.02;
+/**
+ * How different two paint colors must be (ΔE) to get their own numbers. Easy keeps colors
+ * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
+ */
+const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 };
 /** Separate bits of the cut-out smaller than this share of the picture are dropped. */
 const MIN_CUTOUT_PIECE = 0.002;
 /** Margin around the people when cropping, as a share of their size. */
@@ -428,13 +433,14 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty]);
     } else {
       page = buildPage(
         main.width * SCALE,
         main.height * SCALE,
         [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
         fontFrac,
+        KEY_DISTINCT[difficulty],
       );
     }
     full.close();

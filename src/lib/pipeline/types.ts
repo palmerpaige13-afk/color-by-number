@@ -65,6 +65,13 @@ export interface PipelineParams {
    * legs and feet take that same tone.
    */
   oneSkinTone?: boolean;
+  /**
+   * The people's faces, hair, skin and clothes are simplified as if at this size limit and
+   * radius (working px) whatever the difficulty, so harder pages add their detail to the
+   * background, not as extra shades on people.
+   */
+  partMinArea?: number;
+  partMinRadius?: number;
 }
 
 export interface PipelineInput {

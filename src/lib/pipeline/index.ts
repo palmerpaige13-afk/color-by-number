@@ -49,6 +49,12 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
   minRadius: p.minRadius * RES,
 });
 
+/**
+ * People look the same at every difficulty (one skin color per person, clothes without extra
+ * shadow patches, as on Easy); harder pages add their shapes and colors to the background.
+ */
+const PEOPLE = { oneSkinTone: true, partMinArea: 450 * RES * RES, partMinRadius: 7 * RES };
+
 export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
   easy: tuned({
     paletteSize: 12,
@@ -57,10 +63,18 @@ export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
     smoothPasses: 2,
     boundaryPasses: 2,
     maxShapes: 90,
-    oneSkinTone: true,
+    ...PEOPLE,
   }),
-  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150 }),
-  hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1, maxShapes: 280 }),
+  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150, ...PEOPLE }),
+  hard: tuned({
+    paletteSize: 24,
+    minArea: 45,
+    minRadius: 3,
+    smoothPasses: 1,
+    boundaryPasses: 1,
+    maxShapes: 280,
+    ...PEOPLE,
+  }),
 };
 
 export function runPipeline(input: PipelineInput, params: PipelineParams): PipelineResult {
@@ -133,9 +147,16 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // walls (low contrast) still merges away. Never so small that a number won't fit.
   const keepFactor = (importance: number, contrast: number) =>
     importance * Math.min(1, Math.max(0, (contrast - 12) / 18));
-  const areaLimit = (k: number) => params.minArea * (1 - 0.85 * k);
+  // A person's parts (face, hair, skin, clothes) use the people's own limits.
+  const isPart = (color: number) => {
+    const g = group?.[color] ?? 0;
+    return g !== 0 && g !== BACKGROUND_GROUP;
+  };
+  const areaLimit = (k: number, color: number) =>
+    (isPart(color) ? (params.partMinArea ?? params.minArea) : params.minArea) * (1 - 0.85 * k);
   const minPrint = params.minLabelRadius ?? MIN_PRINT_RADIUS;
-  const radiusLimit = (k: number) => Math.max(minPrint, params.minRadius * (1 - 0.5 * k));
+  const radiusLimit = (k: number, color: number) =>
+    Math.max(minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -146,7 +167,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     w,
     h,
     paletteLab,
-    (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id])),
+    (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id]), raw.color[id]),
     group,
   );
 
@@ -169,7 +190,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       : new Float32Array(sized.count);
     const contrast = neighborContrast(sized, w, h, paletteLab);
     const tooThin = (id: number) =>
-      pts.radius[id] < radiusLimit(keepFactor(sizedImp[id], contrast[id]));
+      pts.radius[id] < radiusLimit(keepFactor(sizedImp[id], contrast[id]), sized.color[id]);
     let thin = 0;
     for (let i = 0; i < sized.count; i++) if (tooThin(i) && !group?.[sized.color[i]]) thin++;
     if (thin === 0) break;

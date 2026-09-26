@@ -35,8 +35,8 @@ export interface Page {
 }
 
 /**
- * Every pair of colors in the key must differ by at least this (ΔE, where about 10 is the
- * smallest difference that's easy to see on paper); closer colors share one number.
+ * By default, every pair of colors in the key must differ by at least this (ΔE, where about
+ * 10 is the smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 10;
 /**
@@ -78,6 +78,7 @@ export function buildPage(
   height: number,
   layers: Layer[],
   fontFrac: number,
+  distinct = DISTINCT,
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
@@ -125,7 +126,7 @@ export function buildPage(
         }
       }
     }
-    if (bi < 0 || (bd >= DISTINCT * DISTINCT && clusters.length <= maxColors)) break;
+    if (bi < 0 || (bd >= distinct * distinct && clusters.length <= maxColors)) break;
     const [a, b] = [clusters[bi], clusters[bj]];
     const area = a.area + b.area;
     const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
