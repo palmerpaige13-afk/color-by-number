@@ -398,14 +398,13 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, params.paletteSize);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac);
     } else {
       page = buildPage(
         main.width * SCALE,
         main.height * SCALE,
         [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
         fontFrac,
-        params.paletteSize,
       );
     }
     full.close();

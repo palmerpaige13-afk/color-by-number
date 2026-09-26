@@ -46,7 +46,12 @@ export interface FaceRegions {
   group: Uint8Array;
   /** Per pixel: k + 1 inside face k (faces are the first parts), else 0. */
   mask: Uint8Array;
+  /** Per palette entry: what it colors (see PartKind). */
+  kind: Uint8Array;
 }
+
+/** What a palette color is used for: 0 the photo in general, then face, hair, clothes, pet. */
+export const PartKind = { none: 0, face: 1, hair: 2, clothes: 3, pet: 4 } as const;
 
 function fillPolygon(poly: [number, number][], mask: Uint8Array, value: number, w: number, h: number) {
   const ys = poly.map((p) => p[1]);
@@ -176,8 +181,18 @@ export function separateFaces(
     hairParts.set(next, i + 1);
     paintSkin(f.hair, parts, next++, w, h);
   });
-  if (clothes && next < 250) paintSkin(clothes, parts, next++, w, h);
-  for (const a of animals) if (next < 250) paintSkin(a, parts, next++, w, h);
+  const kindOf = new Map<number, number>();
+  faces.forEach((_, i) => kindOf.set(i + 1, PartKind.face));
+  for (const k of hairParts.keys()) kindOf.set(k, PartKind.hair);
+  if (clothes && next < 250) {
+    kindOf.set(next, PartKind.clothes);
+    paintSkin(clothes, parts, next++, w, h);
+  }
+  for (const a of animals) {
+    if (next >= 250) break;
+    kindOf.set(next, PartKind.pet);
+    paintSkin(a, parts, next++, w, h);
+  }
 
   const palette = [...basePalette];
   const labs: number[] = Array.from(baseLab);
@@ -225,7 +240,13 @@ export function separateFaces(
     }
     indices[p] = twin;
   }
-  return { palette, paletteLab: Float32Array.from(labs), group: Uint8Array.from(group), mask };
+  return {
+    palette,
+    paletteLab: Float32Array.from(labs),
+    group: Uint8Array.from(group),
+    mask,
+    kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
+  };
 }
 
 /**

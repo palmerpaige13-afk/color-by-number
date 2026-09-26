@@ -36,6 +36,9 @@ export interface Page {
  * smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 14;
+/** Part kinds (see the pipeline's PartKind). */
+const FACE = 1;
+const HAIR = 2;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
  * print size), so it prints at a readable size however the page is scaled. The pipeline
@@ -57,27 +60,36 @@ export function buildPage(
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
-  type Entry = { layer: number; index: number; rgb: RGB; area: number };
+  type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number };
   const entries: Entry[] = [];
   layers.forEach(({ result, scale }, layer) => {
     const area = new Float64Array(result.palette.length);
     for (let i = 0; i < result.regionCount; i++) area[result.regionColor[i]] += result.regionArea[i] * scale * scale;
     if (result.background !== undefined) area[result.background] = 0;
     result.palette.forEach((rgb, index) => {
-      if (area[index] > 0) entries.push({ layer, index, rgb, area: area[index] });
+      if (area[index] > 0) entries.push({ layer, index, rgb, area: area[index], kind: result.partKind?.[index] ?? 0 });
     });
   });
 
   // Merge the two closest colors (their color becomes the area-weighted mix) until every pair
   // is easy to tell apart and there are no more than `maxColors`. Shapes don't change; colors
   // that were barely different just share a number.
-  type Cluster = { members: Entry[]; rgb: RGB; lab: Float32Array; area: number };
+  type Cluster = { members: Entry[]; rgb: RGB; lab: Float32Array; area: number; faces: boolean; hair: boolean };
   const toLab = (rgb: RGB) => {
     const lab = new Float32Array(3);
     rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
     return lab;
   };
-  let clusters: Cluster[] = entries.map((e) => ({ members: [e], rgb: e.rgb, lab: toLab(e.rgb), area: e.area }));
+  let clusters: Cluster[] = entries.map((e) => ({
+    members: [e],
+    rgb: e.rgb,
+    lab: toLab(e.rgb),
+    area: e.area,
+    faces: e.kind === FACE,
+    hair: e.kind === HAIR,
+  }));
+  // A face and hair never share a number, however close their colors are.
+  const canMerge = (a: Cluster, b: Cluster) => !((a.faces && b.hair) || (a.hair && b.faces));
   for (;;) {
     let bi = -1;
     let bj = -1;
@@ -85,7 +97,7 @@ export function buildPage(
     for (let i = 0; i < clusters.length; i++) {
       for (let j = i + 1; j < clusters.length; j++) {
         const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
-        if (d < bd) {
+        if (d < bd && canMerge(clusters[i], clusters[j])) {
           bd = d;
           bi = i;
           bj = j;
@@ -97,7 +109,14 @@ export function buildPage(
     const area = a.area + b.area;
     const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
     clusters = clusters.filter((_, k) => k !== bi && k !== bj);
-    clusters.push({ members: [...a.members, ...b.members], rgb, lab: toLab(rgb), area });
+    clusters.push({
+      members: [...a.members, ...b.members],
+      rgb,
+      lab: toLab(rgb),
+      area,
+      faces: a.faces || b.faces,
+      hair: a.hair || b.hair,
+    });
   }
 
   // Numbered dark to light.
