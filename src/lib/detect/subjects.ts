@@ -41,6 +41,10 @@ const SEGMENT_PAD = 3;
 const HAIR_SEED_PAD = 0.35;
 /** Growing hair: each ΔE this big between a pixel and the head's hair color costs one more step. */
 const HAIR_COLOR_STEP = 2;
+/** Owner of clothes no face reaches (held things, someone with no face found). */
+const LEFT_OVER = 250;
+/** Growing clothes between people: extra steps per ΔE of color change crossed. */
+const CLOTHES_EDGE_COST = 0.5;
 const HAIR_SIDEWAYS = 2.5;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
@@ -242,6 +246,7 @@ export async function detectSubjects(
   const drawSharp = (ctx: CanvasRenderingContext2D, sx: number, sy: number, side: number, size: number) =>
     ctx.drawImage(image, sx / scale, sy / scale, side / scale, side / scale, 0, 0, size, size);
   const toWork = workW / canvas.width;
+  let labCache: Float32Array | undefined; // see workLab
 
   const out: SubjectBox[] = [];
   const people: { x: number; y: number; w: number; h: number }[] = [];
@@ -479,6 +484,7 @@ export async function detectSubjects(
   await breathe();
   if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
   if (peopleCut) extendHair(faceBoxes, peopleCut.hair);
+  if (peopleCut) splitClothes(faceBoxes, peopleCut.clothes);
 
   const subjects = [...out, ...faceBoxes].map((b) => ({
     ...b,
@@ -723,15 +729,8 @@ export async function detectSubjects(
         }
       }
     });
-    // The photo's colors at working size, and each head's own hair color (from its seeds).
-    const work = document.createElement("canvas");
-    work.width = workW;
-    work.height = workH;
-    const wctx = work.getContext("2d", { willReadFrequently: true })!;
-    wctx.drawImage(image, 0, 0, workW, workH);
-    const rgba = wctx.getImageData(0, 0, workW, workH).data;
-    const lab = new Float32Array(n * 3);
-    for (let p = 0; p < n; p++) if (isHair[p]) rgbToLab(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2], lab, p * 3);
+    // Each head's own hair color (from its seeds).
+    const lab = workLab();
     const own = new Float32Array((faces.length + 1) * 4);
     for (let p = 0; p < n; p++) {
       const o = owner[p];
@@ -791,6 +790,79 @@ export async function detectSubjects(
     });
   }
 
+  /** The photo in Lab at working size (computed once). */
+  function workLab(): Float32Array {
+    if (labCache) return labCache;
+    const work = document.createElement("canvas");
+    work.width = workW;
+    work.height = workH;
+    const wctx = work.getContext("2d", { willReadFrequently: true })!;
+    wctx.drawImage(image, 0, 0, workW, workH);
+    const rgba = wctx.getImageData(0, 0, workW, workH).data;
+    labCache = new Float32Array(workW * workH * 3);
+    for (let p = 0; p < workW * workH; p++) rgbToLab(rgba[p * 4], rgba[p * 4 + 1], rgba[p * 4 + 2], labCache, p * 3);
+    return labCache;
+  }
+
+  /**
+   * Whose clothes are whose. The people's clothes come as one area; each face claims the
+   * clothes right below it (its own shirt), and the rest is grown from there, cheapest first,
+   * where crossing a change in color is expensive. So where two people stand close, the line
+   * between their clothes falls on the edge where one shirt ends and the next begins, not on
+   * a straight cut. Faces are used rather than person boxes, which can hold two people.
+   * Writes each pixel's owner (1, 2, … by face; LEFT_OVER for clothes no face reaches).
+   */
+  function splitClothes(faces: SubjectBox[], clothes: Uint8Array) {
+    const n = workW * workH;
+    const lab = workLab();
+    const owner = new Uint8Array(n);
+    const near = new Float32Array(n).fill(Infinity);
+    faces.slice(0, 240).forEach((f, i) => {
+      const cx = f.x + f.width / 2;
+      const x0 = Math.max(0, Math.floor(cx - f.width * 0.6));
+      const x1 = Math.min(workW - 1, Math.ceil(cx + f.width * 0.6));
+      const y0 = Math.max(0, Math.floor(f.y + f.height * 1.05));
+      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * 3.2));
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const p = y * workW + x;
+          // The face just above wins (a baby held in front of a parent's shirt).
+          const d = Math.abs(x - cx) / f.width + (y - f.y - f.height) / f.height;
+          if (!clothes[p] || d >= near[p]) continue;
+          near[p] = d;
+          owner[p] = i + 1;
+        }
+      }
+    });
+    const cost = new Float64Array(n).fill(Infinity);
+    const heap = new MinHeap();
+    for (let p = 0; p < n; p++) {
+      if (!owner[p]) continue;
+      cost[p] = 0;
+      heap.push(0, p);
+    }
+    const done = new Uint8Array(n);
+    while (heap.size) {
+      const [d, p] = heap.pop();
+      if (done[p] || d > cost[p]) continue;
+      done[p] = 1;
+      const x = p % workW;
+      for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
+        if (q < 0 || q >= n || done[q] || !clothes[q]) continue;
+        const dE = Math.sqrt(
+          (lab[p * 3] - lab[q * 3]) ** 2 + (lab[p * 3 + 1] - lab[q * 3 + 1]) ** 2 + (lab[p * 3 + 2] - lab[q * 3 + 2]) ** 2,
+        );
+        const c = d + 1 + dE * CLOTHES_EDGE_COST;
+        if (c < cost[q]) {
+          cost[q] = c;
+          owner[q] = owner[p];
+          heap.push(c, q);
+        }
+      }
+    }
+    for (let p = 0; p < n; p++) if (clothes[p]) clothes[p] = owner[p] || LEFT_OVER;
+  }
+
   /** The people (anything that's part of them) and, within that, their clothes, bare skin and hair. */
   function cutOutPeople(model: ImageSegmenter): {
     mask: Uint8Array;
@@ -801,14 +873,10 @@ export async function detectSubjects(
     const mask = new Uint8Array(workW * workH);
     const hair = new Uint8Array(workW * workH);
     const clothes = new Uint8Array(workW * workH);
-    // Where two people's boxes overlap, clothes go to the person whose box is centered nearer.
-    const clothesFit = new Float32Array(workW * workH).fill(Infinity);
     const bodySkin = new Uint8Array(workW * workH);
     const N = SEGMENT_SIZE;
-    mainPeople.slice(0, 250).forEach((p, person) => {
+    mainPeople.forEach((p) => {
       const side = Math.max(p.w, p.h) * 1.15;
-      const cx = (p.x + p.w / 2) * toWork;
-      const cy = (p.y + p.h / 2) * toWork;
       const sx = p.x + p.w / 2 - side / 2;
       const sy = p.y + p.h / 2 - side / 2;
       crop.width = crop.height = N;
@@ -847,13 +915,7 @@ export async function detectSubjects(
           const c =
             (clAt(ui, vi) * (1 - fu) + clAt(ui + 1, vi) * fu) * (1 - fv) +
             (clAt(ui, vi + 1) * (1 - fu) + clAt(ui + 1, vi + 1) * fu) * fv;
-          if (c >= 0.5) {
-            const fit = Math.abs(x - cx) / (p.w * toWork) + (0.5 * Math.abs(y - cy)) / (p.h * toWork);
-            if (fit < clothesFit[y * workW + x]) {
-              clothesFit[y * workW + x] = fit;
-              clothes[y * workW + x] = person + 1;
-            }
-          }
+          if (c >= 0.5) clothes[y * workW + x] = 1;
           const s =
             (skAt(ui, vi) * (1 - fu) + skAt(ui + 1, vi) * fu) * (1 - fv) +
             (skAt(ui, vi + 1) * (1 - fu) + skAt(ui + 1, vi + 1) * fu) * fv;

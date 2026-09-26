@@ -72,6 +72,8 @@ export interface PipelineParams {
    */
   partMinArea?: number;
   partMinRadius?: number;
+  /** Each piece of clothing is one color (its light and shadow merged). */
+  flatClothes?: boolean;
 }
 
 export interface PipelineInput {

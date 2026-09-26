@@ -3,7 +3,8 @@
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
-import { paintSkin, separateFaces } from "./faces";
+import { PartKind, paintSkin, separateFaces } from "./faces";
+import { labDist2 } from "./color";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
 import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult } from "./types";
@@ -32,6 +33,8 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
  * (shirt and jeans, a white dress and a dark suit), even if that leaves a few more shapes.
  */
 const BUDGET_PART_DIST = 20;
+/** Within one person's clothes, colors closer than this (ΔE) are light and shadow on one piece. */
+const CLOTHES_SHADE = 22;
 
 /** Region-merge group of the blank background of a cut-out photo. */
 const BACKGROUND_GROUP = BLANK_GROUP;
@@ -64,8 +67,9 @@ export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
     boundaryPasses: 2,
     maxShapes: 90,
     ...PEOPLE,
+    flatClothes: true,
   }),
-  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150, ...PEOPLE }),
+  medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150, ...PEOPLE, flatClothes: true }),
   hard: tuned({
     paletteSize: 24,
     minArea: 45,
@@ -170,6 +174,36 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id]), raw.color[id]),
     group,
   );
+
+  // On easier pages clothes are one color per piece of clothing: shadow and light on a shirt
+  // (shades close to their neighbor in the same person's clothes) merge whatever their size,
+  // while a shirt and jeans (clearly different colors) stay apart. Hard keeps the shading.
+  if (faces && params.flatClothes) {
+    const kind = faces.kind;
+    for (let round = 0; round < 3; round++) {
+      const comps = labelComponents(colorMap, w, h);
+      const shade = new Uint8Array(comps.count);
+      let any = false;
+      const visit = (a: number, b: number) => {
+        const ca = comps.color[a];
+        const cb = comps.color[b];
+        if (kind[ca] !== PartKind.clothes || group?.[ca] !== group?.[cb]) return;
+        if (labDist2(paletteLab, ca * 3, paletteLab, cb * 3) >= CLOTHES_SHADE * CLOTHES_SHADE) return;
+        shade[a] = shade[b] = 1;
+        any = true;
+      };
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const p = y * w + x;
+          const a = comps.labels[p];
+          if (x < w - 1 && comps.labels[p + 1] !== a) visit(a, comps.labels[p + 1]);
+          if (y < h - 1 && comps.labels[p + w] !== a) visit(a, comps.labels[p + w]);
+        }
+      }
+      if (!any) break;
+      colorMap = mergeRegions(comps, w, h, paletteLab, (id, area) => !!shade[id] && area === comps.area[id], group, 0, CLOTHES_SHADE);
+    }
+  }
 
   // Budget: if there are still too many shapes, merge the smallest until it fits.
   if (params.maxShapes) {
