@@ -3,7 +3,7 @@
 // laid over a separate, coarser paint-by-number of the scene. Each layer is placed in page
 // pixels; the color key is shared, so the same color gets the same number in every layer.
 
-import { labDist2, rgbToLab } from "@/lib/pipeline/color";
+import { labDist2, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import type { PipelineResult, RGB } from "@/lib/pipeline";
 
 export interface Layer {
@@ -22,7 +22,7 @@ export interface Page {
   height: number;
   /** Bottom to top. */
   layers: Layer[];
-  /** Per layer: palette index -> color number (0 = not numbered). */
+  /** Per layer: region -> color number (0 = the blank background, not numbered). */
   numbers: Uint8Array[];
   key: { n: number; rgb: RGB }[];
   /** Number of shapes to color, over all layers. */
@@ -36,6 +36,8 @@ export interface Page {
  * smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 14;
+/** A background variation stays within this ΔE of the color it varies. */
+const VARIATION_MAX = 20;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
  * print size), so it prints at a readable size however the page is scaled. The pipeline
@@ -49,13 +51,19 @@ export const minLabelRadius = (pageWidth: number, scale: number, fontFrac: numbe
 /** Largest number, as a multiple of the smallest. */
 const MAX_FONT_RATIO = 2.4;
 
+/**
+ * `colors` is how many colors the key should have: never more, and when the photo has fewer
+ * distinct colors, gentle variations are added in the background (layer `vary`) to get there.
+ */
 export function buildPage(
   width: number,
   height: number,
   layers: Layer[],
   fontFrac: number,
-  maxColors = Infinity,
+  colors = Infinity,
+  vary?: number,
 ): Page {
+  const maxColors = colors;
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number };
   const entries: Entry[] = [];
@@ -100,13 +108,21 @@ export function buildPage(
     clusters.push({ members: [...a.members, ...b.members], rgb, lab: toLab(rgb), area });
   }
 
+  // Per-region color numbers (palette index -> cluster), then background variations.
+  const byIndex = layers.map(({ result }) => new Int16Array(result.palette.length).fill(-1));
+  clusters.forEach((c, ci) => c.members.forEach((m) => (byIndex[m.layer][m.index] = ci)));
+  const colorsList = clusters.map((c) => ({ rgb: c.rgb, lab: c.lab }));
+  const regionColor = layers.map(({ result }, li) =>
+    Int16Array.from(result.regionColor, (c) => (c === result.background ? -1 : byIndex[li][c])),
+  );
+  if (vary !== undefined && Number.isFinite(colors)) addVariations(layers[vary].result, regionColor[vary], colorsList, colors);
+
   // Numbered dark to light.
-  clusters.sort((a, b) => a.lab[0] - b.lab[0]);
-  const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
-  const key = clusters.map((c, i) => {
-    for (const m of c.members) numbers[m.layer][m.index] = i + 1;
-    return { n: i + 1, rgb: c.rgb };
-  });
+  const order = colorsList.map((c, i) => ({ c, i })).sort((a, b) => a.c.lab[0] - b.c.lab[0]);
+  const numberOf = new Uint8Array(colorsList.length);
+  order.forEach(({ i }, rank) => (numberOf[i] = rank + 1));
+  const key = order.map(({ c }, rank) => ({ n: rank + 1, rgb: c.rgb }));
+  const numbers = regionColor.map((rc) => Uint8Array.from(rc, (c) => (c < 0 ? 0 : numberOf[c])));
 
   let shapes = 0;
   for (const { result } of layers) {
@@ -138,7 +154,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
   placed.forEach((layer, li) => {
     const { result, scale } = layer;
     const { width: w, height: h, labels, regionColor } = result;
-    const color = (index: number) => page.key[page.numbers[li][index] - 1]?.rgb ?? result.palette[index];
+    const color = (region: number) => page.key[page.numbers[li][region] - 1]?.rgb ?? [255, 255, 255];
     const blank = (l: number) => regionColor[l] === result.background;
 
     // Walk the layer's area in page pixels, so lines are one page pixel wide at any scale.
@@ -162,7 +178,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
         let rgb: RGB | null;
         if (blank(l)) rgb = edge ? EDGE : null;
         else if (edge) rgb = EDGE;
-        else rgb = view === "colored" ? color(regionColor[l]) : [255, 255, 255];
+        else rgb = view === "colored" ? color(l) : [255, 255, 255];
         if (!rgb) continue; // leave whatever is underneath
         const q = (Y * W + X) * 4;
         img.data[q] = rgb[0];
@@ -205,10 +221,84 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       if (size < MIN_FONT) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
-        String(page.numbers[li][result.regionColor[i]]),
+        String(page.numbers[li][i]),
         layer.x + result.labelX[i] * scale,
         layer.y + result.labelY[i] * scale,
       );
     }
   });
+}
+
+/**
+ * Adds colors until there are `target`, each a gentle variation of a background color with
+ * the same hue: the farther (upper) half of that color's shapes gets a slightly lighter,
+ * softer version, as distance haze would give it (or, if that's too close to another color, a
+ * slightly darker, richer or softer one). Greens stay green and blues stay blue. A variation is
+ * always clearly different from every other color but stays close to the color it came from. `regionColor` (color index per region) is updated.
+ */
+function addVariations(
+  result: PipelineResult,
+  regionColor: Int16Array,
+  colors: { rgb: RGB; lab: Float32Array }[],
+  target: number,
+) {
+  const tried = new Set<number>();
+  while (colors.length < target) {
+    // The background color covering the most area across at least two shapes.
+    const area = new Float64Array(colors.length);
+    const count = new Uint32Array(colors.length);
+    for (let i = 0; i < result.regionCount; i++) {
+      const c = regionColor[i];
+      if (c < 0 || tried.has(c)) continue;
+      area[c] += result.regionArea[i];
+      count[c]++;
+    }
+    let pick = -1;
+    for (let c = 0; c < colors.length; c++) if (count[c] >= 2 && (pick < 0 || area[c] > area[pick])) pick = c;
+    if (pick < 0) return;
+    tried.add(pick);
+
+    const base = colors[pick].lab;
+    const [L, a, b] = base;
+    // Same hue, always: haze first (lighter, softer), then darker, then richer or softer at
+    // the same lightness, each at two strengths; the first that's clearly its own color wins.
+    const options: [number, number, number][] = [];
+    for (const k of [1, 1.4]) {
+      options.push(
+        [L + 11 * k, a * (1 - 0.15 * k), b * (1 - 0.15 * k)],
+        [L - 11 * k, a * (1 + 0.1 * k), b * (1 + 0.1 * k)],
+        [L + 4 * k, a * (1 + 0.35 * k), b * (1 + 0.35 * k)],
+        [L - 4 * k, a * (1 - 0.35 * k), b * (1 - 0.35 * k)],
+      );
+    }
+    const variant = options
+      .map(([l, aa, bb]) => ({ ...labToRgb(l, aa, bb), lab: new Float32Array([l, aa, bb]) }))
+      .find(
+        (v) =>
+          v.inGamut &&
+          labDist2(v.lab, 0, base, 0) <= VARIATION_MAX * VARIATION_MAX &&
+          colors.every((c) => labDist2(v.lab, 0, c.lab, 0) >= DISTINCT * DISTINCT),
+      );
+    if (!variant) continue;
+
+    // The upper (farther) half of this color's shapes, by area, takes the variation.
+    const shapes = [];
+    for (let i = 0; i < result.regionCount; i++) if (regionColor[i] === pick) shapes.push(i);
+    shapes.sort((i, j) => result.labelY[i] - result.labelY[j]);
+    const half = area[pick] / 2;
+    const index = colors.length;
+    colors.push({ rgb: variant.rgb, lab: toLab(variant.rgb) });
+    let moved = 0;
+    for (const i of shapes) {
+      if (moved >= half && moved > 0) break;
+      regionColor[i] = index;
+      moved += result.regionArea[i];
+    }
+  }
+}
+
+function toLab(rgb: RGB) {
+  const lab = new Float32Array(3);
+  rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+  return lab;
 }
