@@ -205,6 +205,38 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       if (!any) break;
       colorMap = mergeRegions(comps, w, h, paletteLab, (id, area) => !!shade[id] && area === comps.area[id], group, 0, CLOTHES_SHADE);
     }
+
+    // A pattern (flowers, a logo) inside one piece of clothing: a patch whose only neighbor is
+    // one bigger patch of the same person's clothes is part of it, whatever its color.
+    const comps = labelComponents(colorMap, w, h);
+    const only = new Int32Array(comps.count).fill(-1); // the one neighbor, or -2 for several
+    const note = (a: number, b: number) => {
+      if (only[a] === -1) only[a] = b;
+      else if (only[a] !== b) only[a] = -2;
+    };
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = y * w + x;
+        const a = comps.labels[p];
+        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) only[a] = -2; // touches the edge
+        for (const q of [x < w - 1 ? p + 1 : -1, y < h - 1 ? p + w : -1]) {
+          if (q < 0 || comps.labels[q] === a) continue;
+          note(a, comps.labels[q]);
+          note(comps.labels[q], a);
+        }
+      }
+    }
+    const inside = (id: number) => {
+      const nb = only[id];
+      const c = comps.color[id];
+      return (
+        nb >= 0 &&
+        kind[c] === PartKind.clothes &&
+        group?.[c] === group?.[comps.color[nb]] &&
+        comps.area[id] < comps.area[nb]
+      );
+    };
+    colorMap = mergeRegions(comps, w, h, paletteLab, (id, area) => area === comps.area[id] && inside(id), group);
   }
 
   // Budget: if there are still too many shapes, merge the smallest until it fits.

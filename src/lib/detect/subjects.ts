@@ -45,6 +45,11 @@ const HAIR_COLOR_STEP = 2;
 const LEFT_OVER = 250;
 /** Growing clothes between people: extra steps per ΔE of color change crossed. */
 const CLOTHES_EDGE_COST = 2;
+/** …and per ΔE a pixel is from the person's own clothes color. */
+const CLOTHES_OWN_COST = 1.5;
+/** …and per face width beyond this, sideways from their face. */
+const CLOTHES_REACH = 0.9;
+const CLOTHES_SIDE_COST = 3;
 const HAIR_SIDEWAYS = 2.5;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
@@ -819,10 +824,12 @@ export async function detectSubjects(
     const near = new Float32Array(n).fill(Infinity);
     faces.slice(0, 240).forEach((f, i) => {
       const cx = f.x + f.width / 2;
-      const x0 = Math.max(0, Math.floor(cx - f.width * 0.6));
-      const x1 = Math.min(workW - 1, Math.ceil(cx + f.width * 0.6));
-      const y0 = Math.max(0, Math.floor(f.y + f.height * 1.05));
-      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * 3.2));
+      // A narrow strip down the middle of the chest: the edges between people are left to
+      // the growing, so they follow the photo rather than the strip's straight sides.
+      const x0 = Math.max(0, Math.floor(cx - f.width * 0.25));
+      const x1 = Math.min(workW - 1, Math.ceil(cx + f.width * 0.25));
+      const y0 = Math.max(0, Math.floor(f.y + f.height * 1.2));
+      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * 3));
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const p = y * workW + x;
@@ -834,6 +841,17 @@ export async function detectSubjects(
         }
       }
     });
+    // Each person's own clothes color (from their strip), so two nearly white shirts, one a
+    // little pink and one a little gray, each keep to their own.
+    const own = new Float64Array(256 * 4);
+    for (let p = 0; p < n; p++) {
+      const o = owner[p];
+      if (!o) continue;
+      for (let c = 0; c < 3; c++) own[o * 4 + c] += lab[p * 3 + c];
+      own[o * 4 + 3]++;
+    }
+    for (let o = 1; o < 256; o++) for (let c = 0; c < 3; c++) own[o * 4 + c] /= own[o * 4 + 3] || 1;
+
     const cost = new Float64Array(n).fill(Infinity);
     const heap = new MinHeap();
     for (let p = 0; p < n; p++) {
@@ -846,13 +864,23 @@ export async function detectSubjects(
       const [d, p] = heap.pop();
       if (done[p] || d > cost[p]) continue;
       done[p] = 1;
+      const o = owner[p];
       const x = p % workW;
       for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
         if (q < 0 || q >= n || done[q] || !clothes[q]) continue;
         const dE = Math.sqrt(
           (lab[p * 3] - lab[q * 3]) ** 2 + (lab[p * 3 + 1] - lab[q * 3 + 1]) ** 2 + (lab[p * 3 + 2] - lab[q * 3 + 2]) ** 2,
         );
-        const c = d + 1 + dE * CLOTHES_EDGE_COST;
+        // Light and shade change how bright a shirt looks but hardly its tint, so the tint
+        // (a, b) counts most.
+        const off = Math.sqrt(
+          (0.3 * (lab[q * 3] - own[o * 4])) ** 2 + (lab[q * 3 + 1] - own[o * 4 + 1]) ** 2 + (lab[q * 3 + 2] - own[o * 4 + 2]) ** 2,
+        );
+        // A person is only so wide: clothes further to the side of their face than their
+        // shoulders are more likely someone else's.
+        const f = faces[o - 1];
+        const side = Math.max(0, Math.abs((q % workW) - f.x - f.width / 2) / f.width - CLOTHES_REACH);
+        const c = d + 1 + dE * CLOTHES_EDGE_COST + off * CLOTHES_OWN_COST + side * CLOTHES_SIDE_COST;
         if (c < cost[q]) {
           cost[q] = c;
           owner[q] = owner[p];
