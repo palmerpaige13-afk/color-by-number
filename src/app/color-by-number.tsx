@@ -78,8 +78,10 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: "color", label: "Change color", hint: "Tap the shape whose color is wrong." },
   { id: "join", label: "Join", hint: "Tap a shape, then a shape touching it, to remove the line between them." },
   { id: "clean", label: "Clean up a speck", hint: "Tap a small spot to blend it into what's around it." },
-  { id: "line", label: "Add a line", hint: "Drag your finger across a shape to cut it in two." },
+  { id: "line", label: "Add a line", hint: "Drag your finger across a shape to cut it in two. (Use two fingers to move around.)" },
 ];
+/** Most zoom while fixing. */
+const MAX_ZOOM = 5;
 /** How many fixes can be undone. */
 const MAX_UNDO = 30;
 
@@ -340,6 +342,20 @@ export default function ColorByNumber() {
   const [hint, setHint] = useState<string | null>(null);
   /** The line being drawn with the line tool, in page pixels. */
   const drawn = useRef<[number, number][] | null>(null);
+  // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [view, setViewState] = useState({ z: 1, x: 0, y: 0 });
+  const viewRef = useRef(view);
+  /** Sets the zoom, keeping `viewRef` current at once for the next finger move. */
+  const setView = (v: { z: number; x: number; y: number }) => {
+    viewRef.current = v;
+    setViewState(v);
+  };
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ d: number; cx: number; cy: number; z: number } | null>(null);
+  const pan = useRef<{ x: number; y: number; sx: number; sy: number } | null>(null);
+  /** A pinch or a pan just ended: the click that follows isn't a tap. */
+  const skipClick = useRef(false);
 
   useEffect(() => {
     if (result && outlineRef.current) drawPage(outlineRef.current, result, "outline");
@@ -377,16 +393,120 @@ export default function ColorByNumber() {
     return [((e.clientX - box.left) / box.width) * result.width, ((e.clientY - box.top) / box.height) * result.height];
   }
 
-  /** Drawing a line with the line tool: shown as it's drawn, then the shape is cut along it. */
-  function lineStart(e: React.PointerEvent<HTMLDivElement>) {
-    if (!fixing || tool !== "line") return;
-    const pt = pagePoint(e);
-    if (!pt) return;
+  /** A zoom and position kept so the picture always fills its frame. */
+  function clampView(z: number, x: number, y: number) {
+    const box = frameRef.current?.getBoundingClientRect();
+    const zz = Math.min(MAX_ZOOM, Math.max(1, z));
+    if (!box) return { z: zz, x: 0, y: 0 };
+    return {
+      z: zz,
+      x: Math.min(0, Math.max(box.width * (1 - zz), x)),
+      y: Math.min(0, Math.max(box.height * (1 - zz), y)),
+    };
+  }
+
+  /** Zooms by `factor` keeping the point (px, py) of the frame (screen pixels) in place. */
+  function zoomAround(factor: number, px: number, py: number) {
+    const v = viewRef.current;
+    const z = Math.min(MAX_ZOOM, Math.max(1, v.z * factor));
+    const cx = (px - v.x) / v.z;
+    const cy = (py - v.y) / v.z;
+    setView(clampView(z, px - cx * z, py - cy * z));
+  }
+
+  function zoomButton(factor: number) {
+    const box = frameRef.current?.getBoundingClientRect();
+    if (box) zoomAround(factor, box.width / 2, box.height / 2);
+  }
+
+  // Trackpad pinch (and ctrl + scroll wheel) zooms while fixing.
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || !fixing) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const box = el.getBoundingClientRect();
+      zoomAround(Math.exp(-e.deltaY * 0.01), e.clientX - box.left, e.clientY - box.top);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- zoomAround only reads refs
+  }, [fixing, result]);
+
+  /**
+   * Fingers on the picture while fixing: two fingers pinch to zoom and move; one finger draws
+   * (line tool), or taps, or moves the zoomed picture around.
+   */
+  function pointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (!fixing) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try {
-      e.currentTarget.setPointerCapture(e.pointerId); // keep getting the line if the finger strays
+      e.currentTarget.setPointerCapture(e.pointerId); // keep following the finger if it strays
     } catch {
       // not a real pointer (nothing to capture)
     }
+    if (pointers.current.size === 2) {
+      // A second finger: stop drawing and pinch instead.
+      if (drawn.current && result && highlightRef.current) drawHighlight(highlightRef.current, result, picked ? [picked] : []);
+      drawn.current = null;
+      pan.current = null;
+      const [a, b] = [...pointers.current.values()];
+      const box = frameRef.current!.getBoundingClientRect();
+      pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2 - box.left, cy: (a.y + b.y) / 2 - box.top, z: viewRef.current.z };
+      skipClick.current = true;
+      return;
+    }
+    if (tool === "line") lineStart(e);
+    else if (viewRef.current.z > 1) pan.current = { x: viewRef.current.x, y: viewRef.current.y, sx: e.clientX, sy: e.clientY };
+  }
+
+  function pointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const p = pinch.current;
+    if (p && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      const box = frameRef.current!.getBoundingClientRect();
+      const mx = (a.x + b.x) / 2 - box.left;
+      const my = (a.y + b.y) / 2 - box.top;
+      const z = Math.min(MAX_ZOOM, Math.max(1, (p.z * Math.hypot(a.x - b.x, a.y - b.y)) / Math.max(1, p.d)));
+      // Keep the picture point that was under the fingers under them, and follow them.
+      const v = viewRef.current;
+      const cx = (p.cx - v.x) / v.z;
+      const cy = (p.cy - v.y) / v.z;
+      setView(clampView(z, mx - cx * z, my - cy * z));
+      p.cx = mx;
+      p.cy = my;
+      return;
+    }
+    if (drawn.current) {
+      lineMove(e);
+      return;
+    }
+    const q = pan.current;
+    if (q) {
+      const dx = e.clientX - q.sx;
+      const dy = e.clientY - q.sy;
+      if (Math.hypot(dx, dy) > 6) skipClick.current = true;
+      setView(clampView(viewRef.current.z, q.x + dx, q.y + dy));
+    }
+  }
+
+  function pointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    pointers.current.delete(e.pointerId);
+    if (pinch.current) {
+      if (pointers.current.size < 2) pinch.current = null;
+      return;
+    }
+    if (drawn.current) lineEnd();
+    pan.current = null;
+  }
+
+  /** Drawing a line with the line tool: shown as it's drawn, then the shape is cut along it. */
+  function lineStart(e: React.PointerEvent<HTMLDivElement>) {
+    const pt = pagePoint(e);
+    if (!pt) return;
     drawn.current = [pt];
   }
   function lineMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -414,6 +534,10 @@ export default function ColorByNumber() {
 
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
   function tapPicture(e: React.MouseEvent<HTMLDivElement>) {
+    if (skipClick.current) {
+      skipClick.current = false;
+      return;
+    }
     if (!fixing || !result || tool === "line") return;
     const pt = pagePoint(e);
     const spot = pt && shapeAt(result, pt[0], pt[1]);
@@ -572,6 +696,7 @@ export default function ColorByNumber() {
     setFit(pageFit);
     setHistory([]);
     setFixing(false);
+    setView({ z: 1, x: 0, y: 0 });
     setPicked(null);
     setResult(page);
     setReveal(50);
@@ -781,6 +906,7 @@ export default function ColorByNumber() {
               type="button"
               onClick={() => {
                 setFixing((f) => !f);
+                setView({ z: 1, x: 0, y: 0 });
                 setPicked(null);
                 setHint(fixing ? null : (TOOLS.find((t) => t.id === tool)?.hint ?? null));
               }}
@@ -813,14 +939,42 @@ export default function ColorByNumber() {
                     {t.label}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={undo}
-                  disabled={!history.length}
-                  className="ml-auto rounded-full px-3 py-1.5 text-sm font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
-                >
-                  ↶ Undo
-                </button>
+                <span className="ml-auto flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => zoomButton(1 / 1.5)}
+                    disabled={view.z <= 1}
+                    aria-label="Zoom out"
+                    className="h-8 w-8 rounded-full text-lg font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                  >
+                    −
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => zoomButton(1.5)}
+                    disabled={view.z >= MAX_ZOOM}
+                    aria-label="Zoom in"
+                    className="h-8 w-8 rounded-full text-lg font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setView({ z: 1, x: 0, y: 0 })}
+                    disabled={view.z <= 1}
+                    className="rounded-full px-2 py-1.5 text-sm font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                  >
+                    Fit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={undo}
+                    disabled={!history.length}
+                    className="rounded-full px-3 py-1.5 text-sm font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                  >
+                    ↶ Undo
+                  </button>
+                </span>
               </div>
               {hint && <p className="text-sm text-violet-900 dark:text-violet-200">{hint}</p>}
             </div>
@@ -829,23 +983,29 @@ export default function ColorByNumber() {
           {focusNote && <p className="text-sm text-zinc-600 print:hidden dark:text-zinc-400">{focusNote}</p>}
           {/* Before/after: drag the brush to paint the numbered page into the finished picture. */}
           <div
+            ref={frameRef}
             onClick={tapPicture}
-            onPointerDown={lineStart}
-            onPointerMove={lineMove}
-            onPointerUp={lineEnd}
-            onPointerCancel={lineEnd}
-            style={{ touchAction: fixing && tool === "line" ? "none" : undefined }}
+            onPointerDown={pointerDown}
+            onPointerMove={pointerMove}
+            onPointerUp={pointerUp}
+            onPointerCancel={pointerUp}
+            style={{ touchAction: fixing ? "none" : undefined }}
             className={`relative select-none overflow-hidden rounded-lg bg-white shadow-sm ${
               fixing ? (tool === "line" ? "cursor-crosshair ring-2 ring-violet-500" : "cursor-pointer ring-2 ring-violet-500") : ""
             }`}
           >
-            <canvas ref={outlineRef} className="block h-auto w-full" />
-            <canvas
-              ref={paintedRef}
-              className="pointer-events-none absolute inset-0 h-full w-full print:hidden"
-              style={{ clipPath: `inset(0 ${fixing ? 0 : 100 - reveal}% 0 0)` }}
-            />
-            <canvas ref={highlightRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />
+            <div
+              className="relative origin-top-left"
+              style={fixing ? { transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` } : undefined}
+            >
+              <canvas ref={outlineRef} className="block h-auto w-full" />
+              <canvas
+                ref={paintedRef}
+                className="pointer-events-none absolute inset-0 h-full w-full print:hidden"
+                style={{ clipPath: `inset(0 ${fixing ? 0 : 100 - reveal}% 0 0)` }}
+              />
+              <canvas ref={highlightRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />
+            </div>
             <div
               className={`pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden ${fixing ? "hidden" : ""}`}
               style={{ left: `${reveal}%` }}
