@@ -31,8 +31,11 @@ export interface Page {
   fontFrac: number;
 }
 
-/** Colors from different layers closer than this (ΔE) share a number. */
-const SAME_COLOR = 7;
+/**
+ * Every pair of colors in the key must differ by at least this (ΔE, where about 10 is the
+ * smallest difference that's easy to see on paper); closer colors share one number.
+ */
+const DISTINCT = 14;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
  * print size), so it prints at a readable size however the page is scaled. The pipeline
@@ -46,38 +49,70 @@ export const minLabelRadius = (pageWidth: number, scale: number, fontFrac: numbe
 /** Largest number, as a multiple of the smallest. */
 const MAX_FONT_RATIO = 2.4;
 
-export function buildPage(width: number, height: number, layers: Layer[], fontFrac: number): Page {
-  // Every color used anywhere, dark to light, then numbered, merging near-identical colors.
-  const entries: { layer: number; index: number; rgb: RGB; lab: Float32Array }[] = [];
-  layers.forEach(({ result }, layer) => {
-    const used = new Uint8Array(result.palette.length);
-    for (let i = 0; i < result.regionCount; i++) used[result.regionColor[i]] = 1;
-    if (result.background !== undefined) used[result.background] = 0;
+export function buildPage(
+  width: number,
+  height: number,
+  layers: Layer[],
+  fontFrac: number,
+  maxColors = Infinity,
+): Page {
+  // Every color used anywhere, with how much of the page it covers.
+  type Entry = { layer: number; index: number; rgb: RGB; area: number };
+  const entries: Entry[] = [];
+  layers.forEach(({ result, scale }, layer) => {
+    const area = new Float64Array(result.palette.length);
+    for (let i = 0; i < result.regionCount; i++) area[result.regionColor[i]] += result.regionArea[i] * scale * scale;
+    if (result.background !== undefined) area[result.background] = 0;
     result.palette.forEach((rgb, index) => {
-      if (!used[index]) return;
-      const lab = new Float32Array(3);
-      rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
-      entries.push({ layer, index, rgb, lab });
+      if (area[index] > 0) entries.push({ layer, index, rgb, area: area[index] });
     });
   });
-  entries.sort((a, b) => a.lab[0] - b.lab[0]);
 
-  const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
-  const key: { n: number; rgb: RGB; lab: Float32Array }[] = [];
-  for (const e of entries) {
-    let match = key.find((k) => labDist2(k.lab, 0, e.lab, 0) < SAME_COLOR * SAME_COLOR);
-    if (!match) {
-      match = { n: key.length + 1, rgb: e.rgb, lab: e.lab };
-      key.push(match);
+  // Merge the two closest colors (their color becomes the area-weighted mix) until every pair
+  // is easy to tell apart and there are no more than `maxColors`. Shapes don't change; colors
+  // that were barely different just share a number.
+  type Cluster = { members: Entry[]; rgb: RGB; lab: Float32Array; area: number };
+  const toLab = (rgb: RGB) => {
+    const lab = new Float32Array(3);
+    rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+    return lab;
+  };
+  let clusters: Cluster[] = entries.map((e) => ({ members: [e], rgb: e.rgb, lab: toLab(e.rgb), area: e.area }));
+  for (;;) {
+    let bi = -1;
+    let bj = -1;
+    let bd = Infinity;
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
+        if (d < bd) {
+          bd = d;
+          bi = i;
+          bj = j;
+        }
+      }
     }
-    numbers[e.layer][e.index] = match.n;
+    if (bi < 0 || (bd >= DISTINCT * DISTINCT && clusters.length <= maxColors)) break;
+    const [a, b] = [clusters[bi], clusters[bj]];
+    const area = a.area + b.area;
+    const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
+    clusters = clusters.filter((_, k) => k !== bi && k !== bj);
+    clusters.push({ members: [...a.members, ...b.members], rgb, lab: toLab(rgb), area });
   }
+
+  // Numbered dark to light.
+  clusters.sort((a, b) => a.lab[0] - b.lab[0]);
+  const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
+  const key = clusters.map((c, i) => {
+    for (const m of c.members) numbers[m.layer][m.index] = i + 1;
+    return { n: i + 1, rgb: c.rgb };
+  });
 
   let shapes = 0;
   for (const { result } of layers) {
     for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== result.background) shapes++;
   }
-  return { width, height, layers, numbers, key: key.map(({ n, rgb }) => ({ n, rgb })), shapes, fontFrac };
+  return { width, height, layers, numbers, key, shapes, fontFrac };
 }
 
 const EDGE: RGB = [70, 70, 70];
