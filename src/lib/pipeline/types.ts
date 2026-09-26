@@ -60,6 +60,11 @@ export interface PipelineParams {
    * layer will be drawn. Defaults to one suited to drawing at 1.5 page px per working px.
    */
   minLabelRadius?: number;
+  /**
+   * One skin color per person: each face is a single tone, and the person's neck, arms, hands,
+   * legs and feet take that same tone.
+   */
+  oneSkinTone?: boolean;
 }
 
 export interface PipelineInput {
@@ -82,6 +87,8 @@ export interface PipelineInput {
   animals?: RegionMask[];
   /** The people's clothes: kept as their own shapes, apart from skin and background. */
   clothes?: RegionMask;
+  /** The people's bare skin other than faces (neck, arms, legs, feet). */
+  bodySkin?: RegionMask;
 }
 
 export interface PipelineResult {
@@ -102,6 +109,8 @@ export interface PipelineResult {
   background?: number;
   /** Per palette index: what it colors (0 photo, 1 face, 2 hair, 3 clothes, 4 pet). */
   partKind?: Uint8Array;
+  /** Per palette index: which part (a face, a head of hair, a pet) it colors; 0 for none. */
+  partGroup?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];

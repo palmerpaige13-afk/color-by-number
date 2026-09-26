@@ -42,6 +42,7 @@ const DISTINCT = 10;
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
+const PET = 4;
 /**
  * Smallest readable number, in page pixels: a share of the page width (`fontFrac`, from the
  * print size), so it prints at a readable size however the page is scaled. The pipeline
@@ -131,18 +132,25 @@ export function buildPage(
   });
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,
-  // shapes are re-found from the numbers themselves. Each layer's palette becomes the key
+  // shapes are re-found from the numbers themselves. Different people's skin, hair or pets stay
+  // apart even with the same number, so each person keeps their outline. Each layer's palette becomes the key
   // (index = number, 0 = blank background).
   const palette: RGB[] = [[255, 255, 255], ...key.map((k) => k.rgb)];
   const merged = layers.map((layer, li) => {
     const { result } = layer;
     const { width: w, height: h, labels } = result;
     const byNumber = new Uint8Array(w * h);
+    const owner = new Uint8Array(w * h);
+    const ownerOf = (c: number) => {
+      const kind = result.partKind?.[c];
+      return kind === FACE || kind === HAIR || kind === PET ? (result.partGroup?.[c] ?? 0) : 0;
+    };
     for (let p = 0; p < byNumber.length; p++) {
       const c = result.regionColor[labels[p]];
       byNumber[p] = c === result.background ? 0 : numbers[li][c];
+      owner[p] = ownerOf(c);
     }
-    const comps = labelComponents(byNumber, w, h);
+    const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
     const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h));
     const next: PipelineResult = {

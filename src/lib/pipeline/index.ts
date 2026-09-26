@@ -44,7 +44,15 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
 });
 
 export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
-  easy: tuned({ paletteSize: 12, minArea: 450, minRadius: 7, smoothPasses: 2, boundaryPasses: 2, maxShapes: 90 }),
+  easy: tuned({
+    paletteSize: 12,
+    minArea: 450,
+    minRadius: 7,
+    smoothPasses: 2,
+    boundaryPasses: 2,
+    maxShapes: 90,
+    oneSkinTone: true,
+  }),
   medium: tuned({ paletteSize: 16, minArea: 160, minRadius: 5, maxShapes: 150 }),
   hard: tuned({ paletteSize: 24, minArea: 45, minRadius: 3, smoothPasses: 1, boundaryPasses: 1, maxShapes: 280 }),
 };
@@ -92,6 +100,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
           w,
           h,
           faceStyle,
+          params.oneSkinTone ? input.bodySkin : undefined,
         )
       : null;
   let palette = faces?.palette ?? q.palette;
@@ -212,6 +221,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelY: pts.y,
     labelRadius: pts.radius,
     background,
+    partGroup: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.group[i] ?? 0) : undefined,
     partKind: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.kind[i] ?? 0) : undefined,
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),

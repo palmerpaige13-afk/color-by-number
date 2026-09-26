@@ -12,7 +12,11 @@ export interface Components {
 }
 
 /** 4-connected component labeling via iterative flood fill. */
-export function labelComponents(colorMap: Uint8Array, w: number, h: number): Components {
+/**
+ * Connected areas of one color. With `owner`, areas of the same color that belong to different
+ * owners (two people's skin) stay apart; owner 0 belongs to no one.
+ */
+export function labelComponents(colorMap: Uint8Array, w: number, h: number, owner?: Uint8Array): Components {
   const n = w * h;
   const labels = new Int32Array(n).fill(-1);
   const stack = new Int32Array(n);
@@ -22,6 +26,9 @@ export function labelComponents(colorMap: Uint8Array, w: number, h: number): Com
   for (let start = 0; start < n; start++) {
     if (labels[start] !== -1) continue;
     const c = colorMap[start];
+    const o = owner?.[start] ?? 0;
+    const joins = (q: number) =>
+      labels[q] === -1 && colorMap[q] === c && (!owner || !o || !owner[q] || owner[q] === o);
     let top = 0;
     stack[top++] = start;
     labels[start] = count;
@@ -30,19 +37,19 @@ export function labelComponents(colorMap: Uint8Array, w: number, h: number): Com
       const p = stack[--top];
       area++;
       const x = p % w;
-      if (x > 0 && labels[p - 1] === -1 && colorMap[p - 1] === c) {
+      if (x > 0 && joins(p - 1)) {
         labels[p - 1] = count;
         stack[top++] = p - 1;
       }
-      if (x < w - 1 && labels[p + 1] === -1 && colorMap[p + 1] === c) {
+      if (x < w - 1 && joins(p + 1)) {
         labels[p + 1] = count;
         stack[top++] = p + 1;
       }
-      if (p >= w && labels[p - w] === -1 && colorMap[p - w] === c) {
+      if (p >= w && joins(p - w)) {
         labels[p - w] = count;
         stack[top++] = p - w;
       }
-      if (p < n - w && labels[p + w] === -1 && colorMap[p + w] === c) {
+      if (p < n - w && joins(p + w)) {
         labels[p + w] = count;
         stack[top++] = p + w;
       }

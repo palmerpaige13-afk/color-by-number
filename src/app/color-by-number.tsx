@@ -318,9 +318,10 @@ export default function ColorByNumber() {
     let cutout: Uint8Array | undefined;
     let animals: RegionMask[] = [];
     let clothes: RegionMask | undefined;
+    let bodySkin: RegionMask | undefined;
     let note = "";
     try {
-      ({ subjects, cutout, animals, clothes } = await detectSubjects(mainBitmap, main.width, main.height, {
+      ({ subjects, cutout, animals, clothes, bodySkin } = await detectSubjects(mainBitmap, main.width, main.height, {
         cutOut: !!frame,
         sideShare: SIDE_PERSON_SHARE,
       }));
@@ -369,7 +370,7 @@ export default function ColorByNumber() {
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     setBusy(twoLayers ? "Building the people…" : "Building your shapes…");
     const mainResult = await runPipelineAsync(
-      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes },
+      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin },
       { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
 
