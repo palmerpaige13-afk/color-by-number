@@ -36,6 +36,8 @@ const CLOTHES = 4;
 /** Segmenter input size, and how much around the face it looks at (x face size). */
 const SEGMENT_SIZE = 256;
 const SEGMENT_PAD = 3;
+/** A face's own hair starts within this much of its size around the face. */
+const HAIR_SEED_PAD = 0.35;
 
 /** Detector score at which a face is kept even if the landmarker can't trace it (profiles). */
 const SURE_FACE = 0.75;
@@ -413,6 +415,7 @@ export async function detectSubjects(
   // face skin by the segmenter: those become faces too.
   await breathe();
   if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
+  if (peopleCut) extendHair(faceBoxes, peopleCut.hair);
 
   const subjects = [...out, ...faceBoxes].map((b) => ({
     ...b,
@@ -624,9 +627,79 @@ export async function detectSubjects(
     return found;
   }
 
-  /** The people (anything that's part of them) and, within that, their clothes and bare skin. */
-  function cutOutPeople(model: ImageSegmenter): { mask: Uint8Array; clothes: Uint8Array; bodySkin: Uint8Array } {
+  /**
+   * Long hair runs past the square each face's hair is looked for in, and would end in a
+   * straight cut; and a face's square can take in someone else's hair. So each face's hair is
+   * regrown from its own head: starting right around the face, through all the hair found
+   * (on the whole person and around every face), each hair pixel going to the head it is
+   * nearest to by steps through the hair.
+   */
+  function extendHair(faces: SubjectBox[], hairAll: Uint8Array) {
+    const n = workW * workH;
+    const isHair = Uint8Array.from(hairAll);
+    for (const f of faces) if (f.hair) paint(f.hair, isHair);
+    const owner = new Int16Array(n);
+    const reach = new Float32Array(n).fill(Infinity);
+    faces.forEach((f, i) => {
+      if (!f.hair) return;
+      const pad = Math.max(f.width, f.height) * HAIR_SEED_PAD;
+      const cx = f.x + f.width / 2;
+      const cy = f.y + f.height / 2;
+      for (let y = Math.max(0, Math.floor(f.y - pad)); y <= Math.min(workH - 1, f.y + f.height + pad); y++) {
+        for (let x = Math.max(0, Math.floor(f.x - pad)); x <= Math.min(workW - 1, f.x + f.width + pad); x++) {
+          const p = y * workW + x;
+          if (!isHair[p]) continue;
+          const d = Math.hypot((x - cx) / f.width, (y - cy) / f.height);
+          if (d < reach[p]) {
+            reach[p] = d;
+            owner[p] = i + 1;
+          }
+        }
+      }
+    });
+    let frontier: number[] = [];
+    for (let p = 0; p < n; p++) if (owner[p]) frontier.push(p);
+    while (frontier.length) {
+      const next: number[] = [];
+      for (const p of frontier) {
+        const x = p % workW;
+        for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
+          if (q < 0 || q >= n || owner[q] || !isHair[q]) continue;
+          owner[q] = owner[p];
+          next.push(q);
+        }
+      }
+      frontier = next;
+    }
+    faces.forEach((f, i) => {
+      if (!f.hair) return;
+      let x0 = workW, y0 = workH, x1 = -1, y1 = -1;
+      for (let p = 0; p < n; p++) {
+        if (owner[p] !== i + 1) continue;
+        const x = p % workW;
+        const y = (p - x) / workW;
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      }
+      if (x1 < 0) return;
+      const width = x1 - x0 + 1;
+      const height = y1 - y0 + 1;
+      const data = new Uint8Array(width * height);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) if (owner[(y0 + y) * workW + x0 + x] === i + 1) data[y * width + x] = 1;
+      }
+      f.hair = { x: x0, y: y0, width, height, data };
+    });
+  }
+
+  /** The people (anything that's part of them) and, within that, their clothes, bare skin and hair. */
+  function cutOutPeople(model: ImageSegmenter): {
+    mask: Uint8Array;
+    clothes: Uint8Array;
+    bodySkin: Uint8Array;
+    hair: Uint8Array;
+  } {
     const mask = new Uint8Array(workW * workH);
+    const hair = new Uint8Array(workW * workH);
     const clothes = new Uint8Array(workW * workH);
     // Where two people's boxes overlap, clothes go to the person whose box is centered nearer.
     const clothesFit = new Float32Array(workW * workH).fill(Infinity);
@@ -647,12 +720,14 @@ export async function detectSubjects(
       const bg = result.confidenceMasks?.[0]?.getAsFloat32Array().slice();
       const cl = result.confidenceMasks?.[CLOTHES]?.getAsFloat32Array().slice();
       const sk = result.confidenceMasks?.[BODY_SKIN]?.getAsFloat32Array().slice();
+      const hr = result.confidenceMasks?.[HAIR]?.getAsFloat32Array().slice();
       result.close();
       if (!bg) return;
       const clamp = (u: number, v: number) => Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u));
       const at = (u: number, v: number) => bg[clamp(u, v)];
       const clAt = (u: number, v: number) => (cl ? cl[clamp(u, v)] : 0);
       const skAt = (u: number, v: number) => (sk ? sk[clamp(u, v)] : 0);
+      const hrAt = (u: number, v: number) => (hr ? hr[clamp(u, v)] : 0);
       const x0 = Math.max(0, Math.floor(sx * toWork));
       const y0 = Math.max(0, Math.floor(sy * toWork));
       const x1 = Math.min(workW - 1, Math.ceil((sx + side) * toWork));
@@ -683,10 +758,14 @@ export async function detectSubjects(
             (skAt(ui, vi) * (1 - fu) + skAt(ui + 1, vi) * fu) * (1 - fv) +
             (skAt(ui, vi + 1) * (1 - fu) + skAt(ui + 1, vi + 1) * fu) * fv;
           if (s >= 0.5) bodySkin[y * workW + x] = 1;
+          const hv =
+            (hrAt(ui, vi) * (1 - fu) + hrAt(ui + 1, vi) * fu) * (1 - fv) +
+            (hrAt(ui, vi + 1) * (1 - fu) + hrAt(ui + 1, vi + 1) * fu) * fv;
+          if (hv >= 0.5) hair[y * workW + x] = 1;
         }
       }
     });
-    return { mask, clothes, bodySkin };
+    return { mask, clothes, bodySkin, hair };
   }
 }
 
