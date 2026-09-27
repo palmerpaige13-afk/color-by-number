@@ -3,7 +3,7 @@
 // laid over a separate, coarser paint-by-number of the scene. Each layer is placed in page
 // pixels; the color key is shared, so the same color gets the same number in every layer.
 
-import { labDist2, labToRgb, rgbToLab } from "@/lib/pipeline/color";
+import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
@@ -52,7 +52,20 @@ function lively(c: { lab: Float32Array; faces: boolean; hair: boolean }): RGB {
   const [L, a, b] = c.lab;
   const k = c.faces ? LIVELY_SKIN : LIVELY;
   const warm = !c.faces && L > 55 && b > 8 && b > a ? WARM_YELLOW : 1;
-  return labToRgb(L, a * k, b * k * warm);
+  // Boost only as far as the screen can show: past that, a channel clips and the color
+  // shifts (a bright orange turns red), so back off until it fits.
+  let t = 1;
+  if (!labInGamut(L, a * k, b * k * warm)) {
+    let lo = 0;
+    let hi = 1;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      if (labInGamut(L, a * (1 + (k - 1) * mid), b * (1 + (k * warm - 1) * mid))) lo = mid;
+      else hi = mid;
+    }
+    t = lo;
+  }
+  return labToRgb(L, a * (1 + (k - 1) * t), b * (1 + (k * warm - 1) * t));
 }
 
 /**

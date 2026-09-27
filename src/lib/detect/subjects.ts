@@ -58,6 +58,12 @@ const SURE_FACE = 0.75;
 /** A person the detector missed, estimated from their face: this many face widths wide and face heights tall. */
 const MISSED_PERSON_WIDTH = 3.5;
 const MISSED_PERSON_HEIGHT = 8;
+/** A person box within this share of the photo's width of its side edge, and narrower than
+ * SLIVER_RATIO of its height, is someone cut off at the edge. */
+const EDGE_MARGIN = 0.02;
+const SLIVER_RATIO = 0.3;
+/** Someone whose face is smaller than this share of the biggest face is in the background. */
+const BACKGROUND_FACE = 0.55;
 /** Size of the square crop handed to the landmarker. */
 const TRACE_SIZE = 384;
 
@@ -365,9 +371,32 @@ export async function detectSubjects(
 
   // Face shapes and the people cut-out. If the segmenter can't load, faces fall back to
   // landmark outlines and the whole photo is kept.
-  const mainPeople = people.filter(
-    (p) => p.w * p.h >= sideShare * Math.max(...people.map((q) => q.w * q.h)),
-  );
+  //
+  // The main people are the big ones, but not someone cut off at the side of the photo (only a
+  // leg and an arm showing), nor someone in the background: a person whose face is much
+  // smaller than the biggest face is farther away, even if their box is big (holding a child,
+  // or a box estimated from their face).
+  const sliver = (p: { x: number; y: number; w: number; h: number }) =>
+    (p.x <= canvas.width * EDGE_MARGIN || p.x + p.w >= canvas.width * (1 - EDGE_MARGIN)) && p.w < p.h * SLIVER_RATIO;
+  const biggestFace = Math.max(0, ...kept.map((c) => c.h));
+  const faceOf = (p: { x: number; y: number; w: number; h: number }) =>
+    Math.max(
+      0,
+      ...kept
+        .filter((c) => {
+          const fx = c.x + c.w / 2;
+          const fy = c.y + c.h / 2;
+          return fx >= p.x && fx <= p.x + p.w && fy >= p.y && fy <= p.y + p.h * 0.6;
+        })
+        .map((c) => c.h),
+    );
+  const inFront = people.filter((p) => !sliver(p));
+  const biggestBox = Math.max(0, ...inFront.map((q) => q.w * q.h));
+  const mainPeople = inFront.filter((p) => {
+    if (p.w * p.h < sideShare * biggestBox) return false;
+    const face = faceOf(p);
+    return !face || face >= biggestFace * BACKGROUND_FACE;
+  });
   const wantCutout = cutOut && mainPeople.length > 0;
   await breathe();
   const seg = kept.length || wantCutout ? await loadSegmenter().catch(() => null) : null;

@@ -38,6 +38,8 @@ const FACE_MIN_LUMA = 150;
 const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
+/** For a hair color, this darkest share of the hair (shadow between strands) is left out. */
+const HAIR_DARK_SKIP = 0.4;
 /** A separate piece of one tone smaller than this share of the face or hair joins the other tone. */
 const MIN_TONE_PIECE = 0.2;
 /**
@@ -807,7 +809,9 @@ function faceShading(
   // Mean color of a set of face pixels, leaving out the darkest and brightest 10% (eyes,
   // brows, teeth, glare).
   const sorted = [...light].sort((a, b) => a - b);
-  const lo = sorted[Math.floor(sorted.length * 0.1)];
+  // Hair reads as its lit color (blond hair has deep shadows between strands that would
+  // otherwise darken it to brown), so for hair the darker part is left out.
+  const lo = sorted[Math.floor(sorted.length * (brighten ? 0.1 : HAIR_DARK_SKIP))];
   const hi = sorted[Math.floor(sorted.length * 0.9)];
   const meanOf = (pick: (i: number) => boolean): RGB | null => {
     let r0 = 0, g0 = 0, b0 = 0, n = 0;

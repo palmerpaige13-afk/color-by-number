@@ -141,8 +141,10 @@ async function framing(full: ImageBitmap): Promise<{ subjects: Rect; scene: Rect
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
   if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return null;
+  // Someone cut off at the side of the photo (a leg and an arm showing) isn't a subject.
+  const sliver = (b: Rect) => (b.x <= full.width * 0.02 || b.x + b.width >= full.width * 0.98) && b.width < b.height * 0.3;
   const keep = [
-    ...found.people.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest),
+    ...found.people.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest && !sliver(b)),
     ...found.animals.filter((b) => area(b) >= PET_SHARE * biggest),
   ];
   const x0 = Math.min(...keep.map((b) => b.x));
@@ -756,7 +758,12 @@ export default function ColorByNumber() {
     setBusy(twoLayers ? "Building the people…" : "Building your shapes…");
     const mainResult = await runPipelineAsync(
       { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin },
-      { ...budget(twoLayers ? PEOPLE_SHARE : 1), minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
+      {
+        ...budget(twoLayers ? PEOPLE_SHARE : 1),
+        // People are kept simple so a page's detail goes into the background; with no
+        // background they're the whole page, so they get the difficulty's own detail.
+        ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
+        minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
 
     let page: Page;

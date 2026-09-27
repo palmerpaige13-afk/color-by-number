@@ -55,3 +55,20 @@ export function labToRgb(L: number, a: number, b: number): [number, number, numb
     return Math.round(Math.min(255, Math.max(0, c * 255)));
   }) as [number, number, number];
 }
+
+/** Whether a Lab color can be shown on screen as it is (without clipping a channel). */
+export function labInGamut(L: number, a: number, b: number): boolean {
+  const fy = (L + 16) / 116;
+  const fx = fy + a / 500;
+  const fz = fy - b / 200;
+  const inv = (t: number) => (t ** 3 > 216 / 24389 ? t ** 3 : (116 * t - 16) / (24389 / 27));
+  const x = inv(fx) * XN;
+  const y = inv(fy);
+  const z = inv(fz) * ZN;
+  const lin = [
+    x * 3.2404542 - y * 1.5371385 - z * 0.4985314,
+    -x * 0.969266 + y * 1.8760108 + z * 0.041556,
+    x * 0.0556434 - y * 0.2040259 + z * 1.0572252,
+  ];
+  return lin.every((v) => v >= -0.002 && v <= 1.002);
+}
