@@ -121,6 +121,8 @@ export interface PipelineResult {
   background?: number;
   /** Per palette index: what it colors (0 photo, 1 face, 2 hair, 3 clothes, 4 pet). */
   partKind?: Uint8Array;
+  /** Per region, once a page is built: what it is (as partKind: 0 anything else, 1 face or skin, 2 hair, 3 clothes, 4 pet). */
+  regionKind?: Uint8Array;
   /** Per palette index: which part (a face, a head of hair, a pet) it colors; 0 for none. */
   partGroup?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */

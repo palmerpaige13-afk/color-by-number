@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
@@ -83,6 +84,8 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
 ];
 /** Most zoom while fixing. */
 const MAX_ZOOM = 5;
+/** Most fixes kept for one report. */
+const MAX_LOG = 300;
 /** How many fixes can be undone. */
 const MAX_UNDO = 30;
 
@@ -347,6 +350,13 @@ export default function ColorByNumber() {
   const [offer, setOffer] = useState<Spot | null>(null);
   /** The color wheel for making a new color is open. */
   const [wheelOpen, setWheelOpen] = useState(false);
+  // Helping improve the site: the fixes made since the last report, the page as first made,
+  // and the "help" form at the bottom.
+  const [fixLog, setFixLog] = useState<FixEntry[]>([]);
+  const made = useRef({ people: 0, faces: 0, shapes: 0, colors: 0 });
+  const [sharePhoto, setSharePhoto] = useState(false);
+  const [helpNote, setHelpNote] = useState("");
+  const [helpState, setHelpState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   /** The line being drawn with the line tool, in page pixels. */
   const drawn = useRef<[number, number][] | null>(null);
   // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
@@ -373,11 +383,18 @@ export default function ColorByNumber() {
     if (result && highlightRef.current) drawHighlight(highlightRef.current, result, fixing && picked ? [picked] : []);
   }, [result, picked, fixing]);
 
-  /** Makes a fix: the new page replaces the current one, which is kept for undo. */
-  function apply(next: Page | string) {
+  /**
+   * Makes a fix: the new page replaces the current one, which is kept for undo. `entry`
+   * describes the fix for a report (if the person later chooses to send one).
+   */
+  function apply(next: Page | string, entry?: FixEntry) {
     if (typeof next === "string") {
       setHint(next);
       return;
+    }
+    if (entry) {
+      setFixLog((log) => [...log.slice(-(MAX_LOG - 1)), entry]);
+      if (helpState === "sent") setHelpState("idle");
     }
     if (result) setHistory((h) => [...h.slice(-(MAX_UNDO - 1)), result]);
     setResult(next);
@@ -390,11 +407,19 @@ export default function ColorByNumber() {
    * Changes the picked shape's color to number `n` (of `base`, the page with any new color);
    * if it now matches a touching shape, asks about joining.
    */
-  function recolorPicked(n: number, base = result) {
+  function recolorPicked(n: number, how: "eyedropper" | "key" | "new color", base = result) {
     if (!base || !picked) return;
     const next = recolor(base, picked, n);
     setWheelOpen(false);
-    apply(next);
+    apply(next, {
+      tool: "color",
+      how,
+      ...describe(base, picked),
+      from: numberAt(base, picked),
+      to: n,
+      from_rgb: [...(base.key[numberAt(base, picked) - 1]?.rgb ?? [])],
+      to_rgb: [...(base.key[n - 1]?.rgb ?? [])],
+    });
     const at = pickedAt.current;
     const spot = at && shapeAt(next, at[0], at[1]);
     if (spot && sameColorNeighbors(next, spot) > 0) {
@@ -406,6 +431,7 @@ export default function ColorByNumber() {
   function undo() {
     const last = history[history.length - 1];
     if (!last) return;
+    setFixLog((log) => [...log, { tool: "undo" }]);
     setHistory((h) => h.slice(0, -1));
     setResult(last);
     setPicked(null);
@@ -555,7 +581,9 @@ export default function ColorByNumber() {
     if (!line || !result) return;
     const next = splitAlong(result, line);
     if (typeof next === "string" && highlightRef.current) drawHighlight(highlightRef.current, result, []);
-    apply(next);
+    const mid = line[Math.floor(line.length / 2)];
+    const spot = shapeAt(result, mid[0], mid[1]);
+    apply(next, spot ? { tool: "line", ...describe(result, spot) } : undefined);
   }
 
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
@@ -568,11 +596,13 @@ export default function ColorByNumber() {
     const pt = pagePoint(e);
     const spot = pt && shapeAt(result, pt[0], pt[1]);
     if (!spot) return;
-    if (tool === "clean") apply(cleanUp(result, spot));
-    else if (tool === "join" && picked) apply(join(result, picked, spot));
-    else if (tool === "color" && picked && (spot.layer !== picked.layer || spot.region !== picked.region)) {
+    if (tool === "clean") apply(cleanUp(result, spot), { tool: "clean", ...describe(result, spot) });
+    else if (tool === "join" && picked) {
+      const [a, b] = [describe(result, picked), describe(result, spot)];
+      apply(join(result, picked, spot), { tool: "join", layer: a.layer, parts: [a.part, b.part], sizes: [a.size, b.size] });
+    } else if (tool === "color" && picked && (spot.layer !== picked.layer || spot.region !== picked.region)) {
       // Eyedropper: copy the color of the shape tapped second.
-      recolorPicked(numberAt(result, spot));
+      recolorPicked(numberAt(result, spot), "eyedropper");
     } else {
       setPicked(spot);
       setOffer(null);
@@ -583,6 +613,35 @@ export default function ColorByNumber() {
           ? "Now tap a shape touching it to join them."
           : "Now tap a shape in the picture that has the color you want. You can also pick from the key below, or make a new color.",
       );
+    }
+  }
+
+  /** Sends what was fixed (and the photo, if the person chose to share it). */
+  async function sendHelp() {
+    if (!result) return;
+    setHelpState("sending");
+    try {
+      await sendReport(
+        {
+          difficulty,
+          background,
+          print_size: printSize,
+          people: made.current.people,
+          faces: made.current.faces,
+          shapes_before: made.current.shapes,
+          shapes_after: result.shapes,
+          colors_before: made.current.colors,
+          colors_after: result.key.length,
+          fixes: fixLog,
+          note: helpNote.trim().slice(0, 1000),
+        },
+        sharePhoto && file ? file : undefined,
+      );
+      setHelpState("sent");
+      setFixLog([]);
+      setHelpNote("");
+    } catch {
+      setHelpState("failed");
     }
   }
 
@@ -732,6 +791,16 @@ export default function ColorByNumber() {
     }
     full.close();
     setFit(pageFit);
+    made.current = {
+      people: subjects.filter((s) => s.kind === "person").length,
+      faces: faces.length,
+      shapes: page.shapes,
+      colors: page.key.length,
+    };
+    setFixLog([]);
+    setHelpState("idle");
+    setHelpNote("");
+    setSharePhoto(false);
     setHistory([]);
     setFixing(false);
     setView({ z: 1, x: 0, y: 0 });
@@ -1021,7 +1090,7 @@ export default function ColorByNumber() {
                     <>
                       <button
                         type="button"
-                        onClick={() => result && apply(joinSameColor(result, offer))}
+                        onClick={() => result && apply(joinSameColor(result, offer), { tool: "join same color", ...describe(result, offer) })}
                         className="rounded-full bg-violet-600 px-3 py-1 text-sm font-semibold text-white hover:bg-violet-700"
                       >
                         Join them
@@ -1054,7 +1123,7 @@ export default function ColorByNumber() {
                   start={result.key[numberAt(result, picked) - 1]?.rgb ?? [200, 160, 120]}
                   onUse={(rgb) => {
                     const added = addColor(result, rgb);
-                    recolorPicked(added.n, added.page);
+                    recolorPicked(added.n, "new color", added.page);
                   }}
                   onCancel={() => setWheelOpen(false)}
                 />
@@ -1129,7 +1198,7 @@ export default function ColorByNumber() {
                     <button
                       type="button"
                       disabled={!choosing}
-                      onClick={() => recolorPicked(n)}
+                      onClick={() => recolorPicked(n, "key")}
                       className={`flex items-center gap-2 rounded-lg p-0.5 ${choosing ? "cursor-pointer ring-violet-400 hover:ring-2" : "cursor-default"}`}
                     >
                       <span
@@ -1142,6 +1211,52 @@ export default function ColorByNumber() {
                 );
               })}
             </ul>
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 print:hidden dark:border-zinc-800">
+            <h2 className="font-semibold">Help make this site better</h2>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Did something come out wrong? Fix it with <span className="font-semibold">Fix it</span>, then send us what
+              you changed, and we&apos;ll use it to make the pages come out right on their own. We only get your settings
+              and a list of your fixes (like &ldquo;joined two clothes shapes&rdquo;), not your photo, unless you
+              choose to share it below.
+            </p>
+            <label className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                checked={sharePhoto}
+                onChange={(e) => setSharePhoto(e.target.checked)}
+                className="mt-0.5 accent-violet-600"
+              />
+              <span>Also share my photo, so you can see exactly what went wrong. It&apos;s kept private and only used to improve the site.</span>
+            </label>
+            <textarea
+              value={helpNote}
+              onChange={(e) => setHelpNote(e.target.value)}
+              maxLength={1000}
+              rows={2}
+              placeholder="Anything else we should know? (optional)"
+              className="rounded-lg border border-zinc-300 p-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={sendHelp}
+                disabled={helpState === "sending" || (!fixLog.length && !helpNote.trim())}
+                className="rounded-full bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-40"
+              >
+                {helpState === "sending" ? "Sending…" : "Send"}
+              </button>
+              <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                {helpState === "sent"
+                  ? "Thank you! We got it."
+                  : helpState === "failed"
+                    ? "Sorry, that didn't send. Check your connection and try again."
+                    : fixLog.length
+                      ? `${fixLog.length} ${fixLog.length === 1 ? "fix" : "fixes"} to send`
+                      : "Make a fix or write a note to send."}
+              </span>
+            </div>
           </div>
         </section>
       )}

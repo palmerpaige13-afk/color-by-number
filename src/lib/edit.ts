@@ -51,7 +51,7 @@ function rebuild(page: Page, li: number, into: (region: number) => number, color
   const r = page.layers[li].result;
   const labels = Uint32Array.from(r.labels, into);
   const colors = Array.from(r.regionColor, (c, region) => color?.get(region) ?? c);
-  return finish(page, li, labels, colors);
+  return finish(page, li, labels, colors, Array.from(r.regionKind ?? []));
 }
 
 /**
@@ -59,11 +59,12 @@ function rebuild(page: Page, li: number, into: (region: number) => number, color
  * gaps allowed) and `colors` each shape's number. Shapes are renumbered from 0 and their
  * number spots found again.
  */
-function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Page {
+function finish(page: Page, li: number, ids: Uint32Array, colors: number[], kinds: number[]): Page {
   const r = page.layers[li].result;
   const { width: w, height: h } = r;
   const remap = new Map<number, number>();
   const regionColor: number[] = [];
+  const regionKind: number[] = [];
   const labels = new Uint16Array(ids.length);
   for (let p = 0; p < ids.length; p++) {
     let to = remap.get(ids[p]);
@@ -71,6 +72,7 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Pag
       to = regionColor.length;
       remap.set(ids[p], to);
       regionColor.push(colors[ids[p]]);
+      regionKind.push(kinds[ids[p]] ?? 0);
     }
     labels[p] = to;
   }
@@ -87,6 +89,7 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Pag
     labelX: pts.x,
     labelY: pts.y,
     labelRadius: pts.radius,
+    regionKind: Uint8Array.from(regionKind),
   };
   const layers = page.layers.map((l, i) => (i === li ? { ...l, result } : l));
   let shapes = 0;
@@ -109,6 +112,16 @@ export function addColor(page: Page, rgb: RGB): { page: Page; n: number } {
   const layers = page.layers.map((l) => ({ ...l, result: { ...l.result, palette: [...l.result.palette, rgb] } }));
   const numbers = page.numbers.map((nums) => Uint8Array.from([...nums, n]));
   return { page: { ...page, key, layers, numbers }, n };
+}
+
+/** What a shape is, in words, and how much of the page it covers (share of the page area). */
+export function describe(page: Page, spot: Spot): { part: string; layer: string; size: number } {
+  const { result: r, scale } = page.layers[spot.layer];
+  const kind = r.regionKind?.[spot.region] ?? 0;
+  const layer = page.layers.length > 1 && spot.layer === 0 ? "background" : "main";
+  const part = ["other", "skin", "hair", "clothes", "pet"][kind] ?? "other";
+  const size = (r.regionArea[spot.region] * scale * scale) / (page.width * page.height);
+  return { part: kind === 0 && layer === "background" ? "background" : part, layer, size: Math.round(size * 100000) / 100000 };
 }
 
 /** The color number of the shape at `spot`. */
@@ -255,6 +268,7 @@ export function splitAlong(page: Page, line: [number, number][]): Page | string 
     if (n > sizes[biggest]) biggest = id;
   });
   const colors = Array.from(r.regionColor);
+  const kinds = Array.from(r.regionKind ?? []);
   const ids = Uint32Array.from(labels);
   const newId = new Map<number, number>();
   for (let p = 0; p < labels.length; p++) {
@@ -263,11 +277,12 @@ export function splitAlong(page: Page, line: [number, number][]): Page | string 
     if (id === undefined) {
       id = colors.length;
       colors.push(r.regionColor[spot.region]);
+      kinds[id] = r.regionKind?.[spot.region] ?? 0;
       newId.set(piece[p], id);
     }
     ids[p] = id;
   }
-  return finish(page, spot.layer, ids, colors);
+  return finish(page, spot.layer, ids, colors, kinds);
 }
 
 /** Shortest line that counts, as a share of the page width. */

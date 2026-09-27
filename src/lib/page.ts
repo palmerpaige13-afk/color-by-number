@@ -212,6 +212,8 @@ export function buildPage(
     }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
+    const regionKind = new Uint8Array(comps.count);
+    for (let p = 0; p < newLabels.length; p++) regionKind[newLabels[p]] = result.partKind?.[result.regionColor[labels[p]]] ?? 0;
     const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h));
     const next: PipelineResult = {
       ...result,
@@ -223,6 +225,7 @@ export function buildPage(
       labelX: pts.x,
       labelY: pts.y,
       labelRadius: pts.radius,
+      regionKind,
       background: result.background === undefined ? undefined : 0,
     };
     return { ...layer, result: next };
