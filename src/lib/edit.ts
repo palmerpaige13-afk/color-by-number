@@ -3,7 +3,7 @@
 // as it was), so undo is just going back to the previous page.
 
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
-import type { PipelineResult } from "@/lib/pipeline";
+import type { PipelineResult, RGB } from "@/lib/pipeline";
 import type { Page } from "@/lib/page";
 
 /** A shape on the page: which layer, and which shape (region) in it. */
@@ -97,6 +97,24 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[]): Pag
 /** The page with `spot` colored as number `n` (1-based, from the key). */
 export function recolor(page: Page, spot: Spot, n: number): Page {
   return rebuild(page, spot.layer, (region) => region, new Map([[spot.region, n]]));
+}
+
+/**
+ * The page with a new color added to the key (the next number), and that number. Every
+ * layer's palette gets it too, so shapes can be colored with it.
+ */
+export function addColor(page: Page, rgb: RGB): { page: Page; n: number } {
+  const n = page.key.length + 1;
+  const key = [...page.key, { n, rgb }];
+  const layers = page.layers.map((l) => ({ ...l, result: { ...l.result, palette: [...l.result.palette, rgb] } }));
+  const numbers = page.numbers.map((nums) => Uint8Array.from([...nums, n]));
+  return { page: { ...page, key, layers, numbers }, n };
+}
+
+/** The color number of the shape at `spot`. */
+export function numberAt(page: Page, spot: Spot): number {
+  const li = spot.layer;
+  return page.numbers[li][page.layers[li].result.regionColor[spot.region]];
 }
 
 /** How many touching shapes have the same number as `spot` (a line between them could go). */

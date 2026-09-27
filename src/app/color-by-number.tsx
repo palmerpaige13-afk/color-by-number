@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { cleanUp, drawHighlight, join, joinSameColor, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { ColorWheel } from "@/app/color-wheel";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
@@ -344,6 +345,8 @@ export default function ColorByNumber() {
   const pickedAt = useRef<[number, number] | null>(null);
   /** A recolored shape that now matches a touching shape: offer to join them. */
   const [offer, setOffer] = useState<Spot | null>(null);
+  /** The color wheel for making a new color is open. */
+  const [wheelOpen, setWheelOpen] = useState(false);
   /** The line being drawn with the line tool, in page pixels. */
   const drawn = useRef<[number, number][] | null>(null);
   // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
@@ -383,10 +386,14 @@ export default function ColorByNumber() {
     setHint(TOOLS.find((t) => t.id === tool)?.hint ?? null);
   }
 
-  /** Changes the picked shape's color; if it now matches a touching shape, asks about joining. */
-  function recolorPicked(n: number) {
-    if (!result || !picked) return;
-    const next = recolor(result, picked, n);
+  /**
+   * Changes the picked shape's color to number `n` (of `base`, the page with any new color);
+   * if it now matches a touching shape, asks about joining.
+   */
+  function recolorPicked(n: number, base = result) {
+    if (!base || !picked) return;
+    const next = recolor(base, picked, n);
+    setWheelOpen(false);
     apply(next);
     const at = pickedAt.current;
     const spot = at && shapeAt(next, at[0], at[1]);
@@ -563,11 +570,19 @@ export default function ColorByNumber() {
     if (!spot) return;
     if (tool === "clean") apply(cleanUp(result, spot));
     else if (tool === "join" && picked) apply(join(result, picked, spot));
-    else {
+    else if (tool === "color" && picked && (spot.layer !== picked.layer || spot.region !== picked.region)) {
+      // Eyedropper: copy the color of the shape tapped second.
+      recolorPicked(numberAt(result, spot));
+    } else {
       setPicked(spot);
       setOffer(null);
+      setWheelOpen(false);
       pickedAt.current = pt;
-      setHint(tool === "join" ? "Now tap a shape touching it to join them." : "Now tap the color it should be in the key below.");
+      setHint(
+        tool === "join"
+          ? "Now tap a shape touching it to join them."
+          : "Now tap a shape in the picture that has the color you want. You can also pick from the key below, or make a new color.",
+      );
     }
   }
 
@@ -575,6 +590,7 @@ export default function ColorByNumber() {
     setTool(t);
     setPicked(null);
     setOffer(null);
+    setWheelOpen(false);
     setHint(TOOLS.find((x) => x.id === t)?.hint ?? null);
   }
 
@@ -1022,7 +1038,26 @@ export default function ColorByNumber() {
                       </button>
                     </>
                   )}
+                  {tool === "color" && picked && !wheelOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setWheelOpen(true)}
+                      className="rounded-full border border-violet-300 bg-white px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-violet-100 dark:bg-zinc-900 dark:text-violet-200"
+                    >
+                      🎨 New color
+                    </button>
+                  )}
                 </div>
+              )}
+              {tool === "color" && picked && wheelOpen && result && (
+                <ColorWheel
+                  start={result.key[numberAt(result, picked) - 1]?.rgb ?? [200, 160, 120]}
+                  onUse={(rgb) => {
+                    const added = addColor(result, rgb);
+                    recolorPicked(added.n, added.page);
+                  }}
+                  onCancel={() => setWheelOpen(false)}
+                />
               )}
             </div>
           )}
