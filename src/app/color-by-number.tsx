@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
@@ -1219,7 +1220,10 @@ export default function ColorByNumber() {
               Did something come out wrong? Fix it with <span className="font-semibold">Fix it</span>, then send us what
               you changed, and we&apos;ll use it to make the pages come out right on their own. We only get your settings
               and a list of your fixes (like &ldquo;joined two clothes shapes&rdquo;), not your photo, unless you
-              choose to share it below.
+              choose to share it below.{" "}
+              <Link href="/privacy" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
+                How we handle this
+              </Link>
             </p>
             <label className="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
               <input

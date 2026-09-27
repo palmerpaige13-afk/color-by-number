@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -23,7 +24,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <footer className="mt-auto border-t border-zinc-200 px-4 py-4 text-center text-sm text-zinc-500 print:hidden dark:border-zinc-800">
+          Your photos stay on your device. ·{" "}
+          <Link href="/privacy" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
+            Privacy
+          </Link>
+        </footer>
+      </body>
     </html>
   );
 }
