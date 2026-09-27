@@ -37,6 +37,17 @@ const BUDGET_PART_DIST = 20;
 const CLOTHES_SHADE = 22;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
 const PATTERN_SHARE = 0.5;
+/**
+ * A head resting against someone casts a shadow on their clothes (gray on a white shirt,
+ * right next to the hair). On light clothes (mostly a color at least HEAD_SHADOW_LIGHT in
+ * L), a patch at least HEAD_SHADOW_MIN_L darker, at least HEAD_SHADOW_NEAR of it within this
+ * share of the picture's width of hair, touching the hair or another patch of shadow, is
+ * that shadow.
+ */
+const HEAD_SHADOW_REACH = 0.07;
+const HEAD_SHADOW_NEAR = 0.5;
+const HEAD_SHADOW_LIGHT = 75;
+const HEAD_SHADOW_MIN_L = 5;
 
 /** Region-merge group of the blank background of a cut-out photo. */
 const BACKGROUND_GROUP = BLANK_GROUP;
@@ -55,8 +66,9 @@ const tuned = (p: Partial<PipelineParams> & Pick<PipelineParams, "minArea" | "mi
 });
 
 /**
- * People look the same at every difficulty (one skin color per person, clothes without extra
- * shadow patches, as on Easy); harder pages add their shapes and colors to the background.
+ * On Easy and Medium people look the same (one skin color per person, clothes without extra
+ * shadow patches, as on Easy); Medium adds its shapes and colors to the background. Hard
+ * keeps one skin color per person but gives people its own finer detail.
  */
 const PEOPLE = { oneSkinTone: true, partMinArea: 450 * RES * RES, partMinRadius: 7 * RES };
 
@@ -79,9 +91,104 @@ export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
     smoothPasses: 1,
     boundaryPasses: 1,
     maxShapes: 280,
-    ...PEOPLE,
+    oneSkinTone: true,
   }),
 };
+
+/**
+ * Shadows cast by a head on light clothes (see HEAD_SHADOW_REACH): each patch of shadow
+ * takes the clothes' own light color. Letters and prints away from the hair stay.
+ */
+function removeHeadShadows(
+  colorMap: Uint8Array,
+  w: number,
+  h: number,
+  paletteLab: Float32Array,
+  kind: Uint8Array,
+  group?: Uint8Array,
+): Uint8Array {
+  if (!group) return colorMap;
+  const n = w * h;
+  // How far each pixel is from hair (4-connected steps), up to the reach.
+  const reach = Math.max(4, Math.round(w * HEAD_SHADOW_REACH));
+  const dist = new Uint16Array(n).fill(65535);
+  let queue: number[] = [];
+  for (let p = 0; p < n; p++) if (kind[colorMap[p]] === PartKind.hair) {
+    dist[p] = 0;
+    queue.push(p);
+  }
+  if (!queue.length) return colorMap;
+  for (let d = 1; d <= reach && queue.length; d++) {
+    const next: number[] = [];
+    for (const p of queue) {
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= n || dist[q] <= d) continue;
+        dist[q] = d;
+        next.push(q);
+      }
+    }
+    queue = next;
+  }
+
+  const comps = labelComponents(colorMap, w, h);
+  const { count, labels, color, area } = comps;
+  const near = new Uint32Array(count);
+  for (let p = 0; p < n; p++) if (dist[p] <= reach) near[labels[p]]++;
+  const adj: Set<number>[] = Array.from({ length: count }, () => new Set());
+  const touchesHair = new Uint8Array(count);
+  for (let p = 0; p < n; p++) {
+    const x = p % w;
+    for (const q of [x < w - 1 ? p + 1 : -1, p + w < n ? p + w : -1]) {
+      if (q < 0 || labels[q] === labels[p]) continue;
+      const a = labels[p];
+      const b = labels[q];
+      adj[a].add(b);
+      adj[b].add(a);
+      if (kind[color[b]] === PartKind.hair) touchesHair[a] = 1;
+      if (kind[color[a]] === PartKind.hair) touchesHair[b] = 1;
+    }
+  }
+  // Each piece of clothing's own light color: the light color covering most of it.
+  const lightArea = new Map<number, number>(); // color -> area
+  for (let i = 0; i < count; i++) {
+    const c = color[i];
+    if (kind[c] === PartKind.clothes && paletteLab[c * 3] >= HEAD_SHADOW_LIGHT) lightArea.set(c, (lightArea.get(c) ?? 0) + area[i]);
+  }
+  const base = new Map<number, number>(); // group -> color
+  for (const [c, a] of lightArea) {
+    const cur = base.get(group[c]);
+    if (cur === undefined || a > lightArea.get(cur)!) base.set(group[c], c);
+  }
+  // Shadow: darker patches of it, mostly near the hair, touching the hair or more shadow.
+  // (Letters and prints right by the hair go too: they'd be cut up by the shadow anyway.)
+  const shadow = new Uint8Array(count);
+  const isShadow = (i: number) => {
+    const c = color[i];
+    const b = base.get(group[c]);
+    if (kind[c] !== PartKind.clothes || b === undefined) return false;
+    if (near[i] < area[i] * HEAD_SHADOW_NEAR) return false;
+    if (paletteLab[c * 3] > paletteLab[b * 3] - HEAD_SHADOW_MIN_L) return false;
+    if (touchesHair[i]) return true;
+    for (const nb of adj[i]) if (shadow[nb]) return true;
+    return false;
+  };
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (let i = 0; i < count; i++) {
+      if (!shadow[i] && isShadow(i)) {
+        shadow[i] = 1;
+        changed = true;
+      }
+    }
+  }
+  const out = Uint8Array.from(colorMap);
+  for (let p = 0; p < n; p++) {
+    const r = labels[p];
+    if (shadow[r]) out[p] = base.get(group[color[r]])!;
+  }
+  return out;
+}
 
 export function runPipeline(input: PipelineInput, params: PipelineParams): PipelineResult {
   const { width: w, height: h } = input;
@@ -177,6 +284,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id]), raw.color[id]),
     group,
   );
+
+  if (faces) colorMap = removeHeadShadows(colorMap, w, h, paletteLab, faces.kind, group);
 
   // On easier pages clothes are one color per piece of clothing: shadow and light on a shirt
   // (shades close to their neighbor in the same person's clothes) merge whatever their size,
