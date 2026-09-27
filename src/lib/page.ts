@@ -93,6 +93,11 @@ const COOL_GREEN_HUE = 135;
 /** Pale tones: Lab chroma below this get a blue tint. */
 const COOL_PALE_CHROMA = 14;
 
+/** Skin colors closer than this (ΔE) share a number: a person's arms and legs are exact copies of their face color; different people's skin never is. */
+const SAME_SKIN = 0.5;
+/** Different people's skin colors are kept at least this far apart (ΔE), nudging lightness. */
+const MIN_SKIN_GAP = 7;
+
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
 const HAIR = 2;
@@ -121,7 +126,7 @@ export function buildPage(
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
-  type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number };
+  type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string };
   const entries: Entry[] = [];
   layers.forEach(({ result, scale }, layer) => {
     const area = new Float64Array(result.palette.length);
@@ -130,14 +135,47 @@ export function buildPage(
     result.palette.forEach((rgb, index) => {
       if (area[index] <= 0) return;
       const kind = result.partKind?.[index] ?? 0;
-      entries.push({ layer, index, rgb: kind ? rgb : coolBoost(rgb, cool), area: area[index], kind });
+      const face = kind === FACE ? `${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
+      entries.push({ layer, index, rgb: kind ? rgb : coolBoost(rgb, cool), area: area[index], kind, face });
     });
   });
+
+  // Which people's skin touches someone else's (a cheek-to-cheek hug, a child in arms): only
+  // those need their own numbers; people standing apart can share one.
+  const touching = new Set<string>();
+  layers.forEach(({ result }, layer) => {
+    const { width: w, height: h, labels, regionColor, partKind, partGroup } = result;
+    const skinOf = (p: number) => {
+      const c = regionColor[labels[p]];
+      return partKind?.[c] === FACE ? `${layer}:${partGroup?.[c] ?? 0}` : null;
+    };
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = y * w + x;
+        const a = skinOf(p);
+        if (!a) continue;
+        for (const q of [x < w - 1 ? p + 1 : -1, y < h - 1 ? p + w : -1]) {
+          const b = q >= 0 ? skinOf(q) : null;
+          if (b && b !== a) touching.add(`${a}|${b}`).add(`${b}|${a}`);
+        }
+      }
+    }
+  });
+  const touch = (a: Set<string>, b: Set<string>) => [...a].some((x) => [...b].some((y) => touching.has(`${x}|${y}`)));
 
   // Merge the two closest colors (their color becomes the area-weighted mix) until every pair
   // is easy to tell apart and there are no more than `maxColors`. Shapes don't change; colors
   // that were barely different just share a number.
-  type Cluster = { members: Entry[]; rgb: RGB; lab: Float32Array; area: number; faces: boolean; hair: boolean };
+  type Cluster = {
+    members: Entry[];
+    rgb: RGB;
+    lab: Float32Array;
+    area: number;
+    faces: boolean;
+    hair: boolean;
+    /** The faces (and skin) whose colors are in this cluster. */
+    who: Set<string>;
+  };
   const toLab = (rgb: RGB) => {
     const lab = new Float32Array(3);
     rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
@@ -150,9 +188,17 @@ export function buildPage(
     area: e.area,
     faces: e.kind === FACE,
     hair: e.kind === HAIR,
+    who: new Set(e.face ? [e.face] : []),
   }));
-  // A face and hair never share a number, however close their colors are.
-  const canMerge = (a: Cluster, b: Cluster) => !((a.faces && b.hair) || (a.hair && b.faces));
+  // A face and hair never share a number, however close their colors are. The skin of two
+  // people who touch shares a number only if it's exactly the same color, so faces cheek to
+  // cheek don't read as one face. (A person's arms and legs are exact copies of their face's
+  // color, so they still join it.)
+  const canMerge = (a: Cluster, b: Cluster, d2: number) => {
+    if ((a.faces && b.hair) || (a.hair && b.faces)) return false;
+    if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;
+    return true;
+  };
   for (;;) {
     let bi = -1;
     let bj = -1;
@@ -160,7 +206,7 @@ export function buildPage(
     for (let i = 0; i < clusters.length; i++) {
       for (let j = i + 1; j < clusters.length; j++) {
         const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
-        if (d < bd && canMerge(clusters[i], clusters[j])) {
+        if (d < bd && canMerge(clusters[i], clusters[j], d)) {
           bd = d;
           bi = i;
           bj = j;
@@ -179,7 +225,27 @@ export function buildPage(
       area,
       faces: a.faces || b.faces,
       hair: a.hair || b.hair,
+      who: new Set([...a.who, ...b.who]),
     });
+  }
+
+  // Touching people's skin that came out nearly the same color is nudged apart in lightness
+  // (the lighter a little lighter, the darker a little darker), so two faces side by side
+  // read as two faces.
+  for (let round = 0; round < 3; round++) {
+    for (const a of clusters) {
+      for (const b of clusters) {
+        if (a === b || !a.who.size || !b.who.size || !touch(a.who, b.who) || [...a.who].some((f) => b.who.has(f))) continue;
+        const d = Math.sqrt(labDist2(a.lab, 0, b.lab, 0));
+        if (d >= MIN_SKIN_GAP) continue;
+        const [light, dark] = a.lab[0] >= b.lab[0] ? [a, b] : [b, a];
+        const push = (MIN_SKIN_GAP - d) / 2;
+        for (const [c, dl] of [[light, push], [dark, -push]] as const) {
+          c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
+          c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
+        }
+      }
+    }
   }
 
   // Numbered dark to light.

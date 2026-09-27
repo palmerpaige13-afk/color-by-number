@@ -45,6 +45,8 @@ const MIN_TONE_PIECE = 0.2;
  * face height of distance, so a patch goes to the face that looks most like it and is nearby.
  */
 const SKIN_DISTANCE_WEIGHT = 5;
+/** Skin goes with the person whose clothes make up at least this share of the clothes it touches. */
+const CLOTHES_OWNER_SHARE = 0.6;
 /** A face-skin area this many times wider than tall, pinched to this share of its halves'
  * height between them, is two faces. */
 /** Growing a face into missed skin: within this share of its size from its center, and this ΔE. */
@@ -192,7 +194,10 @@ export function separateFaces(
   /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
   hairTones: 1 | 2 = 1,
 ): FaceRegions {
+  const detected = faces.length;
   faces = faces.flatMap(splitDoubleFace);
+  // Clothes are marked by face number as detected; a split face shifts the numbers after it.
+  const clothesByFace = faces.length === detected ? clothes : undefined;
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
   // where masks overlap.
   const parts = new Uint8Array(w * h);
@@ -231,7 +236,7 @@ export function separateFaces(
     for (let p = 0; p < w * h; p++) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
   }
   const skinPieces =
-    bodySkin && faces.length ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250) : new Map<number, number>();
+    bodySkin && faces.length ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250, clothesByFace) : new Map<number, number>();
   for (const k of skinPieces.keys()) next = Math.max(next, k + 1);
   const kindOf = new Map<number, number>();
   for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
@@ -512,6 +517,7 @@ function matchBodySkin(
   h: number,
   firstId: number,
   limit: number,
+  clothes?: RegionMask,
 ): Map<number, number> {
   const n = w * h;
   const inSkin = new Uint8Array(n);
@@ -548,6 +554,27 @@ function matchBodySkin(
     }
   }
 
+  // Skin surrounded by someone's clothes (a chest inside a neckline, arms out of sleeves) is
+  // most likely theirs. Clothes are marked with the person's face number (1, 2, …).
+  const wears = new Int32Array(count * faceCount);
+  const clothesAt = (q: number) => {
+    if (!clothes) return 0;
+    const cx = (q % w) - clothes.x;
+    const cy = Math.floor(q / w) - clothes.y;
+    if (cx < 0 || cy < 0 || cx >= clothes.width || cy >= clothes.height) return 0;
+    return clothes.data[cy * clothes.width + cx];
+  };
+  for (let p = 0; p < n; p++) {
+    const i = piece[p];
+    if (i < 0 || !inSkin[p]) continue;
+    const x = p % w;
+    for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+      if (q < 0 || q >= n || piece[q] === i) continue;
+      const o = clothesAt(q);
+      if (o >= 1 && o <= faceCount) wears[i * faceCount + o - 1]++;
+    }
+  }
+
   const owner = new Map<number, number>();
   const inFace = new Set<number>();
   const pieceSum = new Float64Array(count * 6);
@@ -570,6 +597,21 @@ function matchBodySkin(
       // Beside the face rather than below the chin: it is the face itself.
       owner.set(firstId + i, touched + 1);
       if (pieceSum[i * 6 + 4] / m < bottom[touched]) inFace.add(i);
+      continue;
+    }
+    let worn = -1;
+    let wornBorder = 0;
+    let allBorder = 0;
+    for (let k = 0; k < faceCount; k++) {
+      const b = wears[i * faceCount + k];
+      allBorder += b;
+      if (b > wornBorder) {
+        wornBorder = b;
+        worn = k;
+      }
+    }
+    if (worn >= 0 && wornBorder >= allBorder * CLOTHES_OWNER_SHARE && sum[worn * 6 + 5]) {
+      owner.set(firstId + i, worn + 1);
       continue;
     }
     let best = -1;

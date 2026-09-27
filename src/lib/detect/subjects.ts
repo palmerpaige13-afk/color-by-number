@@ -722,7 +722,9 @@ export async function detectSubjects(
       const pad = Math.max(fw, f.height) * HAIR_SEED_PAD;
       const cx = f.x + f.width / 2;
       const cy = f.y + f.height / 2;
-      for (let y = Math.max(0, Math.floor(f.y - pad)); y <= Math.min(workH - 1, f.y + f.height + pad); y++) {
+      // Hair grows from the top half of the head; lower down, beside a cheek, it may well be
+      // someone else's (a cheek-to-cheek hug), so it's only reached by growing.
+      for (let y = Math.max(0, Math.floor(f.y - pad)); y <= Math.min(workH - 1, f.y + f.height * 0.5); y++) {
         for (let x = Math.max(0, Math.floor(fx - pad)); x <= Math.min(workW - 1, fx + fw + pad); x++) {
           const p = y * workW + x;
           if (!isHair[p]) continue;
