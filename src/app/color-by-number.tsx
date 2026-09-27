@@ -99,6 +99,11 @@ const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 
  * harder pages get some subtle green and blue shapes among the tans instead of everything
  * being close in color.
  */
+/**
+ * Background colors closer than this (ΔE) are nudged apart (toward yellow or red-brown) so
+ * every color in the key is easy to tell from the others.
+ */
+const KEY_SPREAD: Record<Difficulty, number> = { easy: 20, medium: 18, hard: 16 };
 const COOL_BOOST: Record<Difficulty, number> = { easy: 0, medium: 0.4, hard: 0.8 };
 /** Separate bits of the cut-out smaller than this share of the picture are dropped. */
 const MIN_CUTOUT_PIECE = 0.002;
@@ -792,7 +797,7 @@ export default function ColorByNumber() {
           outlineBlank: true,
         },
       ];
-      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty]);
+      page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], KEY_SPREAD[difficulty]);
     } else {
       page = buildPage(
         main.width * SCALE,
@@ -801,6 +806,7 @@ export default function ColorByNumber() {
         fontFrac,
         KEY_DISTINCT[difficulty],
         COOL_BOOST[difficulty],
+        KEY_SPREAD[difficulty],
       );
     }
     full.close();
