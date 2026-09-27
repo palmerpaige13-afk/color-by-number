@@ -211,14 +211,20 @@ export function separateFaces(
     const own = d(faces[k]);
     return faces.every((g, j) => j === k || !covers(g.skin, x, y) || d(g) >= own);
   };
+  // A face traced by the landmarker (forehead, jaw and chin) has its true shape, even where
+  // it touches another face; those go first. Faces it couldn't trace (a profile, a face half
+  // hidden) use the segmenter's skin area, or failing that, skin-colored pixels.
+  const traced = (f: FaceShape) => !!f.outline && f.outline.length >= 3;
   faces.forEach((f, k) => {
+    if (traced(f)) fillPolygon(f.outline!, parts, k + 1, w, h);
+  });
+  faces.forEach((f, k) => {
+    if (traced(f)) return;
     if (f.skin) {
       const skin = f.skin;
       const data = skin.data.map((v, i) => (v && nearer(k, skin.x + (i % skin.width), skin.y + Math.floor(i / skin.width)) ? 1 : 0));
       paintSkin({ ...skin, data }, parts, k + 1, w, h);
-    }
-    else if (f.outline && f.outline.length >= 3) fillPolygon(f.outline, parts, k + 1, w, h);
-    else floodSkin(f, smoothed, parts, k + 1, w, h);
+    } else floodSkin(f, smoothed, parts, k + 1, w, h);
   });
   growFaces(parts, faces, smoothed, w, h);
   const mask = Uint8Array.from(parts); // faces only
