@@ -47,6 +47,23 @@ export default function Privacy() {
         </p>
       </Section>
 
+      <Section title="Paying for a PDF">
+        <p>
+          Downloading the printable PDF costs a small fee, paid through <strong>Stripe</strong>, a payment company used by
+          millions of businesses. The checkout box on this site is Stripe&apos;s: your card details go straight to Stripe,
+          and we never see or store them. Stripe tells us whether the payment went through, and keeps a record of it (for
+          example the amount, and the email or name you give at checkout) that the site&apos;s owner can see in their
+          Stripe account. Paying doesn&apos;t send your photo anywhere; the PDF is still made on your device.
+        </p>
+        <p>
+          Stripe handles your payment information under its own{" "}
+          <a href="https://stripe.com/privacy" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
+            privacy policy
+          </a>
+          .
+        </p>
+      </Section>
+
       <Section title="What you can choose to send us">
         <p>
           At the bottom of a finished page there&apos;s a box to help make this site better. Nothing is sent unless
@@ -95,8 +112,9 @@ export default function Privacy() {
 
       <Section title="No ads, no tracking">
         <p>
-          This site has no ads, no tracking or analytics tools, and doesn&apos;t use cookies. It doesn&apos;t ask you to
-          sign in.
+          This site has no ads, no tracking or analytics tools, and doesn&apos;t use cookies of its own. It doesn&apos;t
+          ask you to sign in. (When you open the checkout, Stripe may use its own cookies to keep payments safe from
+          fraud.)
         </p>
       </Section>
 

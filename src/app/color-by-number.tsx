@@ -6,6 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
+import { Checkout, paymentsOn } from "@/app/checkout";
+import { PRICE_LABEL } from "@/lib/price";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import {
   DIFFICULTY_PARAMS,
@@ -359,6 +361,9 @@ export default function ColorByNumber() {
   const [sharePhoto, setSharePhoto] = useState(false);
   const [helpNote, setHelpNote] = useState("");
   const [helpState, setHelpState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
+  // Paying for the PDF: this page has been paid for, and the checkout box is open.
+  const [paid, setPaid] = useState(false);
+  const [paying, setPaying] = useState(false);
   /** The line being drawn with the line tool, in page pixels. */
   const drawn = useRef<[number, number][] | null>(null);
   // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
@@ -800,6 +805,7 @@ export default function ColorByNumber() {
       colors: page.key.length,
     };
     setFixLog([]);
+    setPaid(false);
     setHelpState("idle");
     setHelpNote("");
     setSharePhoto(false);
@@ -1002,12 +1008,22 @@ export default function ColorByNumber() {
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button
               type="button"
-              onClick={downloadPdf}
+              onClick={() => (paymentsOn && !paid ? setPaying(true) : downloadPdf())}
               disabled={!!busy}
               className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Download PDF ({sizeLabel})
+              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${PRICE_LABEL}` : ""}
             </button>
+            {paying && (
+              <Checkout
+                onClose={() => setPaying(false)}
+                onPaid={() => {
+                  setPaid(true);
+                  setPaying(false);
+                  downloadPdf();
+                }}
+              />
+            )}
             <span className="text-sm text-zinc-500">
               {result.shapes} shapes · {key.length} colors
             </span>
