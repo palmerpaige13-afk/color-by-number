@@ -106,11 +106,6 @@ const COOL_GREEN_HUE = 135;
 /** Pale tones: Lab chroma below this get a blue tint. */
 const COOL_PALE_CHROMA = 14;
 
-/** How far (ΔE) a background color may be nudged from its own color to stand apart. */
-const SPREAD_DRIFT = 16;
-/** …and a person's color (lighter or darker only). */
-const PERSON_DRIFT = 8;
-
 /** Skin colors closer than this (ΔE) share a number: a person's arms and legs are exact copies of their face color; different people's skin never is. */
 const SAME_SKIN = 0.5;
 /** Different people's skin colors are kept at least this far apart (ΔE), nudging lightness. */
@@ -141,7 +136,6 @@ export function buildPage(
   fontFrac: number,
   distinct = DISTINCT,
   cool = 0,
-  spread = 0,
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
@@ -194,8 +188,6 @@ export function buildPage(
     hair: boolean;
     /** The faces (and skin) whose colors are in this cluster. */
     who: Set<string>;
-    /** Colors part of a person (skin, hair, clothes) or a pet, which are never nudged. */
-    person: boolean;
   };
   const toLab = (rgb: RGB) => {
     const lab = new Float32Array(3);
@@ -210,7 +202,6 @@ export function buildPage(
     faces: e.kind === FACE,
     hair: e.kind === HAIR,
     who: new Set(e.face ? [e.face] : []),
-    person: e.kind !== 0,
   }));
   // A face and hair never share a number, however close their colors are. The skin of two
   // people who touch shares a number only if it's exactly the same color, so faces cheek to
@@ -248,7 +239,6 @@ export function buildPage(
       faces: a.faces || b.faces,
       hair: a.hair || b.hair,
       who: new Set([...a.who, ...b.who]),
-      person: a.person || b.person,
     });
   }
 
@@ -268,52 +258,6 @@ export function buildPage(
           c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
         }
       }
-    }
-  }
-
-  // Colors that ended up close to each other are nudged apart so every number is easy to tell
-  // from the others when coloring. In the background, the lighter of a close pair leans
-  // toward yellow and the darker toward red-brown (and each a little lighter or darker), so
-  // similar olive greens become a yellow-green and a warm olive. People's colors only get a
-  // little lighter or darker, never a different hue (jeans stay blue, skin stays skin). Each
-  // color moves at most SPREAD_DRIFT (people: PERSON_DRIFT) from where it started, so the
-  // picture keeps its look. (Touching people's skin is handled above.)
-  if (spread > 0) {
-    const movable = clusters.filter((c) => !c.who.size); // skin is kept as is
-    const start = new Map(movable.map((c) => [c, Float32Array.from(c.lab)]));
-    const YELLOW = [0, 0.25, 1];
-    const RED = [0, 1, 0.35];
-    for (let round = 0; round < 10; round++) {
-      let moved = false;
-      for (let i = 0; i < movable.length; i++) {
-        for (let j = i + 1; j < movable.length; j++) {
-          const d = Math.sqrt(labDist2(movable[i].lab, 0, movable[j].lab, 0));
-          if (d >= spread) continue;
-          const [light, dark] = movable[i].lab[0] >= movable[j].lab[0] ? [movable[i], movable[j]] : [movable[j], movable[i]];
-          const push = (spread - d) / 2;
-          const u = d > 1e-3 ? [0, 1, 2].map((c) => (light.lab[c] - dark.lab[c]) / d) : [1, 0, 0];
-          for (const [c, sign, warm] of [[light, 1, YELLOW], [dark, -1, RED]] as const) {
-            const norm = Math.hypot(...warm);
-            const step = c.person
-              ? [sign * push, 0, 0]
-              : [0, 1, 2].map((k) => push * (0.6 * sign * u[k] + (0.4 * warm[k]) / norm));
-            const next = [0, 1, 2].map((k) => c.lab[k] + step[k]);
-            // Stay close to the original color, and on screen.
-            const o = start.get(c)!;
-            const drift = Math.hypot(next[0] - o[0], next[1] - o[1], next[2] - o[2]);
-            const limit = c.person ? PERSON_DRIFT : SPREAD_DRIFT;
-            const keep = drift > limit ? limit / drift : 1;
-            const cand = [0, 1, 2].map((k) => o[k] + (next[k] - o[k]) * keep);
-            cand[0] = Math.min(96, Math.max(4, cand[0]));
-            if (!labInGamut(cand[0], cand[1], cand[2])) continue;
-            if (Math.hypot(cand[0] - c.lab[0], cand[1] - c.lab[1], cand[2] - c.lab[2]) < 0.05) continue;
-            c.lab.set(cand);
-            c.rgb = labToRgb(cand[0], cand[1], cand[2]);
-            moved = true;
-          }
-        }
-      }
-      if (!moved) break;
     }
   }
 
