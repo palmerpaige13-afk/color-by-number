@@ -15,6 +15,7 @@ import type { SubjectBox } from "@/lib/pipeline/importance";
 import { findPetFace } from "@/lib/pipeline/eyes";
 import type { Box, Point, RegionMask } from "@/lib/pipeline/types";
 import { rgbToLab } from "@/lib/pipeline/color";
+import { drawClipped } from "@/lib/draw";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
@@ -188,7 +189,7 @@ function detectObjects(objects: ObjectDetector, canvas: HTMLCanvasElement): Foun
     const [tx, ty, tw, th] = wide ? [start, 0, len, H] : [0, start, W, len];
     tile.width = Math.round(tw);
     tile.height = Math.round(th);
-    tile.getContext("2d")!.drawImage(canvas, tx, ty, tw, th, 0, 0, tile.width, tile.height);
+    drawClipped(tile.getContext("2d")!, canvas, tx, ty, tw, th, 0, 0, tile.width, tile.height);
     for (const d of objects.detect(tile).detections) {
       const f = add(d, tx, ty, 1);
       if (!f || f.name !== "person") continue;
@@ -249,7 +250,7 @@ export async function detectSubjects(
   const { canvas, scale } = detectionCanvas(image);
   /** Draws a square of the detection canvas, sampled from the full-resolution photo. */
   const drawSharp = (ctx: CanvasRenderingContext2D, sx: number, sy: number, side: number, size: number) =>
-    ctx.drawImage(image, sx / scale, sy / scale, side / scale, side / scale, 0, 0, size, size);
+    drawClipped(ctx, image, sx / scale, sy / scale, side / scale, side / scale, 0, 0, size, size);
   const toWork = workW / canvas.width;
   let labCache: Float32Array | undefined; // see workLab
 
@@ -292,7 +293,7 @@ export async function detectSubjects(
     const scale = Math.min(4, 256 / Math.max(cw, ch));
     crop.width = Math.round(cw * scale);
     crop.height = Math.round(ch * scale);
-    crop.getContext("2d")!.drawImage(canvas, p.x, p.y, cw, ch, 0, 0, crop.width, crop.height);
+    drawClipped(crop.getContext("2d")!, canvas, p.x, p.y, cw, ch, 0, 0, crop.width, crop.height);
     addFaces(crop, p.x, p.y, scale);
   }
 
@@ -525,7 +526,7 @@ export async function detectSubjects(
     crop.width = W;
     crop.height = H;
     const ctx = crop.getContext("2d", { willReadFrequently: true })!;
-    ctx.drawImage(image, p.x / scale, p.y / scale, p.w / scale, hh / scale, 0, 0, W, H);
+    drawClipped(ctx, image, p.x / scale, p.y / scale, p.w / scale, hh / scale, 0, 0, W, H);
     const found = findPetFace(ctx.getImageData(0, 0, W, H).data, W, H);
     if (!found) return undefined;
     const k = p.w / W; // close-up px -> detection-canvas px
@@ -555,7 +556,7 @@ export async function detectSubjects(
     const ctx = crop.getContext("2d")!;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, N, N);
-    ctx.drawImage(canvas, sx, sy, side, side, 0, 0, N, N);
+    drawClipped(ctx, canvas, sx, sy, side, side, 0, 0, N, N);
     const result = model.segment(crop);
     const cats = result.categoryMask?.getAsUint8Array().slice();
     result.close();
@@ -913,7 +914,7 @@ export async function detectSubjects(
       const ctx = crop.getContext("2d")!;
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, N, N);
-      ctx.drawImage(canvas, sx, sy, side, side, 0, 0, N, N);
+      drawClipped(ctx, canvas, sx, sy, side, side, 0, 0, N, N);
       const result = model.segment(crop);
       const bg = result.confidenceMasks?.[0]?.getAsFloat32Array().slice();
       const cl = result.confidenceMasks?.[CLOTHES]?.getAsFloat32Array().slice();

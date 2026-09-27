@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { drawClipped } from "@/lib/draw";
 import { useEffect, useRef, useState } from "react";
 import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
@@ -180,7 +181,7 @@ function crop(full: ImageBitmap, r: Rect): Promise<ImageBitmap> {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.ceil(r.width));
   canvas.height = Math.max(1, Math.ceil(r.height));
-  canvas.getContext("2d")!.drawImage(full, Math.floor(r.x), Math.floor(r.y), canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+  drawClipped(canvas.getContext("2d")!, full, Math.floor(r.x), Math.floor(r.y), canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
   return createImageBitmap(canvas);
 }
 
