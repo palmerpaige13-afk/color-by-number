@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { VisitCounter } from "./visit-counter";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         {children}
+        <VisitCounter />
         <footer className="mt-auto border-t border-zinc-200 px-4 py-4 text-center text-sm text-zinc-500 print:hidden dark:border-zinc-800">
           Your photos stay on your device. ·{" "}
           <Link href="/privacy" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">

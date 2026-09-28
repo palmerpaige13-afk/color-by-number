@@ -4,7 +4,7 @@ import Link from "next/link";
 import { drawClipped } from "@/lib/draw";
 import { useEffect, useRef, useState } from "react";
 import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
-import { countPageMade, sendReport, type FixEntry } from "@/lib/feedback";
+import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { PRICE_LABEL } from "@/lib/price";
@@ -823,7 +823,6 @@ export default function ColorByNumber() {
     setResult(page);
     setReveal(50);
     setBusy(null);
-    countPageMade({ difficulty, background, print_size: printSize });
   }
 
   /** Renders the page at print resolution for the chosen size and downloads it as a PDF. */

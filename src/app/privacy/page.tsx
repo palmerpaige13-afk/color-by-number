@@ -47,11 +47,11 @@ export default function Privacy() {
         </p>
       </Section>
 
-      <Section title="Counting pages made">
+      <Section title="Counting visits">
         <p>
-          Each time a page is made, the site counts it so we know how much it&apos;s used. The count includes only
-          the settings you picked (difficulty, background, print size), whether you used a phone, tablet or computer,
-          and the date. It includes nothing from your photo or your page, and nothing that identifies you.
+          Each visit to the site is counted once, so we know how much it&apos;s used. The count includes only whether
+          you used a phone, tablet or computer, which page you arrived on, and the date. It includes nothing from your
+          photo and nothing that identifies you, and nothing is saved on your device to recognize you later.
         </p>
       </Section>
 
@@ -108,7 +108,7 @@ export default function Privacy() {
 
       <Section title="Where it's kept">
         <p>
-          Reports, shared photos and the page count are stored with Supabase, a database service, in the United
+          Reports, shared photos and the visit count are stored with Supabase, a database service, in the United
           States. The website itself can only add to them. It can&apos;t read them back, so no visitor can see anyone
           else&apos;s. Only the site&apos;s owner can see them.
         </p>
@@ -120,7 +120,7 @@ export default function Privacy() {
 
       <Section title="No ads, no tracking">
         <p>
-          This site has no ads and no tracking or analytics tools (beyond the simple page count above), and
+          This site has no ads and no tracking or analytics tools (beyond the simple visit count above), and
           doesn&apos;t use cookies of its own. It doesn&apos;t ask you to sign in. (When you open the checkout, Stripe may use its own cookies to keep payments safe from
           fraud.)
         </p>

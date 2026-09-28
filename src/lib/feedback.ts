@@ -1,8 +1,8 @@
 // Sends a fix report: what someone fixed by hand on their page, so the automatic results can
 // be improved. Only sent when the person taps Send; their photo only if they also ask to share
-// it. Also counts each page made (just the settings picked, nothing from the photo), so the
-// site's owner can see how much it's used. Both go to the site's Supabase project, where the
-// public key can add rows and shared photos but not read them back.
+// it. Also counts visits (just the kind of device and the page, nothing about the person), so
+// the site's owner can see how much it's used. Both go to the site's Supabase project, where
+// the public key can add rows and shared photos but not read them back.
 
 const SUPABASE_URL = "https://axdbxneqepcrlpfmwtjv.supabase.co";
 /** Publishable (public) key: safe in the browser; the database only lets it add reports. */
@@ -69,16 +69,26 @@ export async function sendReport(report: FixReport, photo?: Blob): Promise<void>
   if (!res.ok) throw new Error("Couldn't send the report");
 }
 
+/** Marks this browser tab as counted, so reloads and new pages in the same visit don't count again. */
+const VISIT_KEY = "counted-visit";
+
 /**
- * Counts one page made: the settings picked and the kind of device, nothing else. Never
- * blocks or breaks the page if it can't be sent, and isn't counted while testing locally.
+ * Counts one visit to the site: the kind of device and the page they arrived on, nothing
+ * else. Once per browser tab session. Never blocks or breaks the page if it can't be sent,
+ * and isn't counted while testing locally.
  */
-export function countPageMade(settings: { difficulty: string; background: string; print_size: string }) {
+export function countVisit() {
   if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
-  fetch(`${SUPABASE_URL}/rest/v1/page_makes`, {
+  try {
+    if (sessionStorage.getItem(VISIT_KEY)) return;
+    sessionStorage.setItem(VISIT_KEY, "1");
+  } catch {
+    // Private browsing without storage: count it anyway.
+  }
+  fetch(`${SUPABASE_URL}/rest/v1/visits`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ ...settings, device: device(), app_version: APP_VERSION }),
+    body: JSON.stringify({ device: device(), page: window.location.pathname.slice(0, 100), app_version: APP_VERSION }),
     keepalive: true,
   }).catch(() => {});
 }
