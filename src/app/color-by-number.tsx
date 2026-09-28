@@ -274,8 +274,8 @@ function describeSubjects(subjects: SubjectBox[]): string {
 }
 
 /**
- * The second printed sheet: the finished picture (what it will look like) and the color key,
- * with big swatches so colors are easy to match.
+ * The second printed sheet: the color key, with big swatches so colors are easy to match.
+ * (The finished picture gets a sheet of its own.)
  */
 function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
   const W = Math.round(fit.paperW * KEY_DPI);
@@ -310,18 +310,6 @@ function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
     ctx.fillStyle = "#222";
     ctx.fillText(String(n), x + sw + 0.08 * KEY_DPI, y + sw / 2);
   });
-  const keyBottom = top + Math.ceil(page.key.length / cols) * (sw + 0.2 * KEY_DPI);
-
-  // The finished picture under the key, as big as fits.
-  const painted = document.createElement("canvas");
-  drawPage(painted, page, "colored");
-  const room = { w: W - 2 * m, h: H - m - (keyBottom + 0.3 * KEY_DPI) };
-  if (room.h > 0.5 * KEY_DPI) {
-    const k = Math.min(room.w / painted.width, room.h / painted.height);
-    const pw = painted.width * k;
-    const ph = painted.height * k;
-    ctx.drawImage(painted, (W - pw) / 2, keyBottom + 0.3 * KEY_DPI, pw, ph);
-  }
   return canvas;
 }
 
@@ -846,9 +834,13 @@ export default function ColorByNumber() {
       const sheet = document.createElement("canvas");
       drawPage(sheet, result, "outline", (fit.w * dpi) / result.width);
       const keySheet = drawKeySheet(result, fit);
+      // The finished picture on a sheet of its own, the same size as the page to color.
+      const painted = document.createElement("canvas");
+      drawPage(painted, result, "colored", (fit.w * dpi) / result.width);
       const pages: PdfPage[] = [
         { jpeg: await canvasJpeg(sheet), pxW: sheet.width, pxH: sheet.height, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
         { jpeg: await canvasJpeg(keySheet, 0.9), pxW: keySheet.width, pxH: keySheet.height, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
+        { jpeg: await canvasJpeg(painted, 0.9), pxW: painted.width, pxH: painted.height, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
       ];
       const url = URL.createObjectURL(makePdf(pages));
       const a = document.createElement("a");

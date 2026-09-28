@@ -94,7 +94,33 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[], kind
   const layers = page.layers.map((l, i) => (i === li ? { ...l, result } : l));
   let shapes = 0;
   for (const { result: lr } of layers) for (let i = 0; i < lr.regionCount; i++) if (!isBlank(lr, i)) shapes++;
-  return { ...page, layers, shapes };
+  return dropUnusedColors({ ...page, layers, shapes });
+}
+
+/**
+ * The page without key colors that no shape uses any more (a color someone recolored away
+ * entirely), the rest renumbered in order so the key has no gaps. A page's palette is its
+ * key (index = number, 0 = blank), so each shape's color index is its number.
+ */
+function dropUnusedColors(page: Page): Page {
+  const used = new Set<number>();
+  for (const { result: r } of page.layers) {
+    for (let i = 0; i < r.regionCount; i++) if (!isBlank(r, i) && r.regionColor[i] > 0) used.add(r.regionColor[i]);
+  }
+  if (used.size === page.key.length) return page;
+  const renumber = new Map<number, number>();
+  const key = page.key.filter((k) => used.has(k.n)).map((k, i) => {
+    renumber.set(k.n, i + 1);
+    return { n: i + 1, rgb: k.rgb };
+  });
+  const layers = page.layers.map((l) => {
+    const r = l.result;
+    const palette: RGB[] = [r.palette[0], ...key.map((k) => k.rgb)];
+    const regionColor = Uint8Array.from(r.regionColor, (c) => renumber.get(c) ?? c);
+    return { ...l, result: { ...r, palette, regionColor } };
+  });
+  const numbers = layers.map(({ result: r }) => Uint8Array.from(r.palette, (_, i) => i));
+  return { ...page, layers, numbers, key };
 }
 
 /** The page with `spot` colored as number `n` (1-based, from the key). */
