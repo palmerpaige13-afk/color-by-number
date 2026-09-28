@@ -1,5 +1,6 @@
-// A minimal PDF writer: one JPEG image per page, placed at a given size on the paper. Enough
-// for printing a coloring page and its color key, without pulling in a PDF library.
+// A minimal PDF writer: one JPEG image per page, placed at a given size on the paper (and a
+// dashed line to cut along, for a card). Enough for printing a coloring page and its color
+// key, without pulling in a PDF library.
 
 export interface PdfPage {
   jpeg: Uint8Array;
@@ -13,6 +14,8 @@ export interface PdfPage {
   y: number;
   w: number;
   h: number;
+  /** A dashed line to cut along (a card on bigger paper), in inches. */
+  cut?: { x: number; y: number; w: number; h: number };
 }
 
 const enc = new TextEncoder();
@@ -42,7 +45,9 @@ export function makePdf(pages: PdfPage[]): Blob {
   pages.forEach((p, i) => {
     const [pageId, contentId, imageId] = [pageIds[i], pageIds[i] + 1, pageIds[i] + 2];
     // PDF's origin is bottom-left.
-    const draw = `q ${pt(p.w)} 0 0 ${pt(p.h)} ${pt(p.x)} ${pt(p.paperH - p.y - p.h)} cm /Im0 Do Q`;
+    let draw = `q ${pt(p.w)} 0 0 ${pt(p.h)} ${pt(p.x)} ${pt(p.paperH - p.y - p.h)} cm /Im0 Do Q`;
+    // Gray dashed cut line.
+    if (p.cut) draw += ` q 0.55 G 0.75 w [6 4] 0 d ${pt(p.cut.x)} ${pt(p.paperH - p.cut.y - p.cut.h)} ${pt(p.cut.w)} ${pt(p.cut.h)} re S Q`;
     object(pageId, [
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pt(p.paperW)} ${pt(p.paperH)}] ` +
         `/Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`,

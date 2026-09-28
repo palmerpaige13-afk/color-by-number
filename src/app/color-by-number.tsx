@@ -19,7 +19,7 @@ import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/imp
 import { buildPage, drawPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 import { canvasJpeg, makePdf, type PdfPage } from "@/lib/pdf";
 import { runPipelineAsync } from "@/lib/run-pipeline";
-import { PRINT_SIZES, fitOnPaper, fontFraction, type Fit, type PrintSizeId } from "@/lib/print";
+import { PRINT_SIZES, fitOnPaper, fontFraction, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
@@ -38,10 +38,18 @@ const MAX_PRINT_AREA = 16_000_000;
 /** Resolution of the color-key sheet (lower on huge paper, see MAX_PRINT_AREA). */
 const KEY_SHEET_DPI = 150;
 
-const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
-  { id: "easy", label: "Easy", blurb: "Big, simple shapes" },
-  { id: "medium", label: "Medium", blurb: "More shapes and detail" },
-  { id: "hard", label: "Hard", blurb: "Lots of small shapes" },
+/** How each level of detail is described (the print size picks the level). */
+const LEVEL_NAMES: Record<Difficulty, string> = {
+  easy: "Simple: big shapes, few colors",
+  medium: "Medium: more shapes and detail",
+  hard: "Detailed: lots of small shapes",
+};
+
+/** The optional nudge to a size's detail. */
+const DETAIL_SHIFTS: { shift: -1 | 0 | 1; label: string }[] = [
+  { shift: -1, label: "Simpler" },
+  { shift: 0, label: "Standard" },
+  { shift: 1, label: "More detail" },
 ];
 
 type Background = "remove" | "keep";
@@ -328,13 +336,15 @@ function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
 export default function ColorByNumber() {
   const [file, setFile] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
-  const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [result, setResult] = useState<Page | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [background, setBackground] = useState<Background>("remove");
   const [printSize, setPrintSize] = useState<PrintSizeId>("letter");
+  /** The print size decides the detail; people can make it one step simpler or more detailed. */
+  const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
+  const difficulty = levelFor(printSize, detailShift);
   /** Where the page sits on the chosen paper (set with the result). */
   const [fit, setFit] = useState<Fit | null>(null);
   /** How far the brush has painted across the page, 0–100 (%). */
@@ -860,9 +870,9 @@ export default function ColorByNumber() {
       drawPage(painted, result, "colored", (fit.w * dpi) / result.width);
       const finished = await sheetJpeg(painted, 0.9);
       const pages: PdfPage[] = [
-        { ...outline, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
+        { ...outline, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h, cut: fit.cut },
         { ...key, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
-        { ...finished, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
+        { ...finished, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h, cut: fit.cut },
       ];
       const url = URL.createObjectURL(makePdf(pages));
       const a = document.createElement("a");
@@ -885,7 +895,7 @@ export default function ColorByNumber() {
       <header className="print:hidden">
         <h1 className="text-3xl font-bold tracking-tight">Color by Number</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Upload a photo, pick a difficulty, and get a printable color-by-number page.
+          Upload a photo, pick a print size, and get a printable color-by-number page.
         </p>
       </header>
 
@@ -930,28 +940,61 @@ export default function ColorByNumber() {
         </div>
 
         <div>
-          <h2 className="mb-2 font-semibold">2. Pick a difficulty</h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup">
-            {DIFFICULTIES.map((d) => (
+          <h2 className="mb-2 font-semibold">2. Print size</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3" role="radiogroup">
+            {PRINT_SIZES.map((p) => (
               <button
-                key={d.id}
+                key={p.id}
                 type="button"
                 role="radio"
-                aria-checked={difficulty === d.id}
+                aria-checked={printSize === p.id}
                 onClick={() => {
-                  setDifficulty(d.id);
+                  setPrintSize(p.id);
+                  // A nudge that does nothing at the new size goes back to standard.
+                  if (levelFor(p.id, detailShift) === levelFor(p.id, 0)) setDetailShift(0);
                   setResult(null);
                 }}
                 className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                  difficulty === d.id
+                  printSize === p.id
                     ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
                     : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
                 }`}
               >
-                <div className="font-semibold">{d.label}</div>
-                <div className="text-sm text-zinc-600 dark:text-zinc-400">{d.blurb}</div>
+                <div className="font-semibold">{p.label}</div>
+                <div className="text-sm text-zinc-600 dark:text-zinc-400">{p.blurb}</div>
               </button>
             ))}
+          </div>
+          <p className="mt-2 text-sm text-zinc-500">
+            Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
+            regular paper with a dashed line to cut along.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Detail:</span>
+            <div className="inline-flex rounded-full border border-zinc-200 p-0.5 dark:border-zinc-800" role="radiogroup" aria-label="Detail">
+              {DETAIL_SHIFTS.map((d) => (
+                <button
+                  key={d.shift}
+                  type="button"
+                  role="radio"
+                  aria-checked={detailShift === d.shift}
+                  // Already as simple (or detailed) as it gets at this size.
+                  disabled={d.shift !== 0 && levelFor(printSize, d.shift) === levelFor(printSize, 0)}
+                  onClick={() => {
+                    setDetailShift(d.shift);
+                    setResult(null);
+                  }}
+                  className={`rounded-full px-3 py-1 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                    detailShift === d.shift
+                      ? "bg-violet-600 text-white"
+                      : "text-zinc-600 hover:text-violet-700 dark:text-zinc-400 dark:hover:text-violet-300"
+                  }`}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-sm text-zinc-500">{LEVEL_NAMES[difficulty]}</span>
           </div>
         </div>
 
@@ -984,35 +1027,6 @@ export default function ColorByNumber() {
           </div>
         </div>
 
-        <div>
-          <h2 className="mb-2 font-semibold">4. Print size</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="radiogroup">
-            {PRINT_SIZES.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={printSize === p.id}
-                onClick={() => {
-                  setPrintSize(p.id);
-                  setResult(null);
-                }}
-                className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                  printSize === p.id
-                    ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
-                    : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
-                }`}
-              >
-                <div className="font-semibold">{p.label}</div>
-                <div className="text-sm text-zinc-600 dark:text-zinc-400">{p.blurb}</div>
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-sm text-zinc-500">
-            Bigger paper fits more small shapes while keeping every number easy to read.
-          </p>
-        </div>
-
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -1026,7 +1040,7 @@ export default function ColorByNumber() {
                 {busy}
               </span>
             ) : (
-              "5. Make my color-by-number"
+              "4. Make my color-by-number"
             )}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}

@@ -78,7 +78,7 @@ export default function Privacy() {
           you tap <strong>Send</strong>. If you do, we receive:
         </p>
         <ul className="list-disc space-y-1 pl-6">
-          <li>the settings you picked (difficulty, background, print size) and whether you used a phone, tablet or computer;</li>
+          <li>the settings you picked (print size, detail, background) and whether you used a phone, tablet or computer;</li>
           <li>how many people and faces were found, and how many shapes and colors the page had before and after your fixes;</li>
           <li>
             a list of the fixes you made with Fix it, such as &ldquo;changed a clothes shape from gray to blue&rdquo; or
