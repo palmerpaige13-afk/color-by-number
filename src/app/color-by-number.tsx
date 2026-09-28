@@ -370,6 +370,15 @@ export default function ColorByNumber() {
   const drawn = useRef<[number, number][] | null>(null);
   // Zoom while fixing: the picture is scaled by `z` and moved by (x, y) screen pixels.
   const frameRef = useRef<HTMLDivElement>(null);
+  /** The finished page, and whether to bring it into view (just made, not just edited). */
+  const resultRef = useRef<HTMLElement>(null);
+  const showResult = useRef(false);
+  useEffect(() => {
+    if (!result || !showResult.current) return;
+    showResult.current = false;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    resultRef.current?.scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start" });
+  }, [result]);
   const [view, setViewState] = useState({ z: 1, x: 0, y: 0 });
   const viewRef = useRef(view);
   /** Sets the zoom, keeping `viewRef` current at once for the next finger move. */
@@ -820,6 +829,7 @@ export default function ColorByNumber() {
     setFixing(false);
     setView({ z: 1, x: 0, y: 0 });
     setPicked(null);
+    showResult.current = true;
     setResult(page);
     setReveal(50);
     setBusy(null);
@@ -1011,7 +1021,7 @@ export default function ColorByNumber() {
       </section>
 
       {result && (
-        <section className="flex flex-col gap-4">
+        <section ref={resultRef} className="flex scroll-mt-4 flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button
               type="button"
