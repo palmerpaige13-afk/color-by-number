@@ -241,7 +241,10 @@ export function separateFaces(
       paintSkin({ ...skin, data }, parts, k + 1, w, h);
     } else floodSkin(f, smoothed, parts, k + 1, w, h);
   });
-  growFaces(parts, faces, smoothed, w, h);
+  // Where anyone's hair is, so a face never grows into it (light blonde hair is close to skin).
+  const hairAt = new Uint8Array(w * h);
+  for (const f of faces) if (f.hair) paintSkin(f.hair, hairAt, 1, w, h);
+  growFaces(parts, faces, smoothed, w, h, hairAt);
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
   const hairParts = new Map<number, number>(); // hair part -> its face's part
@@ -437,7 +440,7 @@ function clothesPalette(
  * grown into neighboring pixels of its own skin color, only within a face-sized circle around
  * its center.
  */
-function growFaces(parts: Uint8Array, faces: FaceShape[], smoothed: Uint8ClampedArray, w: number, h: number) {
+function growFaces(parts: Uint8Array, faces: FaceShape[], smoothed: Uint8ClampedArray, w: number, h: number, hairAt?: Uint8Array) {
   const lab = new Float32Array(3);
   const ref = new Float32Array(3);
   faces.forEach((f, i) => {
@@ -460,7 +463,7 @@ function growFaces(parts: Uint8Array, faces: FaceShape[], smoothed: Uint8Clamped
       const p = px[s];
       const x = p % w;
       for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
-        if (q < 0 || q >= parts.length || parts[q]) continue;
+        if (q < 0 || q >= parts.length || parts[q] || hairAt?.[q]) continue;
         const qx = q % w;
         const qy = Math.floor(q / w);
         if (Math.hypot(qx - cx, qy - cy) > r || qy >= h) continue;

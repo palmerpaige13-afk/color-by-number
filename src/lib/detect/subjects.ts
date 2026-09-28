@@ -42,6 +42,8 @@ const REACH_PAD = 1.1;
 const PERSON_REACH_PAD = 1.6;
 /** A face whose box is less than this share face skin (to the segmenter) isn't a person's face. */
 const MIN_FACE_SKIN = 0.1;
+/** The squares searched for more faces in a group are this many faces wide (see detectSubjects). */
+const FACE_SCAN_SIZE = 4;
 /** Width of the close-up of a pet's head searched for eyes and nose. */
 const PET_FACE_SIZE = 320;
 /** Category indices in the multiclass segmenter's output. */
@@ -504,6 +506,27 @@ export async function detectSubjects(
     crop.height = Math.round(ch * scale);
     drawClipped(crop.getContext("2d")!, canvas, p.x, p.y, cw, ch, 0, 0, crop.width, crop.height);
     addFaces(crop, p.x, p.y, scale);
+  }
+
+  // A group standing shoulder to shoulder comes out as a few wide person boxes, where each
+  // face is too small to find. So the band where faces were found is also searched up close,
+  // in squares a few faces wide, overlapping by half.
+  if (candidates.length) {
+    const sizes = candidates.map((c) => c.h).sort((a, b) => a - b);
+    const s = sizes[sizes.length >> 1];
+    const top = Math.max(0, Math.min(...candidates.map((c) => c.y)) - s);
+    const bottom = Math.min(canvas.height, Math.max(...candidates.map((c) => c.y + c.h)) + s);
+    const side = Math.min(canvas.width, canvas.height, Math.max(bottom - top, s * FACE_SCAN_SIZE));
+    if (side >= 12) {
+      const scale = Math.min(4, 256 / side);
+      crop.width = crop.height = Math.round(side * scale);
+      for (let y = top; y < bottom - side / 2 || y === top; y += side / 2) {
+        for (let x = 0; x < canvas.width - side / 2; x += side / 2) {
+          drawClipped(crop.getContext("2d")!, canvas, x, y, side, side, 0, 0, crop.width, crop.height);
+          addFaces(crop, x, y, scale);
+        }
+      }
+    }
   }
 
   // Most confident first; drop any candidate overlapping one already kept.

@@ -35,6 +35,8 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
 const BUDGET_PART_DIST = 20;
 /** Within one person's clothes, colors closer than this (ΔE) are light and shadow on one piece. */
 const CLOTHES_SHADE = 22;
+/** Hair's numbers may be this much smaller than the smallest number elsewhere. */
+export const HAIR_NUMBER = 0.7;
 /** ...and differ in colorfulness (Lab chroma) by less than this. */
 const CLOTHES_SHADE_CHROMA = 10;
 /** On pages with flat clothes, each person's clothes get this many colors of their own. */
@@ -402,15 +404,12 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const left = labelComponents(colorMap, w, h);
     const pts = labelPoints(left.labels, left.count, w, h, boundaryDistance(left.labels, w, h));
     const blankOnly = group && Uint8Array.from(group, (g) => (g === BACKGROUND_GROUP ? g : 0));
-    if (pts.radius.some((r, id) => r < minPrint && left.color[id] !== background)) {
-      colorMap = mergeRegions(
-        left,
-        w,
-        h,
-        paletteLab,
-        (id, area) => area === left.area[id] && pts.radius[id] < minPrint && left.color[id] !== background,
-        blankOnly,
-      );
+    // Hair may carry a smaller number (see HAIR_NUMBER): short hair hugging a head is thin,
+    // and joining the face would leave a bald, skin-colored head.
+    const need = (id: number) => (faces?.kind[left.color[id]] === PartKind.hair ? minPrint * HAIR_NUMBER : minPrint);
+    const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background;
+    if (pts.radius.some((_, id) => tooSmall(id))) {
+      colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
     }
   }
   lap("merge");

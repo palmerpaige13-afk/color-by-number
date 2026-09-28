@@ -7,7 +7,7 @@ import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
-import type { PipelineResult, RGB } from "@/lib/pipeline";
+import { HAIR_NUMBER, type PipelineResult, type RGB } from "@/lib/pipeline";
 
 export interface Layer {
   result: PipelineResult;
@@ -417,7 +417,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     for (let i = 0; i < result.regionCount; i++) {
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
-      if (size < MIN_FONT) continue;
+      // Thin hair may carry a slightly smaller number (see HAIR_NUMBER).
+      if (size < (result.regionKind?.[i] === HAIR ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
         String(page.numbers[li][result.regionColor[i]]),
