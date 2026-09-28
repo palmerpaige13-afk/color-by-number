@@ -35,9 +35,8 @@ export function levelFor(id: PrintSizeId, shift: -1 | 0 | 1): Difficulty {
   return LEVELS[Math.min(LEVELS.length - 1, Math.max(0, base + shift))];
 }
 
-/** The paper cards are printed on (Letter), and the blank margin inside a card, in inches. */
+/** The paper cards are printed on (Letter), in inches. */
 const CARD_SHEET = { w: 8.5, h: 11 };
-const CARD_MARGIN = 0.25;
 
 /** Smallest printed number, in points (1/72 in). */
 const MIN_POINTS = 6;
@@ -59,23 +58,29 @@ export interface Fit {
 
 /**
  * Places a picture of the given width/height ratio on the paper, as big as the margins allow.
- * A card (4 × 6, 5 × 7) is centered on Letter paper, turned to match the picture, with the
- * picture inside it and its edge as the line to cut along.
+ * A card (4 × 6, 5 × 7) is centered on Letter paper, turned to match the picture, and the
+ * picture (already trimmed to the card's shape) fills it edge to edge; its edge is the line
+ * to cut along.
  */
 export function fitOnPaper(aspect: number, id: PrintSizeId): Fit {
   const size = PRINT_SIZES.find((s) => s.id === id)!;
   const landscape = aspect > 1;
-  const cardW = landscape ? size.h : size.w;
-  const cardH = landscape ? size.w : size.h;
-  const paperW = size.card ? CARD_SHEET.w : cardW;
-  const paperH = size.card ? CARD_SHEET.h : cardH;
-  const margin = size.card ? CARD_MARGIN : MARGIN;
-  const w = Math.min(cardW - 2 * margin, (cardH - 2 * margin) * aspect);
+  const sizeW = landscape ? size.h : size.w;
+  const sizeH = landscape ? size.w : size.h;
+  if (size.card) {
+    const cut = { x: (CARD_SHEET.w - sizeW) / 2, y: (CARD_SHEET.h - sizeH) / 2, w: sizeW, h: sizeH };
+    return { paperW: CARD_SHEET.w, paperH: CARD_SHEET.h, ...cut, cut };
+  }
+  const w = Math.min(sizeW - 2 * MARGIN, (sizeH - 2 * MARGIN) * aspect);
   const h = w / aspect;
-  const x = (paperW - w) / 2;
-  const y = (paperH - h) / 2;
-  const cut = size.card ? { x: (paperW - cardW) / 2, y: (paperH - cardH) / 2, w: cardW, h: cardH } : undefined;
-  return { paperW, paperH, x, y, w, h, cut };
+  return { paperW: sizeW, paperH: sizeH, x: (sizeW - w) / 2, y: (sizeH - h) / 2, w, h };
+}
+
+/** A card's width/height ratio, turned to match a picture that's `wide` or not; null if not a card. */
+export function cardShape(id: PrintSizeId, wide: boolean): number | null {
+  const size = PRINT_SIZES.find((s) => s.id === id)!;
+  if (!size.card) return null;
+  return wide ? size.h / size.w : size.w / size.h;
 }
 
 /** Smallest number as a share of the picture's width, for a picture printed `widthIn` wide. */

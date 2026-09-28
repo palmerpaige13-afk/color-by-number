@@ -19,7 +19,7 @@ import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/imp
 import { buildPage, drawPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 import { canvasJpeg, makePdf, type PdfPage } from "@/lib/pdf";
 import { runPipelineAsync } from "@/lib/run-pipeline";
-import { PRINT_SIZES, fitOnPaper, fontFraction, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
+import { PRINT_SIZES, cardShape, fitOnPaper, fontFraction, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
@@ -169,6 +169,27 @@ async function framing(
   // The animals found, in the subjects' own pixels, so the closer look doesn't lose them.
   const animals = found.animals.map((a) => ({ ...a, x: a.x - subjects.x, y: a.y - subjects.y }));
   return { subjects, scene, animals };
+}
+
+/** `r` trimmed to width/height ratio `aspect`, centered on `focus` as far as `r` allows. */
+function toAspect(r: Rect, aspect: number, focus: Rect): Rect {
+  const width = Math.min(r.width, r.height * aspect);
+  const height = width / aspect;
+  const cx = focus.x + focus.width / 2;
+  const cy = focus.y + focus.height / 2;
+  return {
+    x: Math.min(r.x + r.width - width, Math.max(r.x, cx - width / 2)),
+    y: Math.min(r.y + r.height - height, Math.max(r.y, cy - height / 2)),
+    width,
+    height,
+  };
+}
+
+/** The overlap of two rectangles. */
+function intersect(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  return { x, y, width: Math.min(a.x + a.width, b.x + b.width) - x, height: Math.min(a.y + a.height, b.y + b.height) - y };
 }
 
 /**
@@ -687,13 +708,29 @@ export default function ColorByNumber() {
       setBusy(null);
       return;
     }
-    const frame = await framing(full);
+    let frame = await framing(full);
     const params = DIFFICULTY_PARAMS[difficulty];
 
+    // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
+    // around the people.
+    let photoRect: Rect = { x: 0, y: 0, width: full.width, height: full.height };
+    if (frame) {
+      const shape = cardShape(printSize, frame.scene.width > frame.scene.height);
+      if (shape) {
+        const scene = toAspect(frame.scene, shape, frame.subjects);
+        const subjects = intersect(frame.subjects, scene);
+        const moved = { x: frame.subjects.x - subjects.x, y: frame.subjects.y - subjects.y };
+        const animals = frame.animals.map((a) => ({ ...a, x: a.x + moved.x, y: a.y + moved.y }));
+        frame = { scene, subjects, animals };
+      }
+    } else {
+      const shape = cardShape(printSize, full.width > full.height);
+      if (shape) photoRect = toAspect(photoRect, shape, photoRect);
+    }
+
     // The main layer: the people (and pets) on their own when there are some, else the photo.
-    const mainRect: Rect =
-      frame?.subjects ?? { x: 0, y: 0, width: full.width, height: full.height };
-    const mainBitmap = frame ? await crop(full, frame.subjects) : full;
+    const mainRect: Rect = frame?.subjects ?? photoRect;
+    const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
     const main = toWorkingImage(mainBitmap);
     let subjects: SubjectBox[] = [];
     let cutout: Uint8Array | undefined;
@@ -943,7 +980,7 @@ export default function ColorByNumber() {
           </div>
           <p className="mt-2 text-sm text-zinc-500">
             Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
-            regular paper with a dashed line to cut along.
+            regular paper with a dashed line to cut along; the picture fills the card.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">Detail:</span>
