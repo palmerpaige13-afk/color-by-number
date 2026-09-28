@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { drawClipped } from "@/lib/draw";
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, withFaces as withFacesDrawn, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
@@ -373,8 +373,6 @@ export default function ColorByNumber() {
     frame: Awaited<ReturnType<typeof framing>>;
     found: Map<string, FoundSubjects>;
   } | null>(null);
-  /** The last page's drawn faces (which layer, lines and pupils), for the Face button. */
-  const faceArt = useRef<{ li: number; lines: [number, number][][]; dots: { x: number; y: number; r: number }[] } | null>(null);
   const [tool, setTool] = useState<Tool>("color");
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
@@ -835,7 +833,8 @@ export default function ColorByNumber() {
     // Faces keep their shading as outlined shapes, with no drawn eyes, nose or mouth.
     setBusy(twoLayers ? "Building the people…" : "Building your shapes…");
     const mainResult = await runPipelineAsync(
-      { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin },
+      // Faces shown: in their own light and shadow (eyes, nose and mouth as shaded shapes).
+      { ...main, importance: map.importance, faces, faceStyle: withFaces ? "photo" : "shaded", cutout, animals, clothes, bodySkin },
       {
         ...budget(twoLayers ? PEOPLE_SHARE : 1),
         // People are kept simple so a page's detail goes into the background; when the whole
@@ -881,13 +880,6 @@ export default function ColorByNumber() {
         COOL_BOOST[difficulty],
       );
     }
-    // The people's drawn faces, kept so the Face button can show or hide them at once.
-    faceArt.current = {
-      li: twoLayers ? 1 : 0,
-      lines: faces.flatMap((f) => f.features ?? []),
-      dots: faces.flatMap((f) => f.pupils ?? []),
-    };
-    if (withFaces) page = withFacesDrawn(page, faceArt.current.li, faceArt.current);
     setFit(pageFit);
     made.current = {
       people: subjects.filter((s) => s.kind === "person").length,
@@ -1097,14 +1089,9 @@ export default function ColorByNumber() {
               disabled={!!busy}
               title={showFaces ? "Faces have eyes, nose and mouth. Click for no face." : "Faces are left blank. Click to show eyes, nose and mouth."}
               onClick={() => {
-                // Drawn on top of the page, so it changes at once and keeps any fixes.
-                const on = !showFaces;
-                setShowFaces(on);
-                const art = faceArt.current;
-                if (!art) return;
-                const apply = (p: Page) => withFacesDrawn(p, art.li, on ? art : null);
-                setResult((r) => r && apply(r));
-                setHistory((h) => h.map(apply));
+                if (fixLog.length && !window.confirm("Changing faces remakes the page, so the fixes you made will be lost. Change anyway?")) return;
+                setShowFaces(!showFaces);
+                generate({ faces: !showFaces });
               }}
               className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
             >

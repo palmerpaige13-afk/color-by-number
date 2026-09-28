@@ -14,10 +14,8 @@ export type Point = [number, number];
 export interface FaceShape extends Box {
   /** Closed polygon around the face: jaw, chin and hairline. */
   outline?: Point[];
-  /** A simple drawn face: open lines for eyelids, eyebrows, the bottom of the nose and a smile. */
+  /** Open polylines for eyes, eyebrows, nose and lips. */
   features?: Point[][];
-  /** The pupils, drawn as dark dots with the lines. */
-  pupils?: { x: number; y: number; r: number }[];
   /** Face-skin mask from segmentation. */
   skin?: RegionMask;
   /** Hair mask from segmentation; hair is simplified like background. */
@@ -91,7 +89,7 @@ export interface PipelineInput {
    * How faces are drawn: "lines" keeps shading and draws eyes, nose and mouth as lines;
    * "shaded" keeps shading shapes only; "faceless" is one smooth shape per face.
    */
-  faceStyle?: "lines" | "shaded" | "faceless";
+  faceStyle?: "lines" | "shaded" | "faceless" | "photo";
   /** 1 on the subject (people and pets), 0 on background. Background is left blank: no shapes. */
   cutout?: Uint8Array;
   /** Animal masks: each is outlined as its own part. */
@@ -129,10 +127,6 @@ export interface PipelineResult {
   partGroup?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
-  /** People's eyelids, eyebrows, nose and smile, drawn as lines when faces are shown (working pixels). */
-  faceLines?: Point[][];
-  /** Their pupils, drawn as dark dots when faces are shown (working pixels). */
-  faceDots?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];
   timings: Record<string, number>;
   debug?: {

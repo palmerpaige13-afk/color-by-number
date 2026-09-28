@@ -38,6 +38,14 @@ const FACE_MIN_LUMA = 150;
 const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
+/** Photo-shaded faces: blur (share of the face's size), and the darkest and lightest shares of it. */
+const PHOTO_FACE_BLUR = 0.03;
+const PHOTO_FACE_DARK = 0.22;
+const PHOTO_FACE_LIGHT = 0.7;
+/** A piece of shadow or light smaller than this share of the face joins the middle tone. */
+const PHOTO_FACE_SPECK = 0.012;
+/** How far a photo-shaded face's light and shadow are pulled toward its middle tone. */
+const PHOTO_FACE_SOFTEN = 0.4;
 /** For a hair color, this darkest share of the hair (shadow between strands) is left out. */
 const HAIR_DARK_SKIP = 0.4;
 /** A separate piece of one tone smaller than this share of the face or hair joins the other tone. */
@@ -190,7 +198,7 @@ export function separateFaces(
   baseLab: Float32Array,
   w: number,
   h: number,
-  style: "lines" | "shaded" | "faceless" = "lines",
+  style: "lines" | "shaded" | "faceless" | "photo" = "lines",
   bodySkin?: RegionMask,
   person?: Uint8Array,
   /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
@@ -301,7 +309,15 @@ export function separateFaces(
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
     };
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
-    faces.forEach((_, i) => shade(mask, i + 1, faceTones, true));
+    if (style === "photo") {
+      // The face's own light and shadow, so eyes, nose and mouth show as shaded shapes.
+      faces.forEach((_, i) => {
+        const shading = facePhotoShading(smoothed, mask, i + 1, w);
+        if (!shading) return shade(mask, i + 1, 1, true);
+        const ids = shading.rgb.map((rgb, t) => add(rgb, shading.lab.subarray(t * 3, t * 3 + 3), i + 1));
+        if (ids.every((id) => id >= 0)) faceTone.set(i + 1, { ids, tone: shading.tone });
+      });
+    } else faces.forEach((_, i) => shade(mask, i + 1, faceTones, true));
     for (const k of hairParts.keys()) shade(parts, k, hairTones, false);
     for (const [piece, k] of skinPieces) {
       const tone = faceTone.get(k);
@@ -734,6 +750,121 @@ function splitAlongEdges(
   }
   grow();
   return { piece, count };
+}
+
+/**
+ * A face's skin in the photo's own light and shadow, as three tones: its middle tone (first,
+ * so arms and legs matching the face get it), its shadows (the eyes, the side of the nose, the
+ * mouth, a shaded cheek) and its light. The lightness is only lightly blurred, so those
+ * features keep their shapes, and specks join the tone around them. Colors are brightened
+ * like any face's.
+ */
+function facePhotoShading(
+  smoothed: Uint8ClampedArray,
+  mask: Uint8Array,
+  k: number,
+  w: number,
+): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
+  const lab = new Float32Array(3);
+  const px: number[] = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let p = 0; p < mask.length; p++) {
+    if (mask[p] !== k) continue;
+    px.push(p);
+    const x = p % w;
+    const y = (p - x) / w;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  if (px.length < 64) return null;
+  const bw = x1 - x0 + 1;
+  const bh = y1 - y0 + 1;
+  const at = (p: number) => (Math.floor(p / w) - y0) * bw + (p % w) - x0;
+  const L = new Float32Array(bw * bh);
+  const M = new Float32Array(bw * bh);
+  for (const p of px) {
+    rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
+    L[at(p)] = lab[0];
+    M[at(p)] = 1;
+  }
+  // Light blur within the face.
+  const r = Math.max(1, Math.round(Math.min(bw, bh) * PHOTO_FACE_BLUR));
+  const box = (a: Float32Array) => {
+    const t = new Float32Array(a.length);
+    const out = new Float32Array(a.length);
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      let s = 0;
+      for (let d = -r; d <= r; d++) s += a[y * bw + Math.min(bw - 1, Math.max(0, x + d))];
+      t[y * bw + x] = s;
+    }
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      let s = 0;
+      for (let d = -r; d <= r; d++) s += t[Math.min(bh - 1, Math.max(0, y + d)) * bw + x];
+      out[y * bw + x] = s;
+    }
+    return out;
+  };
+  const bl = box(L);
+  const bm = box(M);
+  const soft = px.map((p) => bl[at(p)] / Math.max(1e-6, bm[at(p)]));
+  const sorted = [...soft].sort((a, b) => a - b);
+  const darkCut = sorted[Math.floor(sorted.length * PHOTO_FACE_DARK)];
+  const lightCut = sorted[Math.floor(sorted.length * PHOTO_FACE_LIGHT)];
+  // Tones: 0 middle, 1 shadow, 2 light.
+  let toneAt = new Int8Array(bw * bh).fill(-1);
+  px.forEach((p, i) => (toneAt[at(p)] = soft[i] < darkCut ? 1 : soft[i] >= lightCut ? 2 : 0));
+  // Round the shapes: each pixel takes the most common tone around it.
+  const counts = new Int32Array(3);
+  for (let pass = 0; pass < 2; pass++) {
+    const next = Int8Array.from(toneAt);
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const i = y * bw + x;
+      if (toneAt[i] < 0) continue;
+      counts.fill(0);
+      for (let v = Math.max(0, y - 1); v <= Math.min(bh - 1, y + 1); v++)
+        for (let u = Math.max(0, x - 1); u <= Math.min(bw - 1, x + 1); u++) if (toneAt[v * bw + u] >= 0) counts[toneAt[v * bw + u]]++;
+      let best = toneAt[i];
+      for (let t = 0; t < 3; t++) if (counts[t] > counts[best]) best = t;
+      next[i] = best;
+    }
+    toneAt = next;
+  }
+  // Specks of shadow or light join the middle tone.
+  const seen = new Uint8Array(bw * bh);
+  for (let s = 0; s < toneAt.length; s++) {
+    if (seen[s] || toneAt[s] <= 0) continue;
+    const t = toneAt[s];
+    const piece = [s];
+    seen[s] = 1;
+    for (let j = 0; j < piece.length; j++) {
+      const i = piece[j];
+      const x = i % bw;
+      for (const q of [x > 0 ? i - 1 : -1, x < bw - 1 ? i + 1 : -1, i - bw, i + bw]) {
+        if (q < 0 || q >= toneAt.length || seen[q] || toneAt[q] !== t) continue;
+        seen[q] = 1;
+        piece.push(q);
+      }
+    }
+    if (piece.length < px.length * PHOTO_FACE_SPECK) for (const i of piece) toneAt[i] = 0;
+  }
+  const sum = new Float64Array(12);
+  const tone = new Map<number, number>();
+  for (const p of px) {
+    const t = toneAt[at(p)];
+    tone.set(p, t);
+    for (let c = 0; c < 3; c++) sum[t * 4 + c] += smoothed[p * 4 + c];
+    sum[t * 4 + 3]++;
+  }
+  const middle = [0, 1, 2].map((c) => sum[c] / Math.max(1, sum[3]));
+  // Light and shadow are softened toward the middle tone, so they read as the same skin.
+  const means = [0, 1, 2].map((t) =>
+    sum[t * 4 + 3] ? [0, 1, 2].map((c) => { const v = sum[t * 4 + c] / sum[t * 4 + 3]; return t ? v + (middle[c] - v) * PHOTO_FACE_SOFTEN : v; }) : middle,
+  );
+  const luma = 0.299 * middle[0] + 0.587 * middle[1] + 0.114 * middle[2];
+  const boost = Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, luma)));
+  const rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
+  const out = new Float32Array(9);
+  rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
+  return { rgb, lab: out, tone };
 }
 
 /**

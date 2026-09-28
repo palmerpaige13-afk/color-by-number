@@ -4,7 +4,7 @@
 // pixels; the color key is shared, so the same color gets the same number in every layer.
 
 import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
-import { boundaryDistanceAround, labelPoints } from "@/lib/pipeline/distance";
+import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
 import type { PipelineResult, RGB } from "@/lib/pipeline";
@@ -105,9 +105,6 @@ const COOL_OLIVE_CHROMA = 30;
 const COOL_GREEN_HUE = 135;
 /** Pale tones: Lab chroma below this get a blue tint. */
 const COOL_PALE_CHROMA = 14;
-
-/** Face lines (eyes, nose, mouth) are this much thicker than the shapes' outlines. */
-const FACE_LINE = 1.3;
 
 /** Skin colors closer than this (ΔE) share a number: a person's arms and legs are exact copies of their face color; different people's skin never is. */
 const SAME_SKIN = 0.5;
@@ -296,7 +293,7 @@ export function buildPage(
     const newLabels = Uint16Array.from(comps.labels);
     const regionKind = new Uint8Array(comps.count);
     for (let p = 0; p < newLabels.length; p++) regionKind[newLabels[p]] = result.partKind?.[result.regionColor[labels[p]]] ?? 0;
-    const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistanceAround(newLabels, w, h, result.faceLines, result.faceDots));
+    const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h));
     const next: PipelineResult = {
       ...result,
       palette,
@@ -407,27 +404,6 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     for (const e of result.eyes ?? []) {
       ctx.beginPath();
       ctx.arc(layer.x + e.x * scale, layer.y + e.y * scale, Math.max(2 * t, e.r * scale), 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // People's faces, when shown: eyelids, eyebrows, nose and smile as lines, and dark pupils.
-    if (result.faceLines?.length) {
-      ctx.strokeStyle = `rgb(${EDGE.join(",")})`;
-      ctx.lineWidth = Math.max(1.3, (W / 1500) * FACE_LINE);
-      ctx.beginPath();
-      for (const line of result.faceLines) {
-        line.forEach(([x, y], i) => {
-          const px = layer.x + x * scale;
-          const py = layer.y + y * scale;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        });
-      }
-      ctx.stroke();
-    }
-    ctx.fillStyle = "#111";
-    for (const d of result.faceDots ?? []) {
-      ctx.beginPath();
-      ctx.arc(layer.x + d.x * scale, layer.y + d.y * scale, Math.max(1.5 * t, d.r * scale), 0, Math.PI * 2);
       ctx.fill();
     }
     if (view === "colored") return;
