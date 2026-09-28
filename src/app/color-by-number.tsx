@@ -30,8 +30,13 @@ const PEOPLE_SHARE = 0.65;
 /** Print resolution, and the most pixels on a printed page's long side (keeps memory in check). */
 const PRINT_DPI = 300;
 const MAX_PRINT_PX = 6000;
-/** Resolution of the color-key sheet. */
-const KEY_DPI = 150;
+/**
+ * Most pixels in one printed sheet. Safari on iPhone and iPad can't draw a canvas bigger than
+ * about 16.7 million pixels (it comes out blank), and big canvases can run a phone out of memory.
+ */
+const MAX_PRINT_AREA = 16_000_000;
+/** Resolution of the color-key sheet (lower on huge paper, see MAX_PRINT_AREA). */
+const KEY_SHEET_DPI = 150;
 
 const DIFFICULTIES: { id: Difficulty; label: string; blurb: string }[] = [
   { id: "easy", label: "Easy", blurb: "Big, simple shapes" },
@@ -284,6 +289,7 @@ function describeSubjects(subjects: SubjectBox[]): string {
  * (The finished picture gets a sheet of its own.)
  */
 function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
+  const KEY_DPI = Math.min(KEY_SHEET_DPI, Math.sqrt(MAX_PRINT_AREA / (fit.paperW * fit.paperH)));
   const W = Math.round(fit.paperW * KEY_DPI);
   const H = Math.round(fit.paperH * KEY_DPI);
   const canvas = document.createElement("canvas");
@@ -837,17 +843,26 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
     try {
       const longIn = Math.max(fit.w, fit.h);
-      const dpi = Math.min(PRINT_DPI, MAX_PRINT_PX / longIn);
+      const dpi = Math.min(PRINT_DPI, MAX_PRINT_PX / longIn, Math.sqrt(MAX_PRINT_AREA / (fit.w * fit.h)));
+      // One sheet at a time, each let go once it's in the PDF, so a phone never holds more
+      // than one big picture in memory.
+      const sheetJpeg = async (canvas: HTMLCanvasElement, quality?: number) => {
+        const out = { jpeg: await canvasJpeg(canvas, quality), pxW: canvas.width, pxH: canvas.height };
+        canvas.width = canvas.height = 0;
+        return out;
+      };
       const sheet = document.createElement("canvas");
       drawPage(sheet, result, "outline", (fit.w * dpi) / result.width);
-      const keySheet = drawKeySheet(result, fit);
+      const outline = await sheetJpeg(sheet);
+      const key = await sheetJpeg(drawKeySheet(result, fit), 0.9);
       // The finished picture on a sheet of its own, the same size as the page to color.
       const painted = document.createElement("canvas");
       drawPage(painted, result, "colored", (fit.w * dpi) / result.width);
+      const finished = await sheetJpeg(painted, 0.9);
       const pages: PdfPage[] = [
-        { jpeg: await canvasJpeg(sheet), pxW: sheet.width, pxH: sheet.height, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
-        { jpeg: await canvasJpeg(keySheet, 0.9), pxW: keySheet.width, pxH: keySheet.height, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
-        { jpeg: await canvasJpeg(painted, 0.9), pxW: painted.width, pxH: painted.height, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
+        { ...outline, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
+        { ...key, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
+        { ...finished, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h },
       ];
       const url = URL.createObjectURL(makePdf(pages));
       const a = document.createElement("a");
