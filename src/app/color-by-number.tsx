@@ -52,30 +52,6 @@ const DETAIL_SHIFTS: { shift: -1 | 0 | 1; label: string }[] = [
   { shift: 1, label: "More detail" },
 ];
 
-type Background = "remove" | "keep";
-
-/** Tiny scene sketches for the background picker: a person alone, or in a landscape. */
-function SceneIcon({ withScene }: { withScene: boolean }) {
-  return (
-    <svg viewBox="0 0 64 40" className="h-10 w-16 shrink-0" aria-hidden>
-      <rect width="64" height="40" rx="6" className={withScene ? "fill-sky-100" : "fill-white"} stroke="currentColor" strokeOpacity=".2" />
-      {withScene && (
-        <>
-          <path d="M0 30 L14 16 L24 25 L36 12 L52 27 L64 20 V34 a6 6 0 0 1 -6 6 H6 a6 6 0 0 1 -6 -6Z" className="fill-emerald-300" />
-          <circle cx="52" cy="9" r="4" className="fill-amber-300" />
-        </>
-      )}
-      <circle cx="32" cy="13" r="4.5" className="fill-violet-500" />
-      <path d="M25 36 q0 -13 7 -14 q7 1 7 14Z" className="fill-violet-500" />
-    </svg>
-  );
-}
-
-const BACKGROUNDS: { id: Background; label: string; blurb: string }[] = [
-  { id: "remove", label: "No background", blurb: "Just the people, with all the detail on them" },
-  { id: "keep", label: "With background", blurb: "Keep the scene around them too" },
-];
-
 function BrushIcon() {
   return (
     <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -340,7 +316,6 @@ export default function ColorByNumber() {
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [background, setBackground] = useState<Background>("remove");
   const [printSize, setPrintSize] = useState<PrintSizeId>("letter");
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
@@ -652,7 +627,8 @@ export default function ColorByNumber() {
       await sendReport(
         {
           difficulty,
-          background,
+          // Every page keeps the scene around the people (reports still say so).
+          background: "keep",
           print_size: printSize,
           people: made.current.people,
           faces: made.current.faces,
@@ -752,7 +728,7 @@ export default function ColorByNumber() {
     await new Promise((r) => setTimeout(r, 30));
 
     const faces = subjects.filter((s) => s.kind === "face");
-    const twoLayers = !!(frame && cutout && background === "keep");
+    const twoLayers = !!(frame && cutout);
 
     // The print size decides how small numbers (and so shapes) can be: the smallest number is
     // a fixed share of the picture's width, from how wide it will be printed.
@@ -780,8 +756,8 @@ export default function ColorByNumber() {
       { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin },
       {
         ...budget(twoLayers ? PEOPLE_SHARE : 1),
-        // People are kept simple so a page's detail goes into the background; with no
-        // background they're the whole page, so they get the difficulty's own detail.
+        // People are kept simple so a page's detail goes into the background; when the whole
+        // photo is one layer (no one to cut out), everything gets the level's own detail.
         ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
         minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
@@ -998,35 +974,6 @@ export default function ColorByNumber() {
           </div>
         </div>
 
-        <div>
-          <h2 className="mb-2 font-semibold">3. Background</h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup">
-            {BACKGROUNDS.map((b) => (
-              <button
-                key={b.id}
-                type="button"
-                role="radio"
-                aria-checked={background === b.id}
-                onClick={() => {
-                  setBackground(b.id);
-                  setResult(null);
-                }}
-                className={`flex items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                  background === b.id
-                    ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
-                    : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
-                }`}
-              >
-                <SceneIcon withScene={b.id === "keep"} />
-                <span>
-                  <span className="block font-semibold">{b.label}</span>
-                  <span className="block text-sm text-zinc-600 dark:text-zinc-400">{b.blurb}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -1040,7 +987,7 @@ export default function ColorByNumber() {
                 {busy}
               </span>
             ) : (
-              "4. Make my color-by-number"
+              "3. Make my color-by-number"
             )}
           </button>
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
