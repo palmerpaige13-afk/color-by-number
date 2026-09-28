@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { drawClipped } from "@/lib/draw";
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, withFaces as withFacesDrawn, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
@@ -118,6 +118,17 @@ function toWorkingImage(bitmap: ImageBitmap) {
 }
 
 type Rect = { x: number; y: number; width: number; height: number };
+
+/** What was found in the part of a photo looked at for people (see generate). */
+type FoundSubjects = {
+  main: ReturnType<typeof toWorkingImage>;
+  subjects: SubjectBox[];
+  cutout?: Uint8Array;
+  animals: RegionMask[];
+  clothes?: RegionMask;
+  bodySkin?: RegionMask;
+  note: string;
+};
 
 /**
  * Where the main people (and pets with them) are, and how to frame the page:
@@ -355,6 +366,15 @@ export default function ColorByNumber() {
   /** Picture choices by Fix it: faces with eyes, nose and mouth; the whole photo, not framed closer. */
   const [showFaces, setShowFaces] = useState(false);
   const [zoomOut, setZoomOut] = useState(false);
+  /** The photo, and the people and faces found in it, kept while it's the same photo (see generate). */
+  const photoCache = useRef<{
+    file: File;
+    full: ImageBitmap;
+    frame: Awaited<ReturnType<typeof framing>>;
+    found: Map<string, FoundSubjects>;
+  } | null>(null);
+  /** The last page's drawn faces (which layer, lines and pupils), for the Face button. */
+  const faceArt = useRef<{ li: number; lines: [number, number][][]; dots: { x: number; y: number; r: number }[] } | null>(null);
   const [tool, setTool] = useState<Tool>("color");
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
@@ -709,15 +729,25 @@ export default function ColorByNumber() {
     setFocusNote(null);
     // Let the "working" state paint before the pipeline blocks the main thread.
     await new Promise((r) => setTimeout(r, 30));
-    let full: ImageBitmap;
-    try {
-      full = await createImageBitmap(file, { imageOrientation: "from-image" });
-    } catch {
-      setError("Sorry, we couldn't read that photo. Try a different one.");
-      setBusy(null);
-      return;
+    // Finding people and faces is the slow part and depends only on the photo (and the part of
+    // it looked at), so it's done once per photo and reused for a new size or zoom.
+    let cache = photoCache.current;
+    if (!cache || cache.file !== file) {
+      cache?.full.close();
+      photoCache.current = null;
+      let bitmap: ImageBitmap;
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+      } catch {
+        setError("Sorry, we couldn't read that photo. Try a different one.");
+        setBusy(null);
+        return;
+      }
+      cache = { file, full: bitmap, frame: await framing(bitmap), found: new Map() };
+      photoCache.current = cache;
     }
-    let frame = await framing(full);
+    const full = cache.full;
+    let frame = cache.frame;
     // Zoomed out: the whole photo around the people, not framed closer on them.
     if (frame && wide) frame = { ...frame, scene: { x: 0, y: 0, width: full.width, height: full.height } };
     const params = DIFFICULTY_PARAMS[difficulty];
@@ -741,29 +771,33 @@ export default function ColorByNumber() {
 
     // The main layer: the people (and pets) on their own when there are some, else the photo.
     const mainRect: Rect = frame?.subjects ?? photoRect;
-    const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
-    const main = toWorkingImage(mainBitmap);
-    let subjects: SubjectBox[] = [];
-    let cutout: Uint8Array | undefined;
-    let animals: RegionMask[] = [];
-    let clothes: RegionMask | undefined;
-    let bodySkin: RegionMask | undefined;
-    let note = "";
-    try {
-      ({ subjects, cutout, animals, clothes, bodySkin } = await detectSubjects(mainBitmap, main.width, main.height, {
-        cutOut: !!frame,
-        sideShare: SIDE_PERSON_SHARE,
-        knownAnimals: frame?.animals,
-      }));
-    } catch {
-      note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
+    const foundKey = `${!!frame} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
+    let found = cache.found.get(foundKey);
+    if (!found) {
+      const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
+      const image = toWorkingImage(mainBitmap);
+      found = { main: image, subjects: [], animals: [], note: "" };
+      try {
+        Object.assign(
+          found,
+          await detectSubjects(mainBitmap, image.width, image.height, {
+            cutOut: !!frame,
+            sideShare: SIDE_PERSON_SHARE,
+            knownAnimals: frame?.animals,
+          }),
+        );
+      } catch {
+        found.note = "Couldn't load the people finder (are you offline?), so only buildings were used.";
+      }
+      if (mainBitmap !== full) mainBitmap.close();
+      // Only cut out when the people were actually found by the segmenter.
+      if (found.cutout && found.cutout.reduce((n, v) => n + v, 0) < MIN_CUTOUT_SHARE * found.cutout.length) {
+        found.cutout = undefined;
+      }
+      if (found.cutout) dropSpecks(found.cutout, image.width);
+      cache.found.set(foundKey, found);
     }
-    if (mainBitmap !== full) mainBitmap.close();
-    // Only cut out when the people were actually found by the segmenter.
-    if (cutout && cutout.reduce((n, v) => n + v, 0) < MIN_CUTOUT_SHARE * cutout.length) {
-      cutout = undefined;
-    }
-    if (cutout) dropSpecks(cutout, main.width);
+    const { main, subjects, cutout, animals, clothes, bodySkin, note } = found;
     const structure = structureMap(main.data, main.width, main.height);
     const map = importanceMap(structure, subjects, main.width, main.height);
     const list = [describeSubjects(subjects), map.buildings ? "buildings" : ""].filter(Boolean).join(", ");
@@ -809,8 +843,6 @@ export default function ColorByNumber() {
         ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
         minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
-    // Faces shown: each traced face's eyes, eyebrows, nose and mouth as lines on the page.
-    if (withFaces) mainResult.faceLines = faces.flatMap((f) => f.features ?? []);
 
     let page: Page;
     if (twoLayers && frame && cutout) {
@@ -849,7 +881,13 @@ export default function ColorByNumber() {
         COOL_BOOST[difficulty],
       );
     }
-    full.close();
+    // The people's drawn faces, kept so the Face button can show or hide them at once.
+    faceArt.current = {
+      li: twoLayers ? 1 : 0,
+      lines: faces.flatMap((f) => f.features ?? []),
+      dots: faces.flatMap((f) => f.pupils ?? []),
+    };
+    if (withFaces) page = withFacesDrawn(page, faceArt.current.li, faceArt.current);
     setFit(pageFit);
     made.current = {
       people: subjects.filter((s) => s.kind === "person").length,
@@ -1059,8 +1097,14 @@ export default function ColorByNumber() {
               disabled={!!busy}
               title={showFaces ? "Faces have eyes, nose and mouth. Click for no face." : "Faces are left blank. Click to show eyes, nose and mouth."}
               onClick={() => {
-                setShowFaces(!showFaces);
-                generate({ faces: !showFaces });
+                // Drawn on top of the page, so it changes at once and keeps any fixes.
+                const on = !showFaces;
+                setShowFaces(on);
+                const art = faceArt.current;
+                if (!art) return;
+                const apply = (p: Page) => withFacesDrawn(p, art.li, on ? art : null);
+                setResult((r) => r && apply(r));
+                setHistory((h) => h.map(apply));
               }}
               className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
             >
@@ -1072,6 +1116,7 @@ export default function ColorByNumber() {
               disabled={!!busy}
               title={zoomOut ? "The whole photo, with more background. Click to focus on the people." : "Focused on the people. Click for the whole photo."}
               onClick={() => {
+                if (fixLog.length && !window.confirm("Zooming remakes the page, so the fixes you made will be lost. Zoom anyway?")) return;
                 setZoomOut(!zoomOut);
                 generate({ zoomOut: !zoomOut });
               }}

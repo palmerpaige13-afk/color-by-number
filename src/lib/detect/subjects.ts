@@ -82,7 +82,27 @@ const BACKGROUND_FACE = 0.55;
 const TRACE_SIZE = 384;
 
 /** Bottom of the nose: left nostril, base of the nose, right nostril (landmark indices). */
-const NOSE: number[] = [98, 2, 327];
+/**
+ * Face-mesh points for a simple drawn face (MediaPipe's canonical face mesh; "right" is the
+ * person's own right, on the left of the photo).
+ */
+const FACE_DRAWING = {
+  browRightTop: [70, 63, 105, 66, 107],
+  browRightBottom: [46, 53, 52, 65, 55],
+  browLeftTop: [300, 293, 334, 296, 336],
+  browLeftBottom: [276, 283, 282, 295, 285],
+  lidRight: [33, 246, 161, 160, 159, 158, 157, 173, 133],
+  lidLeft: [263, 466, 388, 387, 386, 385, 384, 398, 362],
+  nose: [98, 97, 2, 326, 327],
+  // Where the lips meet: a smile's curve, without drawing lips or teeth.
+  smile: [61, 78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 291],
+  eyes: [
+    { corners: [33, 133], iris: 468 },
+    { corners: [263, 362], iris: 473 },
+  ],
+};
+/** A pupil's radius, as a share of the eye's width. */
+const PUPIL_SIZE = 0.16;
 
 const ANIMALS = ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"];
 
@@ -645,15 +665,28 @@ export async function detectSubjects(
     box.width = (Math.max(...xs) - Math.min(...xs)) * toWork;
     box.height = (Math.max(...ys) - Math.min(...ys)) * toWork;
     box.outline = chain(FaceLandmarker.FACE_LANDMARKS_FACE_OVAL).map((i) => w(lm[i]));
+    // A simple, friendly drawn face (full outlines of eyes and lips look creepy on a page):
+    // one line per eyebrow and upper eyelid, the bottom of the nose, a smile, and dark pupils.
+    const line = (ids: number[]) => ids.map((i) => w(lm[i]));
+    const between = (a: number[], b: number[]) =>
+      a.map((i, k): Point => {
+        const [p, q] = [w(lm[i]), w(lm[b[k]])];
+        return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+      });
     box.features = [
-      FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
-      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
-      FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
-      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
-      FaceLandmarker.FACE_LANDMARKS_LIPS,
-    ]
-      .flatMap((conns) => conns.map((c): Point[] => [w(lm[c.start]), w(lm[c.end])]))
-      .concat([NOSE.map((i) => w(lm[i]))]);
+      between(FACE_DRAWING.browRightTop, FACE_DRAWING.browRightBottom),
+      between(FACE_DRAWING.browLeftTop, FACE_DRAWING.browLeftBottom),
+      line(FACE_DRAWING.lidRight),
+      line(FACE_DRAWING.lidLeft),
+      line(FACE_DRAWING.nose),
+      line(FACE_DRAWING.smile),
+    ];
+    box.pupils = FACE_DRAWING.eyes.map(({ corners, iris }) => {
+      const [a, b] = corners.map((i) => w(lm[i]));
+      // The iris center when traced (478 points), else the middle of the eye.
+      const [x, y] = lm.length > iris ? w(lm[iris]) : [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      return { x, y, r: Math.hypot(b[0] - a[0], b[1] - a[1]) * PUPIL_SIZE };
+    });
     return [box];
   });
 

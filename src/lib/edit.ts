@@ -79,7 +79,7 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[], kind
   const count = regionColor.length;
   const area = new Uint32Array(count);
   for (let p = 0; p < labels.length; p++) area[labels[p]]++;
-  const pts = labelPoints(labels, count, w, h, boundaryDistanceAround(labels, w, h, r.faceLines));
+  const pts = labelPoints(labels, count, w, h, boundaryDistanceAround(labels, w, h, r.faceLines, r.faceDots));
   const result: PipelineResult = {
     ...r,
     labels,
@@ -121,6 +121,24 @@ function dropUnusedColors(page: Page): Page {
   });
   const numbers = layers.map(({ result: r }) => Uint8Array.from(r.palette, (_, i) => i));
   return { ...page, layers, numbers, key };
+}
+
+/**
+ * The page with faces drawn (`art`: layer, lines and pupils) or left blank (null), numbers
+ * moved off the drawn features. Nothing else changes, so fixes are kept.
+ */
+export function withFaces(
+  page: Page,
+  li: number,
+  art: { lines: [number, number][][]; dots: { x: number; y: number; r: number }[] } | null,
+): Page {
+  const r = page.layers[li]?.result;
+  if (!r) return page;
+  const faceLines = art?.lines;
+  const faceDots = art?.dots;
+  const pts = labelPoints(r.labels, r.regionCount, r.width, r.height, boundaryDistanceAround(r.labels, r.width, r.height, faceLines, faceDots));
+  const result: PipelineResult = { ...r, faceLines, faceDots, labelX: pts.x, labelY: pts.y, labelRadius: pts.radius };
+  return { ...page, layers: page.layers.map((l, i) => (i === li ? { ...l, result } : l)) };
 }
 
 /** The page with `spot` colored as number `n` (1-based, from the key). */

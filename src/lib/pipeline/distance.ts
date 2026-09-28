@@ -117,8 +117,9 @@ export function boundaryDistanceAround(
   w: number,
   h: number,
   lines?: [number, number][][],
+  dots?: { x: number; y: number; r: number }[],
 ): Float64Array {
-  if (!lines?.length) return boundaryDistance(labels, w, h);
+  if (!lines?.length && !dots?.length) return boundaryDistance(labels, w, h);
   const marked = labels.slice();
   const mark = labels instanceof Uint16Array ? 65535 : -1; // a label no region has
   const dot = (x: number, y: number) => {
@@ -126,7 +127,13 @@ export function boundaryDistanceAround(
     const py = Math.floor(y);
     if (px >= 0 && py >= 0 && px < w && py < h) marked[py * w + px] = mark;
   };
-  for (const line of lines) {
+  for (const d of dots ?? []) {
+    const r = Math.max(1, d.r);
+    for (let y = Math.floor(d.y - r); y <= d.y + r; y++) {
+      for (let x = Math.floor(d.x - r); x <= d.x + r; x++) if ((x - d.x) ** 2 + (y - d.y) ** 2 <= r * r) dot(x, y);
+    }
+  }
+  for (const line of lines ?? []) {
     for (let i = 1; i < line.length; i++) {
       const [x0, y0] = line[i - 1];
       const [x1, y1] = line[i];
