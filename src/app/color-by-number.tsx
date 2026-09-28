@@ -136,16 +136,20 @@ type Rect = { x: number; y: number; width: number; height: number };
  * - `scene`: with background, the photo framed closer when they're small in it.
  * Null when it isn't a photo *of* people.
  */
-async function framing(full: ImageBitmap): Promise<{ subjects: Rect; scene: Rect } | null> {
-  const found = await findPeople(full).catch(() => ({ people: [], animals: [] }));
+async function framing(
+  full: ImageBitmap,
+): Promise<{ subjects: Rect; scene: Rect; animals: (Rect & { label: string })[] } | null> {
+  const found = await findPeople(full).catch(() => ({ people: [], animals: [], peopleReach: [], animalReach: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
   if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return null;
   // Someone cut off at the side of the photo (a leg and an arm showing) isn't a subject.
   const sliver = (b: Rect) => (b.x <= full.width * 0.02 || b.x + b.width >= full.width * 0.98) && b.width < b.height * 0.3;
+  // Who's a subject is judged by their boxes; the frame then takes in all of each (a bride the
+  // detector boxed only half of, a dog's body across someone's lap).
   const keep = [
-    ...found.people.filter((b) => area(b) >= SIDE_PERSON_SHARE * biggest && !sliver(b)),
-    ...found.animals.filter((b) => area(b) >= PET_SHARE * biggest),
+    ...found.people.flatMap((b, i) => (area(b) >= SIDE_PERSON_SHARE * biggest && !sliver(b) ? [found.peopleReach[i] ?? b] : [])),
+    ...found.animals.flatMap((b, i) => (area(b) >= PET_SHARE * biggest ? [found.animalReach[i] ?? b] : [])),
   ];
   const x0 = Math.min(...keep.map((b) => b.x));
   const y0 = Math.min(...keep.map((b) => b.y));
@@ -173,7 +177,9 @@ async function framing(full: ImageBitmap): Promise<{ subjects: Rect; scene: Rect
     width: sw,
     height: sh,
   };
-  return { subjects, scene };
+  // The animals found, in the subjects' own pixels, so the closer look doesn't lose them.
+  const animals = found.animals.map((a) => ({ ...a, x: a.x - subjects.x, y: a.y - subjects.y }));
+  return { subjects, scene, animals };
 }
 
 /**
@@ -707,6 +713,7 @@ export default function ColorByNumber() {
       ({ subjects, cutout, animals, clothes, bodySkin } = await detectSubjects(mainBitmap, main.width, main.height, {
         cutOut: !!frame,
         sideShare: SIDE_PERSON_SHARE,
+        knownAnimals: frame?.animals,
       }));
     } catch {
       note = "Couldn't load the people finder (are you offline?), so only buildings were used.";

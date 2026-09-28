@@ -27,7 +27,21 @@ const SEGMENT_MODEL = `${MODELS}/image_segmenter/selfie_multiclass_256x256/float
 const ANIMAL_MODEL = `${MODELS}/image_segmenter/deeplab_v3/float32/latest/deeplab_v3.tflite`;
 /** DeepLab category indices for animals: bird, cat, cow, dog, horse, sheep. */
 const ANIMAL_CLASSES = new Set([3, 8, 10, 12, 13, 17]);
+/** DeepLab's person class. */
+const DEEPLAB_PERSON = 15;
 const ANIMAL_SIZE = 257;
+/**
+ * How much bigger than the detector's box the animal is traced in: the box often covers only
+ * part of a pet (the head and chest of a dog lying across someone's lap), and the rest of it
+ * joins on as long as it's connected.
+ */
+const ANIMAL_PAD = 2;
+/** Margin around an animal's full reach (see animalReach) when tracing it. */
+const REACH_PAD = 1.1;
+/** Area searched around a person's box for the rest of them (see personReach), as a multiple of its long side. */
+const PERSON_REACH_PAD = 1.6;
+/** A face whose box is less than this share face skin (to the segmenter) isn't a person's face. */
+const MIN_FACE_SKIN = 0.1;
 /** Width of the close-up of a pet's head searched for eyes and nose. */
 const PET_FACE_SIZE = 320;
 /** Category indices in the multiclass segmenter's output. */
@@ -171,8 +185,9 @@ type Found = { x: number; y: number; w: number; h: number; name: string };
 
 /**
  * People and animals on the detection canvas. The detector looks at a small copy of the whole
- * photo and can miss someone at the edge of a group, so it also looks at each half of the
- * photo up close; a person found there that wasn't found before is added.
+ * photo and can miss someone at the edge of a group (or a dog in someone's lap), so it also
+ * looks at each half of the photo up close; a person or animal found there that wasn't found
+ * before is added.
  */
 function detectObjects(objects: ObjectDetector, canvas: HTMLCanvasElement): Found[] {
   const found: Found[] = [];
@@ -198,14 +213,15 @@ function detectObjects(objects: ObjectDetector, canvas: HTMLCanvasElement): Foun
     drawClipped(tile.getContext("2d")!, canvas, tx, ty, tw, th, 0, 0, tile.width, tile.height);
     for (const d of objects.detect(tile).detections) {
       const f = add(d, tx, ty, 1);
-      if (!f || f.name !== "person") continue;
+      if (!f) continue;
+      const isPerson = f.name === "person";
       // Skip people cut by the tile's inner edge, and anyone already found.
       const cut = wide
         ? (start > 0 && f.x <= tx + 2) || (start === 0 && f.x + f.w >= tx + tw - 2)
         : (start > 0 && f.y <= ty + 2) || (start === 0 && f.y + f.h >= ty + th - 2);
       if (cut) continue;
       const seen = found.some((g) => {
-        if (g.name !== "person") return false;
+        if ((g.name === "person") !== isPerson) return false;
         const ix = Math.max(0, Math.min(f.x + f.w, g.x + g.w) - Math.max(f.x, g.x));
         const iy = Math.max(0, Math.min(f.y + f.h, g.y + g.h) - Math.max(f.y, g.y));
         return ix * iy > 0.4 * Math.min(f.w * f.h, g.w * g.h);
@@ -216,17 +232,179 @@ function detectObjects(objects: ObjectDetector, canvas: HTMLCanvasElement): Foun
   return found;
 }
 
-/** People and animals in the photo, as boxes in the image's own pixels. Used to crop to the subject. */
-export async function findPeople(image: ImageBitmap): Promise<{ people: Box[]; animals: Box[] }> {
+/**
+ * People and animals in the photo, as boxes in the image's own pixels, and how far each really
+ * reaches (`peopleReach`, `animalReach`: the box grown to their traced outline, the same box
+ * when that can't be told). Used to crop to the subject.
+ */
+export async function findPeople(
+  image: ImageBitmap,
+): Promise<{ people: Box[]; animals: (Box & { label: string })[]; peopleReach: Box[]; animalReach: Box[] }> {
   const { objects } = await loadDetectors();
   const { canvas, scale } = detectionCanvas(image);
   const people: Box[] = [];
-  const animals: Box[] = [];
+  const animals: (Box & { label: string })[] = [];
   for (const f of detectObjects(objects, canvas)) {
     const box = { x: f.x / scale, y: f.y / scale, width: f.w / scale, height: f.h / scale };
-    (f.name === "person" ? people : animals).push(box);
+    if (f.name === "person") people.push(box);
+    else animals.push({ ...box, label: f.name });
   }
-  return { people, animals };
+  const toCanvas = (b: Box) => ({ x: b.x * scale, y: b.y * scale, w: b.width * scale, h: b.height * scale });
+  const toImage = (r: { x: number; y: number; w: number; h: number }): Box => ({
+    x: r.x / scale,
+    y: r.y / scale,
+    width: r.w / scale,
+    height: r.h / scale,
+  });
+  const peopleReach = [...people];
+  if (people.length) {
+    const model = await loadSegmenter().catch(() => null);
+    if (model) {
+      people.forEach((b, i) => {
+        const r = personReach(model, canvas, toCanvas(b));
+        if (r) peopleReach[i] = toImage(r);
+      });
+    }
+  }
+  const animalReachBoxes: Box[] = [...animals];
+  if (animals.length) {
+    const model = await loadAnimalSegmenter().catch(() => null);
+    if (model) {
+      animalReach(model, canvas, animals.map(toCanvas)).forEach((r, i) => {
+        if (r) animalReachBoxes[i] = toImage(r);
+      });
+    }
+  }
+  return { people, animals, peopleReach, animalReach: animalReachBoxes };
+}
+
+/**
+ * How far a person really reaches, on the detection canvas. The detector can box two people
+ * as one, or only part of someone (a bride in profile under a veil, kissing the groom), so the
+ * people are segmented around the box and it grows to everyone joined to the person in it.
+ * Null when the segmenter finds no one there.
+ */
+function personReach(
+  model: ImageSegmenter,
+  canvas: HTMLCanvasElement,
+  b: { x: number; y: number; w: number; h: number },
+): { x: number; y: number; w: number; h: number } | null {
+  const N = SEGMENT_SIZE;
+  const side = Math.max(b.w, b.h) * PERSON_REACH_PAD;
+  const sx = b.x + b.w / 2 - side / 2;
+  const sy = b.y + b.h / 2 - side / 2;
+  const crop = document.createElement("canvas");
+  crop.width = crop.height = N;
+  const ctx = crop.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, N, N);
+  drawClipped(ctx, canvas, sx, sy, side, side, 0, 0, N, N);
+  const result = model.segment(crop);
+  const cats = result.categoryMask?.getAsUint8Array().slice();
+  result.close();
+  if (!cats) return null;
+  const k = N / side;
+  // Only inside the photo (the square can hang over its edge, drawn black).
+  const inPhoto = (u: number, v: number) => {
+    const x = sx + (u + 0.5) / k;
+    const y = sy + (v + 0.5) / k;
+    return x >= 0 && y >= 0 && x < canvas.width && y < canvas.height;
+  };
+  const seen = new Uint8Array(N * N);
+  let queue: number[] = [];
+  const u0 = Math.max(0, Math.floor((b.x - sx) * k));
+  const v0 = Math.max(0, Math.floor((b.y - sy) * k));
+  const u1 = Math.min(N - 1, Math.ceil((b.x + b.w - sx) * k));
+  const v1 = Math.min(N - 1, Math.ceil((b.y + b.h - sy) * k));
+  for (let v = v0; v <= v1; v++) {
+    for (let u = u0; u <= u1; u++) {
+      const i = v * N + u;
+      if (cats[i] !== 0 && inPhoto(u, v)) {
+        seen[i] = 1;
+        queue.push(i);
+      }
+    }
+  }
+  if (!queue.length) return null;
+  let minU = N, minV = N, maxU = -1, maxV = -1;
+  while (queue.length) {
+    const next: number[] = [];
+    for (const i of queue) {
+      const u = i % N;
+      const v = (i - u) / N;
+      minU = Math.min(minU, u); maxU = Math.max(maxU, u); minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+      for (const j of [u > 0 ? i - 1 : -1, u < N - 1 ? i + 1 : -1, i - N, i + N]) {
+        if (j < 0 || j >= N * N || seen[j] || cats[j] === 0 || !inPhoto(j % N, Math.floor(j / N))) continue;
+        seen[j] = 1;
+        next.push(j);
+      }
+    }
+    queue = next;
+  }
+  const x = Math.min(b.x, sx + minU / k);
+  const y = Math.min(b.y, sy + minV / k);
+  return { x, y, w: Math.max(b.x + b.w, sx + (maxU + 1) / k) - x, h: Math.max(b.y + b.h, sy + (maxV + 1) / k) - y };
+}
+
+/**
+ * How far each animal really reaches, on the detection canvas. The detector's box often covers
+ * only part of a pet (the head and chest of a dog lying across someone's lap), so the whole
+ * photo is segmented and each box grows to the people and animals joined to it; people are in
+ * the frame anyway, so this only adds the rest of the pet. Null where nothing was found.
+ */
+function animalReach(
+  model: ImageSegmenter,
+  canvas: HTMLCanvasElement,
+  boxes: { x: number; y: number; w: number; h: number }[],
+): ({ x: number; y: number; w: number; h: number } | null)[] {
+  const N = ANIMAL_SIZE;
+  const crop = document.createElement("canvas");
+  crop.width = crop.height = N;
+  crop.getContext("2d")!.drawImage(canvas, 0, 0, N, N);
+  const result = model.segment(crop);
+  const cats = result.categoryMask?.getAsUint8Array().slice();
+  result.close();
+  if (!cats) return boxes.map(() => null);
+  const kx = N / canvas.width;
+  const ky = N / canvas.height;
+  const alive = (i: number) => cats[i] === DEEPLAB_PERSON || ANIMAL_CLASSES.has(cats[i]);
+  return boxes.map((b) => {
+    // Start from the animal's own pixels inside its box.
+    const seen = new Uint8Array(N * N);
+    let queue: number[] = [];
+    const u0 = Math.max(0, Math.floor(b.x * kx));
+    const v0 = Math.max(0, Math.floor(b.y * ky));
+    const u1 = Math.min(N - 1, Math.ceil((b.x + b.w) * kx));
+    const v1 = Math.min(N - 1, Math.ceil((b.y + b.h) * ky));
+    for (let v = v0; v <= v1; v++) {
+      for (let u = u0; u <= u1; u++) {
+        const i = v * N + u;
+        if (ANIMAL_CLASSES.has(cats[i])) {
+          seen[i] = 1;
+          queue.push(i);
+        }
+      }
+    }
+    if (!queue.length) return null;
+    let minU = u1, minV = v1, maxU = u0, maxV = v0;
+    while (queue.length) {
+      const next: number[] = [];
+      for (const i of queue) {
+        const u = i % N;
+        const v = (i - u) / N;
+        minU = Math.min(minU, u); maxU = Math.max(maxU, u); minV = Math.min(minV, v); maxV = Math.max(maxV, v);
+        for (const j of [u > 0 ? i - 1 : -1, u < N - 1 ? i + 1 : -1, i - N, i + N]) {
+          if (j < 0 || j >= N * N || seen[j] || !alive(j)) continue;
+          seen[j] = 1;
+          next.push(j);
+        }
+      }
+      queue = next;
+    }
+    const x = Math.min(b.x, minU / kx);
+    const y = Math.min(b.y, minV / ky);
+    return { x, y, w: Math.max(b.x + b.w, (maxU + 1) / kx) - x, h: Math.max(b.y + b.h, (maxV + 1) / ky) - y };
+  });
 }
 
 export interface Detection {
@@ -249,7 +427,20 @@ export async function detectSubjects(
   image: ImageBitmap,
   workW: number,
   workH: number,
-  { cutOut = false, sideShare = 0.25 } = {},
+  {
+    cutOut = false,
+    sideShare = 0.25,
+    knownAnimals = [],
+  }: {
+    cutOut?: boolean;
+    sideShare?: number;
+    /**
+     * Animals already found in this image (its own pixels), e.g. when framing the whole photo.
+     * A pet the detector is unsure about can be found in one look and missed in the next; any
+     * not found again here are added.
+     */
+    knownAnimals?: (Box & { label: string })[];
+  } = {},
 ): Promise<Detection> {
   const { objects, faces, landmarks } = await loadDetectors();
 
@@ -268,6 +459,17 @@ export async function detectSubjects(
     if (kind === "person") people.push({ x: f.x, y: f.y, w: f.w, h: f.h });
     else pets.push({ x: f.x, y: f.y, w: f.w, h: f.h, label: f.name });
     out.push({ kind, x: f.x * toWork, y: f.y * toWork, width: f.w * toWork, height: f.h * toWork });
+  }
+  for (const a of knownAnimals) {
+    const p = { x: a.x * scale, y: a.y * scale, w: a.width * scale, h: a.height * scale, label: a.label };
+    const seen = pets.some((q) => {
+      const ix = Math.max(0, Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x));
+      const iy = Math.max(0, Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y));
+      return ix * iy > 0.3 * Math.min(p.w * p.h, q.w * q.h);
+    });
+    if (seen || p.w < 4 || p.h < 4) continue;
+    pets.push(p);
+    out.push({ kind: "animal", x: p.x * toWork, y: p.y * toWork, width: p.w * toWork, height: p.h * toWork });
   }
 
   // Face candidates from the whole photo and from zoomed-in crops of each person; the same
@@ -405,18 +607,36 @@ export async function detectSubjects(
 
   await breathe();
   const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
-  const animals = animalSeg ? pets.flatMap((p) => traceAnimal(animalSeg, p) ?? []) : [];
+  const reach = animalSeg ? animalReach(animalSeg, canvas, pets) : [];
+  const animals = animalSeg ? pets.flatMap((p, i) => traceAnimal(animalSeg, p, reach[i]) ?? []) : [];
   pets.forEach((p) => {
     const a = animals.find((m) => m.label === p.label && m.box && Math.abs(m.box.x - p.x * toWork) < 1);
     if (a && (p.label === "dog" || p.label === "cat")) a.face = petFace(p);
   });
   if (cutout) for (const a of animals) paint(a, cutout);
+  // A "face" on an animal (a dog's face in someone's lap) isn't a person's face: the animal
+  // gets its own eyes and nose instead of a blank skin-colored face.
+  kept = kept.filter((c) => {
+    const fx = Math.floor((c.x + c.w / 2) * toWork);
+    const fy = Math.floor((c.y + c.h / 2) * toWork);
+    return !animals.some((a) => {
+      const x = fx - a.x;
+      const y = fy - a.y;
+      return x >= 0 && y >= 0 && x < a.width && y < a.height && a.data[y * a.width + x] === 1;
+    });
+  });
 
-  const faceBoxes: SubjectBox[] = kept.map((c) => {
+  const faceBoxes: SubjectBox[] = kept.flatMap((c) => {
     const w = (pt: Point): Point => [pt[0] * toWork, pt[1] * toWork];
     const box: SubjectBox = { kind: "face", x: c.x * toWork, y: c.y * toWork, width: c.w * toWork, height: c.h * toWork };
-    if (seg) Object.assign(box, segmentFace(seg, c));
-    if (!c.lm) return box;
+    if (seg) {
+      const { skin, hair, skinShare } = segmentFace(seg, c);
+      // A person's face always shows skin; a "face" with almost none is a pet's furry face
+      // (or a pattern), which keeps its own look instead of turning into a blank skin oval.
+      if (skinShare < MIN_FACE_SKIN) return [];
+      Object.assign(box, { skin, hair });
+    }
+    if (!c.lm) return [box];
     const lm = c.lm;
     const xs = lm.map((p) => p[0]);
     const ys = lm.map((p) => p[1]);
@@ -434,14 +654,15 @@ export async function detectSubjects(
     ]
       .flatMap((conns) => conns.map((c): Point[] => [w(lm[c.start]), w(lm[c.end])]))
       .concat([NOSE.map((i) => w(lm[i]))]);
-    return box;
+    return [box];
   });
 
   /**
    * Face-skin and hair masks for candidate `c`, in working pixels, from the segmenter run on a
    * square around the face. The skin keeps only the blob at the face's center, holes filled.
+   * `skinShare` is how much of the face's box the segmenter saw as face skin.
    */
-  function segmentFace(model: ImageSegmenter, c: Candidate): Pick<SubjectBox, "skin" | "hair"> {
+  function segmentFace(model: ImageSegmenter, c: Candidate): Pick<SubjectBox, "skin" | "hair"> & { skinShare: number } {
     const side = Math.max(c.w, c.h) * SEGMENT_PAD;
     const sx = c.x + c.w / 2 - side / 2;
     const sy = c.y + c.h / 2 - side / 2;
@@ -453,7 +674,7 @@ export async function detectSubjects(
     const result = model.segment(crop);
     const cats = result.categoryMask?.getAsUint8Array().slice();
     result.close();
-    if (!cats) return {};
+    if (!cats) return { skinShare: 1 };
 
     // Resample into working pixels.
     const x0 = Math.floor(sx * toWork);
@@ -477,9 +698,13 @@ export async function detectSubjects(
     const fcy = (c.y + c.h / 2) * toWork - y0;
     const rx = (c.w / 2) * toWork * 0.85;
     const ry = (c.h / 2) * toWork * 0.95;
+    let inBox = 0;
+    let skinInBox = 0;
     for (let y = Math.max(0, Math.floor(fcy - ry)); y <= Math.min(size - 1, fcy + ry); y++) {
       for (let x = Math.max(0, Math.floor(fcx - rx)); x <= Math.min(size - 1, fcx + rx); x++) {
         if (((x - fcx) / rx) ** 2 + ((y - fcy) / ry) ** 2 <= 1) {
+          inBox++;
+          skinInBox += data[y * size + x];
           data[y * size + x] = 1;
           hair[y * size + x] = 0;
         }
@@ -489,6 +714,7 @@ export async function detectSubjects(
     return {
       skin: hasSkin ? { x: x0, y: y0, width: size, height: size, data } : undefined,
       hair: { x: x0, y: y0, width: size, height: size, data: hair },
+      skinShare: inBox ? skinInBox / inBox : 1,
     };
   }
 
@@ -576,10 +802,12 @@ export async function detectSubjects(
   function traceAnimal(
     model: ImageSegmenter,
     p: { x: number; y: number; w: number; h: number; label: string },
+    /** How far the animal reaches (see animalReach): the area traced covers all of it. */
+    reach?: { x: number; y: number; w: number; h: number } | null,
   ): RegionMask | undefined {
-    const side = Math.max(p.w, p.h) * 1.2;
-    const sx = p.x + p.w / 2 - side / 2;
-    const sy = p.y + p.h / 2 - side / 2;
+    const side = reach ? Math.max(reach.w, reach.h) * REACH_PAD : Math.max(p.w, p.h) * ANIMAL_PAD;
+    const sx = (reach ? reach.x + reach.w / 2 : p.x + p.w / 2) - side / 2;
+    const sy = (reach ? reach.y + reach.h / 2 : p.y + p.h / 2) - side / 2;
     const N = ANIMAL_SIZE;
     crop.width = crop.height = N;
     const ctx = crop.getContext("2d")!;
@@ -594,16 +822,43 @@ export async function detectSubjects(
     const y0 = Math.floor(sy * toWork);
     const size = Math.ceil(side * toWork) + 1;
     const data = new Uint8Array(size * size);
+    const fg = new Uint8Array(size * size); // anything DeepLab sees as not background
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const u = Math.floor((((x0 + x + 0.5) / toWork - sx) / side) * N);
         const v = Math.floor((((y0 + y + 0.5) / toWork - sy) / side) * N);
-        if (u >= 0 && v >= 0 && u < N && v < N && ANIMAL_CLASSES.has(cats[v * N + u])) data[y * size + x] = 1;
+        if (u < 0 || v < 0 || u >= N || v >= N) continue;
+        const cat = cats[v * N + u];
+        if (ANIMAL_CLASSES.has(cat)) data[y * size + x] = 1;
+        if (cat !== 0) fg[y * size + x] = 1;
       }
     }
     const cx = (p.x + p.w / 2) * toWork - x0;
     const cy = (p.y + p.h / 2) * toWork - y0;
-    return cleanBlob(data, size, cx, cy)
+    const found = cleanBlob(data, size, cx, cy);
+    // A pet in someone's lap: DeepLab often calls its body part of the person, while the
+    // people cut-out says it isn't a person. What's neither background nor person, and joins
+    // the pet, is the rest of the pet.
+    if (found && cutout) {
+      let queue: number[] = [];
+      for (let i = 0; i < data.length; i++) if (data[i]) queue.push(i);
+      while (queue.length) {
+        const next: number[] = [];
+        for (const i of queue) {
+          const x = i % size;
+          for (const j of [x > 0 ? i - 1 : -1, x < size - 1 ? i + 1 : -1, i - size, i + size]) {
+            if (j < 0 || j >= data.length || data[j] || !fg[j]) continue;
+            const wx = x0 + (j % size);
+            const wy = y0 + Math.floor(j / size);
+            if (wx < 0 || wy < 0 || wx >= workW || wy >= workH || cutout[wy * workW + wx]) continue;
+            data[j] = 1;
+            next.push(j);
+          }
+        }
+        queue = next;
+      }
+    }
+    return found
       ? {
           x: x0,
           y: y0,
