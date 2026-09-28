@@ -998,24 +998,6 @@ export default function ColorByNumber() {
       {result && (
         <section ref={resultRef} className="flex scroll-mt-4 flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2 print:hidden">
-            <button
-              type="button"
-              onClick={() => (paymentsOn && !paid ? setPaying(true) : downloadPdf())}
-              disabled={!!busy}
-              className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-            >
-              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${PRICE_LABEL}` : ""}
-            </button>
-            {paying && (
-              <Checkout
-                onClose={() => setPaying(false)}
-                onPaid={() => {
-                  setPaid(true);
-                  setPaying(false);
-                  downloadPdf();
-                }}
-              />
-            )}
             <span className="text-sm text-zinc-500">
               {result.shapes} shapes · {key.length} colors
             </span>
@@ -1270,6 +1252,29 @@ export default function ColorByNumber() {
                       : "Make a fix or write a note to send."}
               </span>
             </div>
+          </div>
+
+          {/* Download last, after the help box, so people see they can share what went wrong. */}
+          <div className="flex flex-col items-center gap-2 py-2 print:hidden">
+            <button
+              type="button"
+              onClick={() => (paymentsOn && !paid ? setPaying(true) : downloadPdf())}
+              disabled={!!busy}
+              className="rounded-full bg-zinc-900 px-6 py-3 font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${PRICE_LABEL}` : ""}
+            </button>
+            <span className="text-sm text-zinc-500">The page to color, the color key, and the finished picture.</span>
+            {paying && (
+              <Checkout
+                onClose={() => setPaying(false)}
+                onPaid={() => {
+                  setPaid(true);
+                  setPaying(false);
+                  downloadPdf();
+                }}
+              />
+            )}
           </div>
         </section>
       )}
