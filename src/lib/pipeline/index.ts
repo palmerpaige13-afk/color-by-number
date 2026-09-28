@@ -35,6 +35,10 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
 const BUDGET_PART_DIST = 20;
 /** Within one person's clothes, colors closer than this (ΔE) are light and shadow on one piece. */
 const CLOTHES_SHADE = 22;
+/** ...and differ in colorfulness (Lab chroma) by less than this. */
+const CLOTHES_SHADE_CHROMA = 10;
+/** On pages with flat clothes, each person's clothes get this many colors of their own. */
+const FLAT_CLOTHES_COLORS = 4;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
 const PATTERN_SHARE = 0.5;
 /**
@@ -235,6 +239,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
           faceStyle,
           params.oneSkinTone ? input.bodySkin : undefined,
           input.cutout,
+          1,
+          params.flatClothes ? FLAT_CLOTHES_COLORS : 0,
         )
       : null;
   let palette = faces?.palette ?? q.palette;
@@ -301,6 +307,10 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
         const cb = comps.color[b];
         if (kind[ca] !== PartKind.clothes || group?.[ca] !== group?.[cb]) return;
         if (labDist2(paletteLab, ca * 3, paletteLab, cb * 3) >= CLOTHES_SHADE * CLOTHES_SHADE) return;
+        // Shadow only darkens a color; a colorful patch next to a gray one (denim shorts
+        // under a black top) is a different piece of clothing.
+        const chroma = (c: number) => Math.hypot(paletteLab[c * 3 + 1], paletteLab[c * 3 + 2]);
+        if (Math.abs(chroma(ca) - chroma(cb)) >= CLOTHES_SHADE_CHROMA) return;
         shade[a] = shade[b] = 1;
         any = true;
       };

@@ -148,19 +148,23 @@ export function buildPage(
     result.palette.forEach((rgb, index) => {
       if (area[index] <= 0) return;
       const kind = result.partKind?.[index] ?? 0;
-      const face = kind === FACE ? `${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
+      // Whose skin or clothes this is (a person's clothes are a part of their own).
+      const face =
+        kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
       entries.push({ layer, index, rgb: kind ? rgb : coolBoost(rgb, cool), area: area[index], kind, face });
     });
   });
 
-  // Which people's skin touches someone else's (a cheek-to-cheek hug, a child in arms): only
-  // those need their own numbers; people standing apart can share one.
+  // Which people's skin touches someone else's (a cheek-to-cheek hug, a child in arms), and
+  // whose clothes touch someone else's (her denim shorts against his dark shorts): only those
+  // need their own numbers; people standing apart can share one.
   const touching = new Set<string>();
   layers.forEach(({ result }, layer) => {
     const { width: w, height: h, labels, regionColor, partKind, partGroup } = result;
     const skinOf = (p: number) => {
       const c = regionColor[labels[p]];
-      return partKind?.[c] === FACE ? `${layer}:${partGroup?.[c] ?? 0}` : null;
+      const kind = partKind?.[c];
+      return kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${partGroup?.[c] ?? 0}` : null;
     };
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -186,7 +190,7 @@ export function buildPage(
     area: number;
     faces: boolean;
     hair: boolean;
-    /** The faces (and skin) whose colors are in this cluster. */
+    /** The faces (and skin), and people's clothes, whose colors are in this cluster. */
     who: Set<string>;
   };
   const toLab = (rgb: RGB) => {
@@ -203,10 +207,10 @@ export function buildPage(
     hair: e.kind === HAIR,
     who: new Set(e.face ? [e.face] : []),
   }));
-  // A face and hair never share a number, however close their colors are. The skin of two
-  // people who touch shares a number only if it's exactly the same color, so faces cheek to
-  // cheek don't read as one face. (A person's arms and legs are exact copies of their face's
-  // color, so they still join it.)
+  // A face and hair never share a number, however close their colors are. The skin (or
+  // clothes) of two people who touch shares a number only if it's exactly the same color, so
+  // faces cheek to cheek don't read as one face, nor two people's clothes as one piece. (A
+  // person's arms and legs are exact copies of their face's color, so they still join it.)
   const canMerge = (a: Cluster, b: Cluster, d2: number) => {
     if ((a.faces && b.hair) || (a.hair && b.faces)) return false;
     if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;

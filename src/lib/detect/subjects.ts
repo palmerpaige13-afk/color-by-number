@@ -60,6 +60,8 @@ const HAIR_COLOR_STEP = 2;
 const LEFT_OVER = 250;
 /** Growing clothes between people: extra steps per ΔE of color change crossed. */
 const CLOTHES_EDGE_COST = 2;
+/** Each face claims the clothes below it down to this many face heights below its top. */
+const CLOTHES_STRIP_DEPTH = 5.5;
 /** …and per ΔE a pixel is from the person's own clothes color. */
 const CLOTHES_OWN_COST = 1.5;
 /** …and per face width beyond this, sideways from their face. */
@@ -1106,7 +1108,9 @@ export async function detectSubjects(
       const x0 = Math.max(0, Math.floor(cx - f.width * 0.25));
       const x1 = Math.min(workW - 1, Math.ceil(cx + f.width * 0.25));
       const y0 = Math.max(0, Math.floor(f.y + f.height * 1.2));
-      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * 3));
+      // Down past the waist, so shorts or a skirt are claimed too even when someone's arm
+      // around the waist cuts them off from the shirt.
+      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * CLOTHES_STRIP_DEPTH));
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const p = y * workW + x;

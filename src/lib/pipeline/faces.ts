@@ -203,6 +203,11 @@ export function separateFaces(
   person?: Uint8Array,
   /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
   hairTones: 1 | 2 = 1,
+  /**
+   * Colors picked from each person's own clothes (0: the photo's shared colors). With few
+   * colors for the whole photo, dark denim and a black top would otherwise share one.
+   */
+  clothesColors = 0,
 ): FaceRegions {
   const detected = faces.length;
   faces = faces.flatMap(splitDoubleFace);
@@ -328,6 +333,16 @@ export function separateFaces(
     }
   }
 
+  if (clothesColors > 0) {
+    for (const [k, kind] of kindOf) {
+      if (kind !== PartKind.clothes) continue;
+      const own = clothesPalette(smoothed, parts, k, clothesColors);
+      if (!own) continue;
+      const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
+      if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
+    }
+  }
+
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
@@ -355,6 +370,65 @@ export function separateFaces(
     mask,
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
   };
+}
+
+/**
+ * A piece of clothing's own `n` colors: its pixels grouped by color (k-means in Lab), each
+ * group's average color, and each pixel's group.
+ */
+function clothesPalette(
+  smoothed: Uint8ClampedArray,
+  parts: Uint8Array,
+  k: number,
+  n: number,
+): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
+  const px: number[] = [];
+  for (let p = 0; p < parts.length; p++) if (parts[p] === k) px.push(p);
+  if (px.length < n * 20) return null;
+  const lab = new Float32Array(px.length * 3);
+  px.forEach((p, i) => rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, i * 3));
+  // Start from colors as different as possible (each the furthest from those picked so far),
+  // so a dark top and dark denim, equally dark, still start apart.
+  const centers = new Float32Array(n * 3);
+  const step = Math.max(1, Math.floor(px.length / 4000));
+  const nearest = new Float64Array(px.length).fill(Infinity);
+  let pick = px.map((_, i) => i).sort((a, b) => lab[a * 3] - lab[b * 3])[px.length >> 1];
+  for (let c = 0; c < n; c++) {
+    centers.set(lab.subarray(pick * 3, pick * 3 + 3), c * 3);
+    let far = -1;
+    for (let i = 0; i < px.length; i += step) {
+      nearest[i] = Math.min(nearest[i], labDist2(lab, i * 3, centers, c * 3));
+      if (far < 0 || nearest[i] > nearest[far]) far = i;
+    }
+    pick = far;
+  }
+  const group = new Uint8Array(px.length);
+  for (let round = 0; round < 8; round++) {
+    const sum = new Float64Array(n * 4);
+    for (let i = 0; i < px.length; i++) {
+      let best = 0;
+      let bestD = Infinity;
+      for (let c = 0; c < n; c++) {
+        const d = labDist2(lab, i * 3, centers, c * 3);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      group[i] = best;
+      for (let a = 0; a < 3; a++) sum[best * 4 + a] += lab[i * 3 + a];
+      sum[best * 4 + 3]++;
+    }
+    for (let c = 0; c < n; c++) if (sum[c * 4 + 3]) for (let a = 0; a < 3; a++) centers[c * 3 + a] = sum[c * 4 + a] / sum[c * 4 + 3];
+  }
+  const rgbSum = new Float64Array(n * 4);
+  px.forEach((p, i) => {
+    for (let a = 0; a < 3; a++) rgbSum[group[i] * 4 + a] += smoothed[p * 4 + a];
+    rgbSum[group[i] * 4 + 3]++;
+  });
+  const rgb = Array.from({ length: n }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))) as RGB);
+  const out = new Float32Array(n * 3);
+  rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
+  const tone = new Map<number, number>();
+  px.forEach((p, i) => tone.set(p, group[i]));
+  return { rgb, lab: out, tone };
 }
 
 /**
