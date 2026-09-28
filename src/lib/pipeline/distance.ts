@@ -107,3 +107,32 @@ export function labelPoints(
   for (let i = 0; i < count; i++) radius[i] = Math.sqrt(Math.max(0, best[i])) + 0.5;
   return { x, y, radius };
 }
+
+/**
+ * Like boundaryDistance, but lines drawn over the regions (a face's eyes, nose and mouth) also
+ * count as boundaries, so a number is never placed on them.
+ */
+export function boundaryDistanceAround(
+  labels: Int32Array | Uint16Array,
+  w: number,
+  h: number,
+  lines?: [number, number][][],
+): Float64Array {
+  if (!lines?.length) return boundaryDistance(labels, w, h);
+  const marked = labels.slice();
+  const mark = labels instanceof Uint16Array ? 65535 : -1; // a label no region has
+  const dot = (x: number, y: number) => {
+    const px = Math.floor(x);
+    const py = Math.floor(y);
+    if (px >= 0 && py >= 0 && px < w && py < h) marked[py * w + px] = mark;
+  };
+  for (const line of lines) {
+    for (let i = 1; i < line.length; i++) {
+      const [x0, y0] = line[i - 1];
+      const [x1, y1] = line[i];
+      const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2));
+      for (let s = 0; s <= steps; s++) dot(x0 + ((x1 - x0) * s) / steps, y0 + ((y1 - y0) * s) / steps);
+    }
+  }
+  return boundaryDistance(marked, w, h);
+}

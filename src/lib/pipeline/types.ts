@@ -127,6 +127,8 @@ export interface PipelineResult {
   partGroup?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
+  /** People's eyes, eyebrows, nose and mouth, drawn as lines when faces are shown (working pixels). */
+  faceLines?: Point[][];
   noses?: { x: number; y: number; rx: number; ry: number }[];
   timings: Record<string, number>;
   debug?: {

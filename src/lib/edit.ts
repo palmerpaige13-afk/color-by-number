@@ -2,7 +2,7 @@
 // clean up a speck into its surroundings. Every fix returns a new page (the old one is left
 // as it was), so undo is just going back to the previous page.
 
-import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
+import { boundaryDistanceAround, labelPoints } from "@/lib/pipeline/distance";
 import type { PipelineResult, RGB } from "@/lib/pipeline";
 import type { Page } from "@/lib/page";
 
@@ -79,7 +79,7 @@ function finish(page: Page, li: number, ids: Uint32Array, colors: number[], kind
   const count = regionColor.length;
   const area = new Uint32Array(count);
   for (let p = 0; p < labels.length; p++) area[labels[p]]++;
-  const pts = labelPoints(labels, count, w, h, boundaryDistance(labels, w, h));
+  const pts = labelPoints(labels, count, w, h, boundaryDistanceAround(labels, w, h, r.faceLines));
   const result: PipelineResult = {
     ...r,
     labels,

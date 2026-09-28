@@ -352,6 +352,9 @@ export default function ColorByNumber() {
   // Fixing the page by hand: the chosen tool, the shape picked first, and earlier versions of
   // the page for undo.
   const [fixing, setFixing] = useState(false);
+  /** Picture choices by Fix it: faces with eyes, nose and mouth; the whole photo, not framed closer. */
+  const [showFaces, setShowFaces] = useState(false);
+  const [zoomOut, setZoomOut] = useState(false);
   const [tool, setTool] = useState<Tool>("color");
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
@@ -693,7 +696,13 @@ export default function ColorByNumber() {
     });
   }
 
-  async function generate() {
+  /**
+   * Makes the page. `options` are the picture choices by Fix it (faces shown, zoomed out),
+   * passed when one was just changed, before its new value is in state.
+   */
+  async function generate(options: { faces?: boolean; zoomOut?: boolean } = {}) {
+    const withFaces = options.faces ?? showFaces;
+    const wide = options.zoomOut ?? zoomOut;
     if (!file) return;
     setBusy("Finding people and faces…");
     setError(null);
@@ -709,6 +718,8 @@ export default function ColorByNumber() {
       return;
     }
     let frame = await framing(full);
+    // Zoomed out: the whole photo around the people, not framed closer on them.
+    if (frame && wide) frame = { ...frame, scene: { x: 0, y: 0, width: full.width, height: full.height } };
     const params = DIFFICULTY_PARAMS[difficulty];
 
     // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
@@ -798,6 +809,8 @@ export default function ColorByNumber() {
         ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
         minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac) },
     );
+    // Faces shown: each traced face's eyes, eyebrows, nose and mouth as lines on the page.
+    if (withFaces) mainResult.faceLines = faces.flatMap((f) => f.features ?? []);
 
     let page: Page;
     if (twoLayers && frame && cutout) {
@@ -1014,7 +1027,7 @@ export default function ColorByNumber() {
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={generate}
+            onClick={() => generate()}
             disabled={!file || !!busy}
             className="rounded-full bg-violet-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -1038,6 +1051,34 @@ export default function ColorByNumber() {
             <span className="text-sm text-zinc-500">
               {result.shapes} shapes · {key.length} colors
             </span>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* Picture choices: each click remakes the page with the other choice. */}
+            <button
+              type="button"
+              aria-pressed={showFaces}
+              disabled={!!busy}
+              title={showFaces ? "Faces have eyes, nose and mouth. Click for no face." : "Faces are left blank. Click to show eyes, nose and mouth."}
+              onClick={() => {
+                setShowFaces(!showFaces);
+                generate({ faces: !showFaces });
+              }}
+              className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              {showFaces ? "Face" : "No face"}
+            </button>
+            <button
+              type="button"
+              aria-pressed={zoomOut}
+              disabled={!!busy}
+              title={zoomOut ? "The whole photo, with more background. Click to focus on the people." : "Focused on the people. Click for the whole photo."}
+              onClick={() => {
+                setZoomOut(!zoomOut);
+                generate({ zoomOut: !zoomOut });
+              }}
+              className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+            >
+              {zoomOut ? "Zoom out" : "Zoom in"}
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -1046,7 +1087,7 @@ export default function ColorByNumber() {
                 setPicked(null);
                 setHint(fixing ? null : (TOOLS.find((t) => t.id === tool)?.hint ?? null));
               }}
-              className={`ml-auto rounded-full border-2 px-4 py-1.5 text-sm font-semibold transition-colors ${
+              className={`rounded-full border-2 px-4 py-1.5 text-sm font-semibold transition-colors ${
                 fixing
                   ? "border-violet-600 bg-violet-600 text-white hover:bg-violet-700"
                   : "border-violet-500 text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30"
@@ -1054,6 +1095,7 @@ export default function ColorByNumber() {
             >
               {fixing ? "Done fixing" : "Fix it"}
             </button>
+            </div>
           </div>
 
           {fixing && (
