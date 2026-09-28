@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "How Color by Number handles your photos and the fixes you choose to send.",
 };
 
-const UPDATED = "September 26, 2026";
+const UPDATED = "September 27, 2026";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -44,6 +44,14 @@ export default function Privacy() {
           (MediaPipe, made by Google) from Google&apos;s and jsDelivr&apos;s servers. Those tools run on your device;
           your photo isn&apos;t sent to Google or jsDelivr. Like any website file, downloading them lets those
           companies see a normal web request (such as your internet address).
+        </p>
+      </Section>
+
+      <Section title="Counting pages made">
+        <p>
+          Each time a page is made, the site counts it so we know how much it&apos;s used. The count includes only
+          the settings you picked (difficulty, background, print size), whether you used a phone, tablet or computer,
+          and the date. It includes nothing from your photo or your page, and nothing that identifies you.
         </p>
       </Section>
 
@@ -100,9 +108,9 @@ export default function Privacy() {
 
       <Section title="Where it's kept">
         <p>
-          Reports and shared photos are stored with Supabase, a database service, in the United States. The website
-          itself can only add reports. It can&apos;t read them back, so no visitor can see anyone else&apos;s. Only the
-          site&apos;s owner can see them.
+          Reports, shared photos and the page count are stored with Supabase, a database service, in the United
+          States. The website itself can only add to them. It can&apos;t read them back, so no visitor can see anyone
+          else&apos;s. Only the site&apos;s owner can see them.
         </p>
         <p>
           The site is hosted by Vercel, which, like any web host, keeps basic technical logs (such as internet
@@ -112,8 +120,8 @@ export default function Privacy() {
 
       <Section title="No ads, no tracking">
         <p>
-          This site has no ads, no tracking or analytics tools, and doesn&apos;t use cookies of its own. It doesn&apos;t
-          ask you to sign in. (When you open the checkout, Stripe may use its own cookies to keep payments safe from
+          This site has no ads and no tracking or analytics tools (beyond the simple page count above), and
+          doesn&apos;t use cookies of its own. It doesn&apos;t ask you to sign in. (When you open the checkout, Stripe may use its own cookies to keep payments safe from
           fraud.)
         </p>
       </Section>

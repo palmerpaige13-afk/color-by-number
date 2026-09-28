@@ -1,7 +1,8 @@
 // Sends a fix report: what someone fixed by hand on their page, so the automatic results can
 // be improved. Only sent when the person taps Send; their photo only if they also ask to share
-// it. Reports go to the site's Supabase project, where the public key can add reports and
-// shared photos but not read them back.
+// it. Also counts each page made (just the settings picked, nothing from the photo), so the
+// site's owner can see how much it's used. Both go to the site's Supabase project, where the
+// public key can add rows and shared photos but not read them back.
 
 const SUPABASE_URL = "https://axdbxneqepcrlpfmwtjv.supabase.co";
 /** Publishable (public) key: safe in the browser; the database only lets it add reports. */
@@ -66,4 +67,18 @@ export async function sendReport(report: FixReport, photo?: Blob): Promise<void>
     body: JSON.stringify({ ...report, app_version: APP_VERSION, device: device(), photo_path, note: report.note || undefined }),
   });
   if (!res.ok) throw new Error("Couldn't send the report");
+}
+
+/**
+ * Counts one page made: the settings picked and the kind of device, nothing else. Never
+ * blocks or breaks the page if it can't be sent, and isn't counted while testing locally.
+ */
+export function countPageMade(settings: { difficulty: string; background: string; print_size: string }) {
+  if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
+  fetch(`${SUPABASE_URL}/rest/v1/page_makes`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ ...settings, device: device(), app_version: APP_VERSION }),
+    keepalive: true,
+  }).catch(() => {});
 }
