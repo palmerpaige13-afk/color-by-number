@@ -54,6 +54,9 @@ const HEAD_SHADOW_REACH = 0.07;
 const HEAD_SHADOW_NEAR = 0.5;
 const HEAD_SHADOW_LIGHT = 75;
 const HEAD_SHADOW_MIN_L = 5;
+/** ...and only on clothes mostly (this share) one pale color less colorful (Lab chroma) than HEAD_SHADOW_CHROMA. */
+const HEAD_SHADOW_BASE_SHARE = 0.2;
+const HEAD_SHADOW_CHROMA = 12;
 
 /** Region-merge group of the blank background of a cut-out photo. */
 const BACKGROUND_GROUP = BLANK_GROUP;
@@ -155,14 +158,23 @@ function removeHeadShadows(
       if (kind[color[a]] === PartKind.hair) touchesHair[b] = 1;
     }
   }
-  // Each piece of clothing's own light color: the light color covering most of it.
+  // Each piece of clothing's own light color: the light color covering most of it. Only
+  // clothes that really are light (a white shirt: mostly one pale, nearly neutral color) count;
+  // a colored dress with a sunlit edge isn't, and its bodice mustn't be painted like that edge.
   const lightArea = new Map<number, number>(); // color -> area
+  const groupArea = new Map<number, number>(); // group -> all its clothes' area
   for (let i = 0; i < count; i++) {
     const c = color[i];
-    if (kind[c] === PartKind.clothes && paletteLab[c * 3] >= HEAD_SHADOW_LIGHT) lightArea.set(c, (lightArea.get(c) ?? 0) + area[i]);
+    if (kind[c] !== PartKind.clothes) continue;
+    groupArea.set(group[c], (groupArea.get(group[c]) ?? 0) + area[i]);
+    const chroma = Math.hypot(paletteLab[c * 3 + 1], paletteLab[c * 3 + 2]);
+    if (paletteLab[c * 3] >= HEAD_SHADOW_LIGHT && chroma < HEAD_SHADOW_CHROMA) lightArea.set(c, (lightArea.get(c) ?? 0) + area[i]);
   }
+  const lightTotal = new Map<number, number>(); // group -> area of all its pale colors
+  for (const [c, a] of lightArea) lightTotal.set(group[c], (lightTotal.get(group[c]) ?? 0) + a);
   const base = new Map<number, number>(); // group -> color
   for (const [c, a] of lightArea) {
+    if ((lightTotal.get(group[c]) ?? 0) < (groupArea.get(group[c]) ?? 0) * HEAD_SHADOW_BASE_SHARE) continue;
     const cur = base.get(group[c]);
     if (cur === undefined || a > lightArea.get(cur)!) base.set(group[c], c);
   }
