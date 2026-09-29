@@ -38,6 +38,8 @@ const FACE_MIN_LUMA = 150;
 const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
+/** Most palette entries the parts may use; the one after is kept for a blank background. */
+const MAX_PART_PALETTE = 254;
 /** Photo-shaded faces: blur (share of the face's size), and the darkest and lightest shares of it. */
 const PHOTO_FACE_BLUR = 0.03;
 const PHOTO_FACE_DARK = 0.22;
@@ -298,7 +300,8 @@ export function separateFaces(
   const labs: number[] = Array.from(baseLab);
   const group: number[] = basePalette.map(() => 0);
   const add = (rgb: RGB, lab: ArrayLike<number>, k: number) => {
-    if (palette.length >= 255) return -1;
+    // The last index is kept for the blank background of a cut-out photo.
+    if (palette.length >= MAX_PART_PALETTE) return -1;
     palette.push(rgb);
     labs.push(lab[0], lab[1], lab[2]);
     group.push(k);
@@ -347,6 +350,17 @@ export function separateFaces(
   }
 
   const twins = new Map<number, number>(); // part * 256 + base color -> twin index
+  const partTwins = new Map<number, number[]>(); // part -> its twins
+  /** When the palette is full: the part's own color closest to `base` (never a color of the photo at large). */
+  const nearestTwin = (k: number, base: number) => {
+    let best = -1;
+    let bestD = Infinity;
+    for (const t of partTwins.get(k) ?? faceTone.get(k)?.ids ?? []) {
+      const d = labDist2(baseLab, base * 3, Float32Array.from(labs.slice(t * 3, t * 3 + 3)), 0);
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    return best;
+  };
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
     if (!k) continue;
@@ -361,7 +375,11 @@ export function separateFaces(
     let twin = twins.get(id);
     if (twin === undefined) {
       twin = add(basePalette[base], baseLab.subarray(base * 3, base * 3 + 3), k);
-      if (twin < 0) continue; // out of indices; leave this pixel as it was
+      if (twin >= 0) partTwins.set(k, [...(partTwins.get(k) ?? []), twin]);
+      // Out of indices (a big group): the closest color this part already has, so a shoe
+      // doesn't take the grass's color and disappear into it.
+      else twin = nearestTwin(k, base);
+      if (twin < 0) continue;
       twins.set(id, twin);
     }
     indices[p] = twin;
