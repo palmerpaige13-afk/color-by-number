@@ -1,7 +1,7 @@
 // Test bench only (never on the live site): saves approved results and the last run's report
 // into public/test-images/bench, which is kept out of git and out of deploys.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DIR = path.join(process.cwd(), "public", "test-images", "bench");
@@ -19,6 +19,11 @@ export async function POST(request: Request) {
     }
     await mkdir(path.join(DIR, "snapshots"), { recursive: true });
     await writeFile(path.join(DIR, "snapshots", `${body.name}.jpg`), Buffer.from(body.image.split(",")[1], "base64"));
+    return Response.json({ ok: true });
+  }
+  if (body.kind === "debug") {
+    // Notes from the page-making code while working on a fix (bench/debug.log).
+    await appendFile(path.join(DIR, "debug.log"), JSON.stringify(body.note) + "\n");
     return Response.json({ ok: true });
   }
   if (body.kind === "report") {

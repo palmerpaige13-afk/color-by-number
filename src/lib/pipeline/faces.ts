@@ -59,6 +59,14 @@ const SKY_HAIR_BLUE = -5;
 const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
 const SKY_HAIR_TINT = [4, 14] as const;
+/** A hair pixel this far from the hair's usual hue (Lab a, b)... */
+const HAIR_COLOR_REACH = 25;
+/** ...and this much more colorful than it isn't hair (flowers held against it). */
+const HAIR_EXTRA_CHROMA = 15;
+/** Bare skin farther than this from every face's color (Lab, lightness scaled below) isn't skin. */
+const SKIN_COLOR_REACH = 20;
+/** How much lightness counts in that, against hue (lit and shaded skin differ mostly in it). */
+const SKIN_LIGHT_WEIGHT = 0.5;
 /** A separate piece of one tone smaller than this share of the face or hair joins the other tone. */
 const MIN_TONE_PIECE = 0.2;
 /**
@@ -326,7 +334,30 @@ export function separateFaces(
     paintSkin(a, parts, next++, w, h);
   }
 
-  if (person) fillGaps(parts, person, w, h, Math.max(4, ...faces.map((f) => f.height * GAP_REACH)));
+  if (person) {
+    // Each face's typical color, for what its skin may take.
+    if (!bodySkin) for (let p = 0; p < w * h; p++) if (mask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
+    const faceLab = faces.map((_, i) => {
+      const m = [0, 0, 0, 0];
+      for (let p = 0; p < w * h; p++) {
+        if (mask[p] !== i + 1) continue;
+        for (let c = 0; c < 3; c++) m[c] += lab[p * 3 + c];
+        m[3]++;
+      }
+      return m[3] ? m.slice(0, 3).map((v) => v / m[3]) : null;
+    });
+    const skinOf = (k: number) => (k <= faces.length ? faceLab[k - 1] : skinPieces.has(k) ? faceLab[skinPieces.get(k)! - 1] : null);
+    const hairHue = new Map<number, [number, number, number] | null>();
+    for (const k of hairParts.keys()) hairHue.set(k, usualHue(parts, k, smoothed));
+    fillGaps(parts, person, w, h, Math.max(4, ...faces.map((f) => f.height * GAP_REACH)), (k, q) => {
+      const kind = kindOf.get(k);
+      if (kind !== PartKind.face && kind !== PartKind.hair) return true;
+      const usual = kind === PartKind.face ? skinOf(k) : hairHue.get(k);
+      if (!usual) return true;
+      if (!lab[q * 3] && !lab[q * 3 + 1] && !lab[q * 3 + 2]) rgbToLab(smoothed[q * 4], smoothed[q * 4 + 1], smoothed[q * 4 + 2], lab, q * 3);
+      return kind === PartKind.face ? looksLikeSkin(lab, q, usual) : !notHair(lab, q, usual as [number, number, number]);
+    });
+  }
 
   const palette = [...basePalette];
   const labs: number[] = Array.from(baseLab);
@@ -630,12 +661,47 @@ function splitDoubleFace(f: FaceShape): FaceShape[] {
   return onLeft ? [l, { ...r, hair: undefined }] : [r, { ...l, hair: undefined }];
 }
 
+/** A part's usual hue (median Lab a, b) and how colorful that is. */
+function usualHue(parts: Uint8Array, k: number, smoothed: Uint8ClampedArray): [number, number, number] | null {
+  const px: number[] = [];
+  for (let p = 0; p < parts.length; p++) if (parts[p] === k) px.push(p);
+  if (!px.length) return null;
+  const lab = new Float32Array(px.length * 3);
+  px.forEach((p, i) => rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, i * 3));
+  const median = (c: number) => Float32Array.from(px, (_, i) => lab[i * 3 + c]).sort()[px.length >> 1];
+  const [a, b] = [median(1), median(2)];
+  return [a, b, Math.hypot(a, b)];
+}
+
+/**
+ * Whether a pixel's color (Lab) is much more colorful than hair of this usual hue and far
+ * from it: pink or orange flowers held against long hair. Highlights and shadows aren't.
+ */
+function notHair(lab: ArrayLike<number>, p: number, [a0, b0, chroma0]: [number, number, number]): boolean {
+  const a = lab[p * 3 + 1];
+  const b = lab[p * 3 + 2];
+  return Math.hypot(a - a0, b - b0) > HAIR_COLOR_REACH && Math.hypot(a, b) > chroma0 + HAIR_EXTRA_CHROMA;
+}
+
+/** Whether a pixel's color (Lab) could be the skin of a face with this typical color. */
+function looksLikeSkin(lab: ArrayLike<number>, p: number, face: ArrayLike<number>): boolean {
+  return Math.hypot((lab[p * 3] - face[0]) * SKIN_LIGHT_WEIGHT, lab[p * 3 + 1] - face[1], lab[p * 3 + 2] - face[2]) <= SKIN_COLOR_REACH;
+}
+
 /**
  * Bits of a person that no part claimed (light hair on a shoulder the segmenter missed, a
  * patch of chest) would get the background's colors and show up as odd spots. Each such
- * pixel within `reach` of a part joins the nearest part.
+ * pixel within `reach` of a part joins the nearest part, if that part may take it (skin and
+ * hair don't take what isn't their color: flowers held up to the chest).
  */
-function fillGaps(parts: Uint8Array, person: Uint8Array, w: number, h: number, reach: number) {
+function fillGaps(
+  parts: Uint8Array,
+  person: Uint8Array,
+  w: number,
+  h: number,
+  reach: number,
+  mayTake: (part: number, p: number) => boolean,
+) {
   let frontier: number[] = [];
   for (let p = 0; p < parts.length; p++) if (parts[p]) frontier.push(p);
   for (let step = 0; step < reach && frontier.length; step++) {
@@ -644,6 +710,7 @@ function fillGaps(parts: Uint8Array, person: Uint8Array, w: number, h: number, r
       const x = p % w;
       for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
         if (q < 0 || q >= w * h || parts[q] || !person[q]) continue;
+        if (!mayTake(parts[p], q)) continue;
         parts[q] = parts[p];
         next.push(q);
       }
@@ -674,7 +741,6 @@ function matchBodySkin(
   const inSkin = new Uint8Array(n);
   paintSkin(skin, inSkin, 1, w, h);
   for (let p = 0; p < n; p++) if (parts[p]) inSkin[p] = 0;
-  const { piece, count } = splitAlongEdges(inSkin, lab, w, h, limit - firstId);
 
   // Each face's typical color, center and height.
   const sum = new Float64Array(faceCount * 6); // L, a, b, x, y, n
@@ -691,6 +757,8 @@ function matchBodySkin(
     top[k] = Math.min(top[k], y);
     bottom[k] = Math.max(bottom[k], y);
   }
+  const { piece, count } = splitAlongEdges(inSkin, lab, w, h, limit - firstId);
+
   let faceH = 1;
   for (let k = 0; k < faceCount; k++) if (sum[k * 6 + 5]) faceH = Math.max(faceH, bottom[k] - top[k] + 1);
 
