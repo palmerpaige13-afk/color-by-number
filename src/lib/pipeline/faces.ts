@@ -38,6 +38,9 @@ const FACE_MIN_LUMA = 150;
 const FACE_MAX_BOOST = 1.9;
 /** How far the shadow tone is pulled toward the lit tone, so shadows read as skin. */
 const SHADOW_SOFTEN = 0.45;
+/** Rounding a traced face outline: passes, and how many points each side are averaged. */
+const OUTLINE_ROUND_PASSES = 2;
+const OUTLINE_ROUND_REACH = 2;
 /** Most palette entries the parts may use; the one after is kept for a blank background. */
 const MAX_PART_PALETTE = 254;
 /** Photo-shaded faces: blur (share of the face's size), and the darkest and lightest shares of it. */
@@ -89,6 +92,29 @@ export interface FaceRegions {
 
 /** What a palette color is used for: 0 the photo in general, then face, hair, clothes, pet. */
 export const PartKind = { none: 0, face: 1, hair: 2, clothes: 3, pet: 4 } as const;
+
+/**
+ * A traced face outline with its corners rounded: each point moves to the average of its
+ * neighbors (a few times over), so the pointed tip of the chin doesn't stick out into the neck
+ * as a little spur.
+ */
+function roundOutline(poly: [number, number][]): [number, number][] {
+  let pts = poly;
+  const n = pts.length;
+  for (let pass = 0; pass < OUTLINE_ROUND_PASSES; pass++) {
+    pts = pts.map((_, i) => {
+      let x = 0, y = 0;
+      for (let d = -OUTLINE_ROUND_REACH; d <= OUTLINE_ROUND_REACH; d++) {
+        const [px, py] = pts[(i + d + n) % n];
+        x += px;
+        y += py;
+      }
+      const m = 2 * OUTLINE_ROUND_REACH + 1;
+      return [x / m, y / m];
+    });
+  }
+  return pts;
+}
 
 function fillPolygon(poly: [number, number][], mask: Uint8Array, value: number, w: number, h: number) {
   const ys = poly.map((p) => p[1]);
@@ -233,7 +259,7 @@ export function separateFaces(
   // hidden) use the segmenter's skin area, or failing that, skin-colored pixels.
   const traced = (f: FaceShape) => !!f.outline && f.outline.length >= 3;
   faces.forEach((f, k) => {
-    if (traced(f)) fillPolygon(f.outline!, parts, k + 1, w, h);
+    if (traced(f)) fillPolygon(roundOutline(f.outline!), parts, k + 1, w, h);
   });
   faces.forEach((f, k) => {
     if (traced(f)) return;

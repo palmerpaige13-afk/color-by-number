@@ -12,6 +12,15 @@ type Saved = { id: string; size: string; faces: number; people: number; shapes: 
 export async function POST(request: Request) {
   if (process.env.NODE_ENV === "production") return new Response(null, { status: 404 });
   const body = await request.json();
+  if (body.kind === "snapshot") {
+    // A picture to look at while working on a fix (bench/snapshots/<name>.jpg).
+    if (!/^[\w-]+$/.test(body.name) || !String(body.image).startsWith("data:image/jpeg;base64,")) {
+      return new Response("bad snapshot", { status: 400 });
+    }
+    await mkdir(path.join(DIR, "snapshots"), { recursive: true });
+    await writeFile(path.join(DIR, "snapshots", `${body.name}.jpg`), Buffer.from(body.image.split(",")[1], "base64"));
+    return Response.json({ ok: true });
+  }
   if (body.kind === "report") {
     await writeFile(path.join(DIR, "last-run.json"), JSON.stringify(body.report, null, 2));
     return Response.json({ ok: true });

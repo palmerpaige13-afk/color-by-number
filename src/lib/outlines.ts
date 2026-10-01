@@ -1,8 +1,9 @@
 // Smooth outlines. Shapes live on a pixel grid, so their borders are staircases; drawn as is
 // and enlarged, every outline shows little steps. Here the borders between shapes are traced
 // along the pixel corners into connected lines (one per stretch between junctions, where
-// three or more shapes meet), then rounded with Chaikin corner cutting, which turns the steps
-// into smooth curves while junctions stay put so neighboring lines still meet.
+// three or more shapes meet), then smoothed along their length and rounded with Chaikin
+// corner cutting, which turns the steps into smooth curves while junctions stay put so
+// neighboring lines still meet.
 
 /** A traced outline: x, y pairs in grid (working pixel) coordinates. */
 export type Outline = Float32Array;
@@ -86,9 +87,33 @@ export function traceOutlines(
   return out;
 }
 
-/** Chaikin corner cutting; an open line keeps its two ends exactly where they were. */
+/** Smoothing a traced line before rounding: passes, and how many points each side are averaged. */
+const RELAX_PASSES = 2;
+const RELAX_REACH = 2;
+
+/**
+ * A traced line made smooth: first each point moves to the average of its neighbors along the
+ * line (so a slanted staircase of pixel steps becomes a straight or gently curving line, not a
+ * wobble), then Chaikin corner cutting rounds what's left. An open line keeps its two ends
+ * exactly where they were, so lines still meet at junctions.
+ */
 function smooth(pts: [number, number][], closed: boolean, rounds: number): Outline {
   let cur = closed ? pts.slice(0, -1) : pts;
+  for (let pass = 0; pass < RELAX_PASSES && cur.length > 2 * RELAX_REACH + 1; pass++) {
+    const n = cur.length;
+    cur = cur.map((pt, i) => {
+      if (!closed && (i < 1 || i > n - 2)) return pt;
+      // Near an open line's ends, average over fewer points so the ends stay put.
+      const reach = closed ? RELAX_REACH : Math.min(RELAX_REACH, i, n - 1 - i);
+      let x = 0, y = 0;
+      for (let d = -reach; d <= reach; d++) {
+        const [qx, qy] = cur[(i + d + n) % n];
+        x += qx;
+        y += qy;
+      }
+      return [x / (2 * reach + 1), y / (2 * reach + 1)];
+    });
+  }
   for (let r = 0; r < rounds && cur.length > 2; r++) {
     const next: [number, number][] = [];
     const n = cur.length;
