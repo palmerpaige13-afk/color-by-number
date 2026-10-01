@@ -16,7 +16,7 @@
 // any angle, excludes hair), the landmark outline (jaw, chin, hairline), or a flood fill of
 // skin-colored pixels outward from the cheeks.
 
-import { labDist2, rgbToLab } from "./color";
+import { labDist2, labToRgb, rgbToLab } from "./color";
 import type { FaceShape, RGB, RegionMask } from "./types";
 
 /** ΔE from the face's typical skin color within which a pixel counts as skin (fallback). */
@@ -53,6 +53,12 @@ const PHOTO_FACE_SPECK = 0.012;
 const PHOTO_FACE_SOFTEN = 0.4;
 /** For a hair color, this darkest share of the hair (shadow between strands) is left out. */
 const HAIR_DARK_SKIP = 0.4;
+/** Hair at least this blue (Lab b) is lit by the sky; gray hair or a white cap is barely blue. */
+const SKY_HAIR_BLUE = -5;
+/** Cool hair more colorful than this (Lab chroma) is dyed and keeps its color. */
+const HAIR_DYED = 15;
+/** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
+const SKY_HAIR_TINT = [4, 14] as const;
 /** A separate piece of one tone smaller than this share of the face or hair joins the other tone. */
 const MIN_TONE_PIECE = 0.2;
 /**
@@ -1121,7 +1127,18 @@ function faceShading(
   const litTone = means[means.length - 1];
   const litLuma = 0.299 * litTone[0] + 0.587 * litTone[1] + 0.114 * litTone[2];
   const boost = brighten ? Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma))) : 1;
-  const rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
+  let rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
+  if (!brighten) {
+    // Hair is never a dull blue-gray of its own: that's the sky lighting the top of the head.
+    // It keeps its lightness with a natural light-brown tint (gray hair, which is barely
+    // bluish, and vivid dyed hair are left alone).
+    const hairLab = new Float32Array(3);
+    rgb = rgb.map((c) => {
+      rgbToLab(c[0], c[1], c[2], hairLab, 0);
+      if (hairLab[2] > SKY_HAIR_BLUE || Math.hypot(hairLab[1], hairLab[2]) > HAIR_DYED) return c;
+      return labToRgb(hairLab[0], SKY_HAIR_TINT[0], SKY_HAIR_TINT[1]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+    });
+  }
   const out = new Float32Array(rgb.length * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
   return { rgb, lab: out, tone };
