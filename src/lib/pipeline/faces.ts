@@ -59,6 +59,16 @@ const SKY_HAIR_BLUE = -5;
 const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
 const SKY_HAIR_TINT = [4, 14] as const;
+/** Shades for white clothes on detailed pages. */
+const WHITE_SHADES = 3;
+/** A clothes pixel this light (Lab L)... */
+const WHITE_MIN_L = 62;
+/** ...and this gray (Lab chroma) is white (in shadow or not). */
+const WHITE_MAX_CHROMA = 12;
+/** White clothes smaller than this share of the picture keep the shared colors. */
+const WHITE_MIN_SHARE = 0.02;
+/** How much further apart in lightness white clothes' shades are spread. */
+const WHITE_STRETCH = 2;
 /** A hair pixel this far from the hair's usual hue (Lab a, b)... */
 const HAIR_COLOR_REACH = 25;
 /** ...and this much more colorful than it isn't hair (flowers held against it). */
@@ -402,6 +412,16 @@ export function separateFaces(
     }
   }
 
+  // White clothes (a wedding dress) have only faint folds, which the photo's shared colors
+  // flatten into one: their white pixels get their own shadow, middle and light shades.
+  const whiteTone = new Map<number, { ids: number[]; tone: Map<number, number> }>();
+  for (const [k, kind] of kindOf) {
+    if (kind !== PartKind.clothes || clothesColors > 0) continue;
+    const own = whiteShades(smoothed, parts, k);
+    if (!own) continue;
+    const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
+    if (ids.every((id) => id >= 0)) whiteTone.set(k, { ids, tone: own.tone });
+  }
   if (clothesColors > 0) {
     for (const [k, kind] of kindOf) {
       if (kind !== PartKind.clothes) continue;
@@ -432,6 +452,11 @@ export function separateFaces(
       indices[p] = face.ids[face.tone.get(p) ?? 0];
       continue;
     }
+    const white = whiteTone.get(k)?.tone.get(p);
+    if (white !== undefined) {
+      indices[p] = whiteTone.get(k)!.ids[white];
+      continue;
+    }
     const base = indices[p];
     if (group[base] !== 0) continue; // already a part color
     const id = k * 256 + base;
@@ -454,6 +479,51 @@ export function separateFaces(
     mask,
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
   };
+}
+
+/**
+ * The white pixels of a piece of clothes, in shades of their own by lightness (darkest,
+ * middle and lightest thirds), so folds show. Null when there's little white.
+ */
+function whiteShades(
+  smoothed: Uint8ClampedArray,
+  parts: Uint8Array,
+  k: number,
+): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
+  const px: number[] = [];
+  const L: number[] = [];
+  const lab = new Float32Array(3);
+  for (let p = 0; p < parts.length; p++) {
+    if (parts[p] !== k) continue;
+    rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
+    if (lab[0] < WHITE_MIN_L || Math.hypot(lab[1], lab[2]) > WHITE_MAX_CHROMA) continue;
+    px.push(p);
+    L.push(lab[0]);
+  }
+  if (px.length < parts.length * WHITE_MIN_SHARE) return null;
+  const order = px.map((_, i) => i).sort((a, b) => L[a] - L[b]);
+  const group = new Uint8Array(px.length);
+  order.forEach((i, r) => (group[i] = Math.min(WHITE_SHADES - 1, Math.floor((r * WHITE_SHADES) / px.length))));
+  const rgbSum = new Float64Array(WHITE_SHADES * 4);
+  px.forEach((p, i) => {
+    for (let a = 0; a < 3; a++) rgbSum[group[i] * 4 + a] += smoothed[p * 4 + a];
+    rgbSum[group[i] * 4 + 3]++;
+  });
+  const mean = Array.from({ length: WHITE_SHADES }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))));
+  // Folds in white cloth are faint: the shades are spread further apart in lightness (same
+  // hue) so they read on paper.
+  const shadeLab = new Float32Array(WHITE_SHADES * 3);
+  mean.forEach((c, i) => rgbToLab(c[0], c[1], c[2], shadeLab, i * 3));
+  const midL = shadeLab[((WHITE_SHADES - 1) >> 1) * 3];
+  const rgb = mean.map((_, i) => {
+    const L = Math.min(97, midL + (shadeLab[i * 3] - midL) * WHITE_STRETCH);
+    return labToRgb(L, shadeLab[i * 3 + 1], shadeLab[i * 3 + 2]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+  });
+  const out = new Float32Array(WHITE_SHADES * 3);
+  rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
+  const tone = new Map<number, number>();
+  px.forEach((p, i) => tone.set(p, group[i]));
+  return { rgb, lab: out, tone };
 }
 
 /**
