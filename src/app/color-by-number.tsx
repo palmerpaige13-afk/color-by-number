@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
@@ -57,6 +57,8 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
 ];
 /** Most zoom while fixing. */
 const MAX_ZOOM = 5;
+/** Shortest drawn line that counts as a line (not a tap), in screen pixels. */
+const MIN_LINE_PX = 8;
 /** Most fixes kept for one report. */
 const MAX_LOG = 300;
 /** How many fixes can be undone. */
@@ -382,10 +384,12 @@ export default function ColorByNumber() {
     const line = drawn.current;
     drawn.current = null;
     if (!line || !result) return;
-    const next = splitAlong(result, line);
+    // How long a line must be is measured on the screen, so a short cut on a small shape still
+    // works when zoomed in.
+    const box = outlineRef.current?.getBoundingClientRect();
+    const next = splitAlong(result, line, box ? (MIN_LINE_PX * result.width) / box.width : undefined);
     if (typeof next === "string" && highlightRef.current) drawHighlight(highlightRef.current, result, []);
-    const mid = line[Math.floor(line.length / 2)];
-    const spot = shapeAt(result, mid[0], mid[1]);
+    const spot = lineShape(result, line);
     apply(next, spot ? { tool: "line", ...describe(result, spot) } : undefined);
   }
 

@@ -205,13 +205,12 @@ export function cleanUp(page: Page, spot: Spot): Page | string {
  * `line` is the path of the finger in page pixels (x, y pairs). A line that stops short of the
  * shape's edges is carried straight on to them.
  */
-export function splitAlong(page: Page, line: [number, number][]): Page | string {
+export function splitAlong(page: Page, line: [number, number][], minLength = page.width * MIN_LINE): Page | string {
   let length = 0;
   for (let i = 1; i < line.length; i++) length += Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]);
   // A tap or a tiny slip of the finger isn't a line.
-  if (length < page.width * MIN_LINE) return "Drag a longer line across the shape you want to cut.";
-  const mid = line[Math.floor(line.length / 2)];
-  const spot = shapeAt(page, mid[0], mid[1]);
+  if (length < minLength) return "Drag a longer line across the shape you want to cut.";
+  const spot = lineShape(page, line);
   if (!spot) return "Draw the line across a shape.";
   const { result: r, x: lx, y: ly, scale } = page.layers[spot.layer];
   const { width: w, height: h, labels } = r;
@@ -311,7 +310,31 @@ export function splitAlong(page: Page, line: [number, number][]): Page | string 
   return finish(page, spot.layer, ids, colors, kinds);
 }
 
-/** Shortest line that counts, as a share of the page width. */
+/**
+ * The shape a drawn line is meant to cut: the one it runs across the most (the middle of the
+ * line can land on a small shape or an edge, and a line often starts just outside the shape).
+ */
+export function lineShape(page: Page, line: [number, number][]): Spot | null {
+  const count = new Map<string, { spot: Spot; n: number }>();
+  for (let i = 1; i < line.length; i++) {
+    const [ax, ay] = line[i - 1];
+    const [bx, by] = line[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+    for (let s = 0; s < steps; s++) {
+      const spot = shapeAt(page, ax + ((bx - ax) * s) / steps, ay + ((by - ay) * s) / steps);
+      if (!spot) continue;
+      const key = `${spot.layer}:${spot.region}`;
+      const c = count.get(key);
+      if (c) c.n++;
+      else count.set(key, { spot, n: 1 });
+    }
+  }
+  let best: { spot: Spot; n: number } | null = null;
+  for (const c of count.values()) if (!best || c.n > best.n) best = c;
+  return best?.spot ?? null;
+}
+
+/** Shortest line that counts, as a share of the page width (when the screen size isn't known). */
 const MIN_LINE = 0.03;
 /** Pieces smaller than this (layer pixels) left by a wobbly line don't count as pieces. */
 const MIN_PIECE = 12;
