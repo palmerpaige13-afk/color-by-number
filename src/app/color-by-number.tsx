@@ -59,6 +59,8 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
 const MAX_ZOOM = 5;
 /** Shortest drawn line that counts as a line (not a tap), in screen pixels. */
 const MIN_LINE_PX = 8;
+/** Width the photo is drawn at when shown in place of the page (pixels). */
+const PEEK_WIDTH = 1600;
 /** Most fixes kept for one report. */
 const MAX_LOG = 300;
 /** How many fixes can be undone. */
@@ -133,6 +135,10 @@ export default function ColorByNumber() {
   const [zoomOut, setZoomOut] = useState(false);
   /** The photo, and the people and faces found in it, kept while it's the same photo (see generate). */
   const photoCache = useRef<Photo | null>(null);
+  /** The part of the photo the page shows, and whether the photo is shown in its place. */
+  const pageShows = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [peek, setPeek] = useState(false);
+  const peekRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>("color");
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
@@ -183,6 +189,17 @@ export default function ColorByNumber() {
     if (result && outlineRef.current) drawPage(outlineRef.current, result, "outline");
     if (result && paintedRef.current) drawPage(paintedRef.current, result, "colored");
   }, [result]);
+
+  // The photo in place of the page (to compare while fixing): the same part of it, page-sized.
+  useEffect(() => {
+    const c = peekRef.current;
+    const photo = photoCache.current;
+    const r = pageShows.current;
+    if (!peek || !c || !photo || !r || !result) return;
+    c.width = Math.min(PEEK_WIDTH, result.width);
+    c.height = Math.round((c.width * result.height) / result.width);
+    c.getContext("2d")!.drawImage(photo.full, r.x, r.y, r.width, r.height, 0, 0, c.width, c.height);
+  }, [peek, result]);
 
   useEffect(() => {
     if (result && highlightRef.current) drawHighlight(highlightRef.current, result, fixing && picked ? [picked] : []);
@@ -502,12 +519,14 @@ export default function ColorByNumber() {
       }
       photoCache.current = photo;
     }
-    const { page, fit: pageFit, people, faces } = await makePage(
+    const { page, fit: pageFit, shows, people, faces } = await makePage(
       photo,
       { printSize, difficulty, faces: withFaces, zoomOut: wide },
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);
+    pageShows.current = shows;
+    setPeek(false);
     made.current = { people, faces, shapes: page.shapes, colors: page.key.length };
     setFixLog([]);
     setPaid(false);
@@ -800,6 +819,17 @@ export default function ColorByNumber() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setPeek((p) => !p)}
+                    aria-pressed={peek}
+                    title="Show your photo in place of the page, to compare"
+                    className={`rounded-full px-3 py-1.5 text-sm font-semibold hover:bg-white dark:hover:bg-zinc-900 ${
+                      peek ? "bg-violet-600 text-white hover:bg-violet-700" : "text-zinc-700 dark:text-zinc-300"
+                    }`}
+                  >
+                    📷 Photo
+                  </button>
+                  <button
+                    type="button"
                     onClick={undo}
                     disabled={!history.length}
                     className="rounded-full px-3 py-1.5 text-sm font-semibold text-zinc-700 hover:bg-white disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-zinc-900"
@@ -881,6 +911,7 @@ export default function ColorByNumber() {
                 style={{ clipPath: `inset(0 ${fixing ? 0 : 100 - reveal}% 0 0)` }}
               />
               <canvas ref={highlightRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />
+              {peek && fixing && <canvas ref={peekRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />}
             </div>
             <div
               className={`pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden ${fixing ? "hidden" : ""}`}

@@ -277,6 +277,8 @@ export interface PageChoices {
 export interface MadePage {
   page: Page;
   fit: Fit;
+  /** The part of the photo the page shows (photo pixels), to show the photo beside it. */
+  shows: Rect;
   /** What was found, in words ("Kept extra detail on: 2 faces, 1 person."). */
   note: string;
   people: number;
@@ -423,5 +425,5 @@ export async function makePage(
       COOL_BOOST[difficulty],
     );
   }
-  return { page, fit, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };
+  return { page, fit, shows: frame?.scene ?? photoRect, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };
 }
