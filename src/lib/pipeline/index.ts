@@ -41,6 +41,8 @@ export const HAIR_NUMBER = 0.7;
 const CLOTHES_SHADE_CHROMA = 10;
 /** On pages with flat clothes, each person's clothes get this many colors of their own. */
 const FLAT_CLOTHES_COLORS = 4;
+/** Whether a dog's or cat's eyes and nose are printed as black spots. */
+const DRAW_PET_FACES = false;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
 const PATTERN_SHARE = 0.5;
 /**
@@ -429,7 +431,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const final = labelComponents(colorMap, w, h);
   const labels = Uint16Array.from(final.labels);
   const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
-  const petFaces = (input.animals ?? [])
+  // Printed pet eyes and nose are off for now: too often they land in the wrong spot (above a
+  // dog's head, on its fur), and the pet reads fine without them.
+  const petFaces = (DRAW_PET_FACES ? (input.animals ?? []) : [])
     .filter((a) => a.label === "dog" || a.label === "cat")
     .map((a) => {
       if (a.face) return a.face;
