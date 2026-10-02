@@ -418,7 +418,7 @@ export default function ColorByNumber() {
       setHint(
         tool === "join"
           ? "Now tap a shape touching it to join them."
-          : "Now tap a shape in the picture that has the color you want. You can also pick from the key below, or make a new color.",
+          : "Now tap a shape in the picture that has the color you want. You can also pick from the key below, or tap 🎨 More colors for common hair, skin and clothes colors or a color code.",
       );
     }
   }
@@ -838,7 +838,7 @@ export default function ColorByNumber() {
                       onClick={() => setWheelOpen(true)}
                       className="rounded-full border border-violet-300 bg-white px-3 py-1 text-sm font-semibold text-violet-800 hover:bg-violet-100 dark:bg-zinc-900 dark:text-violet-200"
                     >
-                      🎨 New color
+                      🎨 More colors
                     </button>
                   )}
                 </div>

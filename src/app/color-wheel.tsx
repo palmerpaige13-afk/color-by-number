@@ -2,11 +2,83 @@
 
 // A color wheel for making a new paint color: drag around the wheel to choose the color
 // (around = hue, out from the middle = how strong), and the slider below for light or dark.
+// Common colors (hair, skin, clothes) are one tap away, and a color code from online can be
+// typed in.
 
 import { useEffect, useRef, useState } from "react";
 import type { RGB } from "@/lib/pipeline";
 
 const SIZE = 200;
+
+/** Colors people often need when fixing a page, in groups, one tap to use. */
+const COMMON: { group: string; colors: { name: string; rgb: RGB }[] }[] = [
+  {
+    group: "Hair",
+    colors: [
+      { name: "Platinum", rgb: [230, 212, 170] },
+      { name: "Blonde", rgb: [210, 168, 96] },
+      { name: "Dark blonde", rgb: [178, 140, 88] },
+      { name: "Light brown", rgb: [150, 108, 70] },
+      { name: "Brunette", rgb: [107, 68, 35] },
+      { name: "Dark brown", rgb: [62, 42, 30] },
+      { name: "Black", rgb: [30, 27, 27] },
+      { name: "Red", rgb: [168, 78, 40] },
+      { name: "Gray", rgb: [160, 158, 155] },
+    ],
+  },
+  {
+    group: "Skin",
+    colors: [
+      { name: "Fair", rgb: [243, 210, 190] },
+      { name: "Light", rgb: [230, 180, 150] },
+      { name: "Medium", rgb: [200, 140, 100] },
+      { name: "Tan", rgb: [168, 107, 69] },
+      { name: "Deep", rgb: [110, 68, 40] },
+    ],
+  },
+  {
+    group: "Clothes",
+    colors: [
+      { name: "White", rgb: [247, 247, 247] },
+      { name: "Light gray", rgb: [200, 200, 200] },
+      { name: "Dark gray", rgb: [90, 90, 92] },
+      { name: "Black", rgb: [27, 27, 27] },
+      { name: "Navy", rgb: [31, 45, 74] },
+      { name: "Jeans", rgb: [74, 106, 143] },
+      { name: "Light jeans", rgb: [140, 165, 190] },
+      { name: "Khaki", rgb: [195, 176, 145] },
+    ],
+  },
+  {
+    group: "Flowers and leaves",
+    colors: [
+      { name: "Pink", rgb: [225, 150, 170] },
+      { name: "Rose", rgb: [195, 90, 120] },
+      { name: "Lavender", rgb: [180, 155, 200] },
+      { name: "Leaf green", rgb: [90, 120, 60] },
+      { name: "Dark leaf", rgb: [50, 70, 40] },
+    ],
+  },
+];
+
+/**
+ * A color code as people find it online: "#6B4423", "6b4423", "#abc", or numbers like
+ * "107, 68, 35" or "rgb(107, 68, 35)". Null if it isn't one.
+ */
+export function parseColorCode(text: string): RGB | null {
+  const t = text.trim().toLowerCase();
+  const hex = t.match(/^#?([0-9a-f]{6}|[0-9a-f]{3})$/);
+  if (hex) {
+    const h = hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join("") : hex[1];
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) as RGB;
+  }
+  const nums = t.replace(/^rgba?\(|\)$/g, "").split(/[\s,]+/).filter(Boolean);
+  if (nums.length === 3 && nums.every((n) => /^\d{1,3}$/.test(n) && Number(n) <= 255)) return nums.map(Number) as RGB;
+  return null;
+}
+
+/** The color as a code like #6B4423. */
+const toCode = (rgb: RGB) => "#" + rgb.map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
 
 function hsvToRgb(h: number, s: number, v: number): RGB {
   const f = (n: number) => {
@@ -31,6 +103,8 @@ function rgbToHsv([r, g, b]: RGB): [number, number, number] {
 
 export function ColorWheel({ start, onUse, onCancel }: { start: RGB; onUse: (rgb: RGB) => void; onCancel: () => void }) {
   const [hsv, setHsv] = useState(() => rgbToHsv(start));
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState(false);
   const wheel = useRef<HTMLCanvasElement>(null);
   const [h, s, v] = hsv;
   const rgb = hsvToRgb(h, s, v);
@@ -117,6 +191,44 @@ export function ColorWheel({ start, onUse, onCancel }: { start: RGB; onUse: (rgb
             />
           </label>
         </div>
+      </div>
+      <label className="flex flex-col gap-1 text-sm text-zinc-700 dark:text-zinc-300">
+        Color code from online (like #6B4423)
+        <span className="flex gap-2">
+          <input
+            type="text"
+            value={code}
+            placeholder={toCode(rgb)}
+            onChange={(e) => {
+              setCode(e.target.value);
+              const found = parseColorCode(e.target.value);
+              setCodeError(!found && e.target.value.trim() !== "");
+              if (found) setHsv(rgbToHsv(found));
+            }}
+            className="w-40 rounded-lg border border-zinc-300 px-2 py-1 font-mono text-sm dark:border-zinc-700 dark:bg-zinc-950"
+          />
+          {codeError && <span className="self-center text-xs text-red-700 dark:text-red-400">That isn&apos;t a color code yet.</span>}
+        </span>
+      </label>
+      <div className="flex flex-col gap-2">
+        <span className="text-sm text-zinc-700 dark:text-zinc-300">Common colors (tap one to use it)</span>
+        {COMMON.map(({ group, colors }) => (
+          <div key={group} className="flex flex-wrap items-center gap-2">
+            <span className="w-24 shrink-0 text-xs font-semibold text-zinc-500">{group}</span>
+            {colors.map(({ name, rgb: c }) => (
+              <button
+                key={name}
+                type="button"
+                title={name}
+                onClick={() => onUse(c)}
+                className="flex w-14 flex-col items-center gap-0.5 text-[10px] leading-tight text-zinc-600 dark:text-zinc-400"
+              >
+                <span className="h-7 w-7 rounded-full border border-zinc-300 shadow-sm" style={{ background: `rgb(${c.join(",")})` }} />
+                {name}
+              </button>
+            ))}
+          </div>
+        ))}
       </div>
       <div className="flex gap-2">
         <button
