@@ -176,11 +176,79 @@ export function joinSameColor(page: Page, spot: Spot): Page {
  * be done: the two must be in the same layer and touch.
  */
 export function join(page: Page, a: Spot, b: Spot): Page | string {
-  if (a.layer !== b.layer) return "Those two are in different parts of the picture, so they can't be joined.";
+  if (a.layer !== b.layer) return joinAcross(page, a, b);
   if (a.region === b.region) return "That's the same shape. Tap a shape next to it.";
   const r = page.layers[a.layer].result;
   if (!neighbors(r, a.region).has(b.region)) return "Those two shapes don't touch. Tap a shape right next to the first one.";
   return rebuild(page, a.layer, (region) => (region === b.region ? a.region : region));
+}
+
+/**
+ * Joins shapes in two layers (a person's edge and the background next to it): the top layer's
+ * shape moves down into the bottom layer's, which takes the first-tapped shape's number, and
+ * its place in the top layer becomes see-through.
+ */
+function joinAcross(page: Page, a: Spot, b: Spot): Page | string {
+  const [top, bottom] = a.layer > b.layer ? [a, b] : [b, a];
+  const T = page.layers[top.layer];
+  const B = page.layers[bottom.layer];
+  const tr = T.result;
+  const br = B.result;
+  /** The bottom layer's shape under a page point (or -1). */
+  const bottomAt = (x: number, y: number) => {
+    const bx = Math.floor((x - B.x) / B.scale);
+    const by = Math.floor((y - B.y) / B.scale);
+    return bx < 0 || by < 0 || bx >= br.width || by >= br.height ? -1 : br.labels[by * br.width + bx];
+  };
+  /** The top layer's shape at a page point (or -1 outside it). */
+  const topAt = (x: number, y: number) => {
+    const tx = Math.floor((x - T.x) / T.scale);
+    const ty = Math.floor((y - T.y) / T.scale);
+    return tx < 0 || ty < 0 || tx >= tr.width || ty >= tr.height ? -1 : tr.labels[ty * tr.width + tx];
+  };
+  const showing = (x: number, y: number) => {
+    const t = topAt(x, y);
+    return t < 0 || isBlank(tr, t);
+  };
+
+  // They must touch on the page: the top shape's edge meets the bottom shape where it shows.
+  let touch = false;
+  const tw = tr.width;
+  for (let p = 0; p < tr.labels.length && !touch; p++) {
+    if (tr.labels[p] !== top.region) continue;
+    const x = p % tw;
+    const y = (p - x) / tw;
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const px = T.x + (x + dx + 0.5) * T.scale;
+      const py = T.y + (y + dy + 0.5) * T.scale;
+      if (showing(px, py) && bottomAt(px, py) === bottom.region) {
+        touch = true;
+        break;
+      }
+    }
+  }
+  if (!touch) return "Those two shapes don't touch. Tap a shape right next to the first one.";
+
+  // The bottom layer takes over the top shape's area.
+  const bIds = Uint32Array.from(br.labels);
+  for (let p = 0; p < bIds.length; p++) {
+    const x = p % br.width;
+    const y = (p - x) / br.width;
+    if (topAt(B.x + (x + 0.5) * B.scale, B.y + (y + 0.5) * B.scale) === top.region) bIds[p] = bottom.region;
+  }
+  const bColors = Array.from(br.regionColor);
+  if (a === top) bColors[bottom.region] = tr.regionColor[top.region];
+  const moved = finish(page, bottom.layer, bIds, bColors, Array.from(br.regionKind ?? []));
+
+  // The top shape becomes see-through.
+  const t2 = moved.layers[top.layer].result;
+  const tIds = Uint32Array.from(t2.labels);
+  const tColors = Array.from(t2.regionColor);
+  const tKinds = Array.from(t2.regionKind ?? []);
+  const blank = tColors.length;
+  tColors.push(t2.background ?? 0);
+  for (let p = 0; p < tIds.length; p++) if (tIds[p] === top.region) tIds[p] = blank;
+  return finish(moved, top.layer, tIds, tColors, tKinds);
 }
 
 /**
