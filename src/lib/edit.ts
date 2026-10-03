@@ -203,7 +203,7 @@ export function cleanUp(page: Page, spot: Spot): Page | string {
 /**
  * The page with the shape under a drawn line cut in two along it, or a reason it can't be done.
  * `line` is the path of the finger in page pixels (x, y pairs). A line that stops short of the
- * shape's edges is carried straight on to them.
+ * shape's edges is carried straight on to them; a loop cuts out what's inside it.
  */
 export function splitAlong(page: Page, line: [number, number][], minLength = page.width * MIN_LINE): Page | string {
   let length = 0;
@@ -231,9 +231,15 @@ export function splitAlong(page: Page, line: [number, number][], minLength = pag
     }
     return [x, y] as [number, number];
   };
-  const back = Math.min(pts.length - 1, 4);
-  pts.unshift(extend(pts[0], pts[back]));
-  pts.push(extend(pts[pts.length - 1], pts[pts.length - 1 - back]));
+  // A loop (ending about where it started) cuts out what's inside it, a leg in the middle of
+  // the sand, so it's closed rather than carried on to the edges.
+  const ends = Math.hypot(line[line.length - 1][0] - line[0][0], line[line.length - 1][1] - line[0][1]);
+  if (ends < Math.max(minLength * LOOP_CLOSE, length * LOOP_SHARE)) pts.push(pts[0]);
+  else {
+    const back = Math.min(pts.length - 1, 4);
+    pts.unshift(extend(pts[0], pts[back]));
+    pts.push(extend(pts[pts.length - 1], pts[pts.length - 1 - back]));
+  }
 
   // Mark the cut: every pixel of the shape the line passes through (sampled finely enough that
   // the cut has no gaps a shape could leak through).
@@ -336,6 +342,10 @@ export function lineShape(page: Page, line: [number, number][]): Spot | null {
 
 /** Shortest line that counts, as a share of the page width (when the screen size isn't known). */
 const MIN_LINE = 0.03;
+/** A line whose ends are within this many shortest-lines of each other is a loop... */
+const LOOP_CLOSE = 3;
+/** ...or within this share of its own length. */
+const LOOP_SHARE = 0.15;
 /** Pieces smaller than this (layer pixels) left by a wobbly line don't count as pieces. */
 const MIN_PIECE = 12;
 

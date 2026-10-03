@@ -53,7 +53,7 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: "color", label: "Change color", hint: "Tap the shape whose color is wrong." },
   { id: "join", label: "Join", hint: "Tap a shape, then a shape touching it, to remove the line between them." },
   { id: "clean", label: "Clean up a speck", hint: "Tap a small spot to blend it into what's around it." },
-  { id: "line", label: "Add a line", hint: "Drag your finger across a shape to cut it in two. (Use two fingers to move around.)" },
+  { id: "line", label: "Add a line", hint: "Drag your finger across a shape to cut it in two, or draw a loop around a part to make it its own shape. (Use two fingers to move around.)" },
 ];
 /** Most zoom while fixing. */
 const MAX_ZOOM = 5;
