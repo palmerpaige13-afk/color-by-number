@@ -70,6 +70,7 @@ type FoundSubjects = {
   animals: RegionMask[];
   clothes?: RegionMask;
   bodySkin?: RegionMask;
+  held?: RegionMask;
   note: string;
 };
 
@@ -342,7 +343,7 @@ export async function makePage(
     if (found.cutout) dropSpecks(found.cutout, image.width);
     photo.found.set(foundKey, found);
   }
-  const { main, subjects, cutout, animals, clothes, bodySkin } = found;
+  const { main, subjects, cutout, animals, clothes, bodySkin, held } = found;
   const structure = structureMap(main.data, main.width, main.height);
   const map = importanceMap(structure, subjects, main.width, main.height);
   const list = [describeSubjects(subjects), map.buildings ? "buildings" : ""].filter(Boolean).join(", ");
@@ -378,7 +379,7 @@ export async function makePage(
   onStep?.(twoLayers ? "Building the people…" : "Building your shapes…");
   const mainResult = await runPipelineAsync(
     // Faces shown: in their own light and shadow (eyes, nose and mouth as shaded shapes).
-    { ...main, importance: map.importance, faces, faceStyle: withFaces ? "photo" : "shaded", cutout, animals, clothes, bodySkin },
+    { ...main, importance: map.importance, faces, faceStyle: withFaces ? "photo" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       // People are kept simple so a page's detail goes into the background; when the whole

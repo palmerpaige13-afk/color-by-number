@@ -59,6 +59,18 @@ const SKY_HAIR_BLUE = -5;
 const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
 const SKY_HAIR_TINT = [4, 14] as const;
+/** Colors for a big thing people hold (a bouquet), picked from it... */
+const HELD_COLORS = 7;
+/** ...and for a small one (a shoe, a watch). */
+const HELD_SMALL_COLORS = 3;
+/** A held thing at least this share of the picture is big. */
+const HELD_BIG_SHARE = 0.004;
+/** Held bits smaller than this (pixels) are left to whatever is around them. */
+const HELD_MIN_PIXELS = 40;
+/** A held thing this many times taller than wide is a leg or pants, not something held. */
+const HELD_MAX_TALL = 2;
+/** A held thing within this ΔE of the clothes around it is part of them. */
+const HELD_LIKE_CLOTHES = 15;
 /** Shades for white clothes on detailed pages. */
 const WHITE_SHADES = 3;
 /** A clothes pixel this light (Lab L)... */
@@ -260,6 +272,8 @@ export function separateFaces(
    * colors for the whole photo, dark denim and a black top would otherwise share one.
    */
   clothesColors = 0,
+  /** What people hold (a bouquet, a watch, shoes): its own part, in its own colors. */
+  held?: RegionMask,
 ): FaceRegions {
   const detected = faces.length;
   faces = faces.flatMap(splitDoubleFace);
@@ -299,6 +313,52 @@ export function separateFaces(
   growFaces(parts, faces, smoothed, w, h, hairAt);
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
+  // What people hold comes before hair, skin and clothes, so flowers held against long hair or
+  // a dress aren't painted as hair or dress.
+  // Each held thing (each bouquet, each shoe) is a part of its own, so a red shoe and a pink
+  // bouquet don't share colors.
+  const heldParts = new Map<number, number>(); // part -> colors
+  if (held) {
+    const at = new Uint8Array(w * h);
+    paintSkin(held, at, 1, w, h);
+    // A pet's tongue or collar is the pet's.
+    if (animals.length) {
+      const pet = new Uint8Array(w * h);
+      for (const a of animals) paintSkin(a, pet, 1, w, h);
+      for (let p = 0; p < w * h; p++) if (pet[p]) at[p] = 0;
+    }
+    for (let start = 0; start < w * h && next < 250; start++) {
+      if (!at[start] || parts[start]) continue;
+      const piece = [start];
+      at[start] = 0;
+      for (let i = 0; i < piece.length; i++) {
+        const p = piece[i];
+        const x = p % w;
+        for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+          if (q < 0 || q >= w * h || !at[q] || parts[q]) continue;
+          at[q] = 0;
+          piece.push(q);
+        }
+      }
+      if (piece.length < HELD_MIN_PIXELS) continue;
+      // Tall and narrow is a leg or a pair of jeans the segmenter wasn't sure of: clothes.
+      let top = h, bottom = 0, left = w, right = 0;
+      for (const p of piece) {
+        const x = p % w, y = (p - x) / w;
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+      }
+      if (bottom - top + 1 > (right - left + 1) * HELD_MAX_TALL) continue;
+      // The color of the clothes it touches: a held thing looking just like them (jeans the
+      // segmenter wasn't sure of) is part of them.
+      if (clothes && looksLikeAround(piece, clothes, smoothed, w, h)) continue;
+      const k = next++;
+      for (const p of piece) parts[p] = k;
+      heldParts.set(k, piece.length >= w * h * HELD_BIG_SHARE ? HELD_COLORS : HELD_SMALL_COLORS);
+    }
+  }
   const hairParts = new Map<number, number>(); // hair part -> its face's part
   faces.forEach((f, i) => {
     if (!f.hair || next >= 250) return;
@@ -318,6 +378,7 @@ export function separateFaces(
   for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
   faces.forEach((_, i) => kindOf.set(i + 1, PartKind.face));
   for (const k of hairParts.keys()) kindOf.set(k, PartKind.hair);
+  for (const k of heldParts.keys()) kindOf.set(k, PartKind.clothes);
   // Each person's clothes are a part of their own.
   if (clothes) {
     const partOf = new Map<number, number>(); // person -> part
@@ -412,11 +473,20 @@ export function separateFaces(
     }
   }
 
+  // What people hold, in a few colors of its own (pink roses, white roses and leaves rather than
+  // the nearest dress or hair color).
+  for (const [k, n] of heldParts) {
+    const own = clothesPalette(smoothed, parts, k, n);
+    if (!own) continue;
+    const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
+    if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
+  }
+
   // White clothes (a wedding dress) have only faint folds, which the photo's shared colors
   // flatten into one: their white pixels get their own shadow, middle and light shades.
   const whiteTone = new Map<number, { ids: number[]; tone: Map<number, number> }>();
   for (const [k, kind] of kindOf) {
-    if (kind !== PartKind.clothes || clothesColors > 0) continue;
+    if (kind !== PartKind.clothes || clothesColors > 0 || heldParts.has(k)) continue;
     const own = whiteShades(smoothed, parts, k);
     if (!own) continue;
     const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
@@ -424,7 +494,7 @@ export function separateFaces(
   }
   if (clothesColors > 0) {
     for (const [k, kind] of kindOf) {
-      if (kind !== PartKind.clothes) continue;
+      if (kind !== PartKind.clothes || heldParts.has(k)) continue;
       const own = clothesPalette(smoothed, parts, k, clothesColors);
       if (!own) continue;
       const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
@@ -751,6 +821,34 @@ function notHair(lab: ArrayLike<number>, p: number, [a0, b0, chroma0]: [number, 
   const a = lab[p * 3 + 1];
   const b = lab[p * 3 + 2];
   return Math.hypot(a - a0, b - b0) > HAIR_COLOR_REACH && Math.hypot(a, b) > chroma0 + HAIR_EXTRA_CHROMA;
+}
+
+/** Whether a piece's average color is close to the clothes right around it. */
+function looksLikeAround(piece: number[], clothes: RegionMask, smoothed: Uint8ClampedArray, w: number, h: number): boolean {
+  const inPiece = new Set(piece);
+  const isClothes = (q: number) => {
+    const cx = (q % w) - clothes.x;
+    const cy = Math.floor(q / w) - clothes.y;
+    return cx >= 0 && cy >= 0 && cx < clothes.width && cy < clothes.height && clothes.data[cy * clothes.width + cx] > 0;
+  };
+  const own = [0, 0, 0];
+  const near = [0, 0, 0, 0];
+  for (const p of piece) {
+    for (let c = 0; c < 3; c++) own[c] += smoothed[p * 4 + c];
+    const x = p % w;
+    for (const d of [-2, 2, -2 * w, 2 * w]) {
+      const q = p + d;
+      if (q < 0 || q >= w * h || (d === -2 && x < 2) || (d === 2 && x >= w - 2) || inPiece.has(q) || !isClothes(q)) continue;
+      for (let c = 0; c < 3; c++) near[c] += smoothed[q * 4 + c];
+      near[3]++;
+    }
+  }
+  if (near[3] < piece.length * 0.05) return false;
+  const a = new Float32Array(3);
+  const b = new Float32Array(3);
+  rgbToLab(own[0] / piece.length, own[1] / piece.length, own[2] / piece.length, a, 0);
+  rgbToLab(near[0] / near[3], near[1] / near[3], near[2] / near[3], b, 0);
+  return labDist2(a, 0, b, 0) < HELD_LIKE_CLOTHES * HELD_LIKE_CLOTHES;
 }
 
 /** Whether a pixel's color (Lab) could be the skin of a face with this typical color. */

@@ -257,6 +257,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
           input.cutout,
           1,
           params.flatClothes ? FLAT_CLOTHES_COLORS : 0,
+          input.held,
         )
       : null;
   let palette = faces?.palette ?? q.palette;

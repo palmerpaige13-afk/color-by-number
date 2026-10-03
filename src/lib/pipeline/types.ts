@@ -101,6 +101,8 @@ export interface PipelineInput {
   clothes?: RegionMask;
   /** The people's bare skin other than faces (neck, arms, legs, feet). */
   bodySkin?: RegionMask;
+  /** What the people hold or wear besides clothes (a bouquet, a watch, shoes). */
+  held?: RegionMask;
 }
 
 export interface PipelineResult {

@@ -51,6 +51,11 @@ const HAIR = 1;
 const BODY_SKIN = 2;
 const FACE_SKIN = 3;
 const CLOTHES = 4;
+const OTHERS = 5;
+/** How sure the segmenter must be that something is held (a bouquet), not clothes (jeans it isn't sure of). */
+const HELD_SURE = 0.75;
+/** ...and that it isn't clothes at all. */
+const HELD_NOT_CLOTHES = 0.1;
 /** Segmenter input size, and how much around the face it looks at (x face size). */
 const SEGMENT_SIZE = 256;
 const SEGMENT_PAD = 3;
@@ -420,6 +425,8 @@ export interface Detection {
   clothes?: RegionMask;
   /** The people's bare skin other than faces (neck, arms, hands, legs, feet), when cut out. */
   bodySkin?: RegionMask;
+  /** What the people hold or wear besides clothes (a bouquet, a watch, shoes), when cut out. */
+  held?: RegionMask;
 }
 
 /**
@@ -773,6 +780,7 @@ export async function detectSubjects(
     animals,
     clothes: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.clothes },
     bodySkin: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.bodySkin },
+    held: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.held },
   };
 
   function paint(m: RegionMask, into: Uint8Array) {
@@ -1195,14 +1203,19 @@ export async function detectSubjects(
     for (let p = 0; p < n; p++) if (clothes[p]) clothes[p] = owner[p] || LEFT_OVER;
   }
 
-  /** The people (anything that's part of them) and, within that, their clothes, bare skin and hair. */
+  /**
+   * The people (anything that's part of them) and, within that, their clothes, bare skin, hair
+   * and what they hold (the segmenter's "others": bouquets, watches, shoes).
+   */
   function cutOutPeople(model: ImageSegmenter): {
     mask: Uint8Array;
     clothes: Uint8Array;
     bodySkin: Uint8Array;
     hair: Uint8Array;
+    held: Uint8Array;
   } {
     const mask = new Uint8Array(workW * workH);
+    const held = new Uint8Array(workW * workH);
     const hair = new Uint8Array(workW * workH);
     const clothes = new Uint8Array(workW * workH);
     const bodySkin = new Uint8Array(workW * workH);
@@ -1221,6 +1234,7 @@ export async function detectSubjects(
       const cl = result.confidenceMasks?.[CLOTHES]?.getAsFloat32Array().slice();
       const sk = result.confidenceMasks?.[BODY_SKIN]?.getAsFloat32Array().slice();
       const hr = result.confidenceMasks?.[HAIR]?.getAsFloat32Array().slice();
+      const ot = result.confidenceMasks?.[OTHERS]?.getAsFloat32Array().slice();
       result.close();
       if (!bg) return;
       const clamp = (u: number, v: number) => Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u));
@@ -1228,6 +1242,7 @@ export async function detectSubjects(
       const clAt = (u: number, v: number) => (cl ? cl[clamp(u, v)] : 0);
       const skAt = (u: number, v: number) => (sk ? sk[clamp(u, v)] : 0);
       const hrAt = (u: number, v: number) => (hr ? hr[clamp(u, v)] : 0);
+      const otAt = (u: number, v: number) => (ot ? ot[clamp(u, v)] : 0);
       const x0 = Math.max(0, Math.floor(sx * toWork));
       const y0 = Math.max(0, Math.floor(sy * toWork));
       const x1 = Math.min(workW - 1, Math.ceil((sx + side) * toWork));
@@ -1256,10 +1271,17 @@ export async function detectSubjects(
             (hrAt(ui, vi) * (1 - fu) + hrAt(ui + 1, vi) * fu) * (1 - fv) +
             (hrAt(ui, vi + 1) * (1 - fu) + hrAt(ui + 1, vi + 1) * fu) * fv;
           if (hv >= 0.5) hair[y * workW + x] = 1;
+          const o =
+            (otAt(ui, vi) * (1 - fu) + otAt(ui + 1, vi) * fu) * (1 - fv) +
+            (otAt(ui, vi + 1) * (1 - fu) + otAt(ui + 1, vi + 1) * fu) * fv;
+          if (o >= HELD_SURE && c < HELD_NOT_CLOTHES) held[y * workW + x] = 1;
         }
       }
     });
-    return { mask, clothes, bodySkin, hair };
+    // A child held in someone's arms is "held" in their crop but clothes in the child's own:
+    // clothes win.
+    for (let p = 0; p < held.length; p++) if (clothes[p] || bodySkin[p] || hair[p]) held[p] = 0;
+    return { mask, clothes, bodySkin, hair, held };
   }
 }
 
