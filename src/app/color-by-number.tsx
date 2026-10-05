@@ -407,7 +407,9 @@ export default function ColorByNumber() {
     const next = splitAlong(result, line, box ? (MIN_LINE_PX * result.width) / box.width : undefined);
     if (typeof next === "string" && highlightRef.current) drawHighlight(highlightRef.current, result, []);
     const spot = lineShape(result, line);
-    apply(next, spot ? { tool: "line", ...describe(result, spot) } : undefined);
+    // Where the line was drawn (its ends), as shares of the page.
+    const ends = [line[0], line[line.length - 1]].flatMap(([x, y]) => [Math.round((x / result.width) * 1000) / 1000, Math.round((y / result.height) * 1000) / 1000]);
+    apply(next, spot ? { tool: "line", ...describe(result, spot), line: ends } : undefined);
   }
 
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
@@ -423,7 +425,7 @@ export default function ColorByNumber() {
     if (tool === "clean") apply(cleanUp(result, spot), { tool: "clean", ...describe(result, spot) });
     else if (tool === "join" && picked) {
       const [a, b] = [describe(result, picked), describe(result, spot)];
-      apply(join(result, picked, spot), { tool: "join", layer: a.layer, parts: [a.part, b.part], sizes: [a.size, b.size] });
+      apply(join(result, picked, spot), { tool: "join", layer: a.layer, parts: [a.part, b.part], sizes: [a.size, b.size], at: [...a.at, ...b.at] });
     } else if (tool === "color" && picked && (spot.layer !== picked.layer || spot.region !== picked.region)) {
       // Eyedropper: copy the color of the shape tapped second.
       recolorPicked(numberAt(result, spot), "eyedropper");

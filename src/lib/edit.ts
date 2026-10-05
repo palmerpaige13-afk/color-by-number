@@ -141,13 +141,16 @@ export function addColor(page: Page, rgb: RGB): { page: Page; n: number } {
 }
 
 /** What a shape is, in words, and how much of the page it covers (share of the page area). */
-export function describe(page: Page, spot: Spot): { part: string; layer: string; size: number } {
-  const { result: r, scale } = page.layers[spot.layer];
+export function describe(page: Page, spot: Spot): { part: string; layer: string; size: number; at: number[] } {
+  const { result: r, scale, x: lx, y: ly } = page.layers[spot.layer];
+  // Where the shape is (its number's spot), as a share of the page's width and height.
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+  const at = [round((lx + r.labelX[spot.region] * scale) / page.width), round((ly + r.labelY[spot.region] * scale) / page.height)];
   const kind = r.regionKind?.[spot.region] ?? 0;
   const layer = page.layers.length > 1 && spot.layer === 0 ? "background" : "main";
   const part = ["other", "skin", "hair", "clothes", "pet"][kind] ?? "other";
   const size = (r.regionArea[spot.region] * scale * scale) / (page.width * page.height);
-  return { part: kind === 0 && layer === "background" ? "background" : part, layer, size: Math.round(size * 100000) / 100000 };
+  return { part: kind === 0 && layer === "background" ? "background" : part, layer, size: Math.round(size * 100000) / 100000, at };
 }
 
 /** The color number of the shape at `spot`. */
