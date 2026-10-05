@@ -21,6 +21,9 @@ const PEOPLE_SHARE = 0.65;
 /** Share of the photo that must be people for the page to be cut out to just them. */
 const MIN_CUTOUT_SHARE = 0.02;
 
+/** Colors per layer when faces are shown (people in the photo's own colors). */
+const PHOTO_COLORS_PALETTE: Record<Difficulty, number> = { easy: 16, medium: 24, hard: 40 };
+
 /**
  * How different two paint colors must be (ΔE) to get their own numbers. Easy keeps colors
  * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
@@ -269,7 +272,7 @@ export async function loadPhoto(file: Blob): Promise<Photo> {
 export interface PageChoices {
   printSize: PrintSizeId;
   difficulty: Difficulty;
-  /** Faces in their own light and shadow (eyes, nose and mouth as shaded shapes), or blank. */
+  /** People in the photo's own colors, faces and all, or simplified with blank faces. */
   faces: boolean;
   /** The whole photo around the people, not framed closer on them. */
   zoomOut: boolean;
@@ -355,6 +358,11 @@ export async function makePage(
 
   const faces = subjects.filter((s) => s.kind === "face");
   const twoLayers = !!(frame && cutout);
+  // With faces shown, people are drawn in the photo's own colors throughout (faces with their
+  // eyes and smiles, hair, clothes, what they hold), from more colors, like a paint-by-number
+  // kit. Without, people are simplified: blank faces, one hair color, flat clothes.
+  const photoColors = withFaces;
+  const colorParams = photoColors ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] } : {};
 
   // The print size decides how small numbers (and so shapes) can be: the smallest number is
   // a fixed share of the picture's width, from how wide it will be printed.
@@ -378,10 +386,13 @@ export async function makePage(
 
   onStep?.(twoLayers ? "Building the people…" : "Building your shapes…");
   const mainResult = await runPipelineAsync(
-    // Faces shown: in their own light and shadow (eyes, nose and mouth as shaded shapes).
-    { ...main, importance: map.importance, faces, faceStyle: withFaces ? "photo" : "shaded", cutout, animals, clothes, bodySkin, held },
+    // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
+    photoColors
+      ? { ...main, importance: map.importance, cutout }
+      : { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
+      ...colorParams,
       // People are kept simple so a page's detail goes into the background; when the whole
       // photo is one layer (no one to cut out), everything gets the level's own detail.
       ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
@@ -403,7 +414,7 @@ export async function makePage(
     onStep?.("Building the background…");
     const sceneResult = await runPipelineAsync(
       { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
-      { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
+      { ...params, ...colorParams, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
     );
     const layers: Layer[] = [
       { result: sceneResult, x: 0, y: 0, scale: sceneScale, outlineBlank: false },

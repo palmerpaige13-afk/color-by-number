@@ -60,7 +60,7 @@ const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
 const SKY_HAIR_TINT = [4, 14] as const;
 /** Colors for a big thing people hold (a bouquet), picked from it... */
-const HELD_COLORS = 7;
+const HELD_COLORS = 12;
 /** ...and for a small one (a shoe, a watch). */
 const HELD_SMALL_COLORS = 3;
 /** A held thing at least this share of the picture is big. */
