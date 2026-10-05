@@ -424,6 +424,7 @@ export async function makePage(
         y: (mainRect.y - frame.scene.y) * k,
         scale: mainScale,
         outlineBlank: true,
+        natural: photoColors,
       },
     ];
     page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty]);
@@ -431,7 +432,7 @@ export async function makePage(
     page = buildPage(
       main.width * SCALE,
       main.height * SCALE,
-      [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true }],
+      [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true, natural: photoColors && faces.length > 0 }],
       fontFrac,
       KEY_DISTINCT[difficulty],
       COOL_BOOST[difficulty],

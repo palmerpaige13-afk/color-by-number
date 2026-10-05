@@ -18,6 +18,8 @@ export interface Layer {
   scale: number;
   /** Draw the outline where this layer meets its own blank (cut-out) area. */
   outlineBlank: boolean;
+  /** Keep this layer's colors as they are (people): no cooling nudge for backgrounds. */
+  natural?: boolean;
 }
 
 export interface Page {
@@ -141,7 +143,7 @@ export function buildPage(
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string };
   const entries: Entry[] = [];
-  layers.forEach(({ result, scale }, layer) => {
+  layers.forEach(({ result, scale, natural }, layer) => {
     const area = new Float64Array(result.palette.length);
     for (let i = 0; i < result.regionCount; i++) area[result.regionColor[i]] += result.regionArea[i] * scale * scale;
     if (result.background !== undefined) area[result.background] = 0;
@@ -151,7 +153,7 @@ export function buildPage(
       // Whose skin or clothes this is (a person's clothes are a part of their own).
       const face =
         kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
-      entries.push({ layer, index, rgb: kind ? rgb : coolBoost(rgb, cool), area: area[index], kind, face });
+      entries.push({ layer, index, rgb: kind || natural ? rgb : coolBoost(rgb, cool), area: area[index], kind, face });
     });
   });
 
