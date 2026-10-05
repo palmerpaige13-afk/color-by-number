@@ -43,6 +43,8 @@ const MAX_CUTOUT_HOLE = 0.001;
 const CROP_MARGIN = 0.06;
 /** The biggest person must fill this share of the photo for it to count as a photo *of* people. */
 const MAIN_PERSON_SHARE = 0.06;
+/** Smaller people (but at least this share) keep the whole view and still get their own layer. */
+const SMALL_PERSON_SHARE = 0.003;
 /** People smaller than this share of the biggest person are background people. */
 const SIDE_PERSON_SHARE = 0.25;
 /** Animals at least this share of the biggest person's size are kept with the people. */
@@ -89,7 +91,10 @@ async function framing(
   const found = await findPeople(full).catch(() => ({ people: [], animals: [], peopleReach: [], animalReach: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
-  if (biggest < MAIN_PERSON_SHARE * full.width * full.height) return null;
+  // People small in a big view (a canyon, a beach): the view stays as it is, but they still
+  // get their own detailed layer, so their arms and legs don't melt into the ground.
+  const small = biggest < MAIN_PERSON_SHARE * full.width * full.height;
+  if (small && biggest < SMALL_PERSON_SHARE * full.width * full.height) return null;
   // Someone cut off at the side of the photo (a leg and an arm showing) isn't a subject.
   const sliver = (b: Rect) => (b.x <= full.width * 0.02 || b.x + b.width >= full.width * 0.98) && b.width < b.height * 0.3;
   // Who's a subject is judged by their boxes; the frame then takes in all of each (a bride the
@@ -126,7 +131,7 @@ async function framing(
   };
   // The animals found, in the subjects' own pixels, so the closer look doesn't lose them.
   const animals = found.animals.map((a) => ({ ...a, x: a.x - subjects.x, y: a.y - subjects.y }));
-  return { subjects, scene, animals };
+  return { subjects, scene: small ? { x: 0, y: 0, width: full.width, height: full.height } : scene, animals };
 }
 
 /** `r` trimmed to width/height ratio `aspect`, centered on `focus` as far as `r` allows. */
