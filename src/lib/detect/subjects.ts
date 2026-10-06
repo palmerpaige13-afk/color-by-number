@@ -18,6 +18,9 @@ import { rgbToLab } from "@/lib/pipeline/color";
 import { drawClipped } from "@/lib/draw";
 
 const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+/** The older library version the person-tap segmenter works in. */
+const PERSON_TAP_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const PERSON_TAP_MODEL = "https://storage.googleapis.com/mediapipe-models/interactive_segmenter/magic_touch/float32/1/magic_touch.tflite";
 const MODELS = "https://storage.googleapis.com/mediapipe-models";
 const OBJECT_MODEL = `${MODELS}/object_detector/efficientdet_lite0/int8/latest/efficientdet_lite0.tflite`;
 const FACE_MODEL = `${MODELS}/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite`;
@@ -63,6 +66,10 @@ const SEGMENT_PAD = 3;
 const HAIR_SEED_PAD = 0.35;
 /** Face skin beside a known face at least this share of its box's area is another face (a kiss). */
 const SIDE_FACE_SHARE = 0.25;
+/** Faces whose centers are within this many face sizes of each other are close (their hair may touch). */
+const HEADS_CLOSE = 2;
+/** How sure the person-tap segmenter must be that a pixel is that person. */
+const HEAD_SURE = 0.5;
 /** Growing hair: each ΔE this big between a pixel and the head's hair color costs one more step. */
 const HAIR_COLOR_STEP = 2;
 /** Owner of clothes no face reaches (held things, someone with no face found). */
@@ -119,6 +126,30 @@ function loadSegmenter() {
       throw err;
     });
   return segmenter;
+}
+
+/**
+ * The "tap on a person" segmenter: given a point on someone, it outlines that one person.
+ * Used to tell whose hair is whose where heads touch. It's broken in the current library
+ * version, so it comes from an older one, loaded only when it's needed.
+ */
+type PersonTap = { segment: (image: HTMLCanvasElement, roi: { keypoint: { x: number; y: number } }, callback: (r: { confidenceMasks?: { width: number; height: number; getAsFloat32Array(): Float32Array }[] }) => void) => void };
+let personTap: Promise<PersonTap> | null = null;
+
+function loadPersonTap() {
+  personTap ??= (async () => {
+    const old = await import("mediapipe-vision-0-10-14");
+    const fileset = await old.FilesetResolver.forVisionTasks(PERSON_TAP_WASM_URL);
+    return (await old.InteractiveSegmenter.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: PERSON_TAP_MODEL },
+      outputCategoryMask: false,
+      outputConfidenceMasks: true,
+    })) as unknown as PersonTap;
+  })().catch((err) => {
+    personTap = null;
+    throw err;
+  });
+  return personTap;
 }
 
 let animalSegmenter: Promise<ImageSegmenter> | null = null;
@@ -768,7 +799,8 @@ export async function detectSubjects(
   // face skin by the segmenter: those become faces too.
   await breathe();
   if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
-  if (peopleCut) extendHair(faceBoxes, peopleCut.hair);
+  const heads = peopleCut ? await headsOf(faceBoxes).catch(() => null) : null;
+  if (peopleCut) extendHair(faceBoxes, peopleCut.hair, heads);
   if (peopleCut) splitClothes(faceBoxes, peopleCut.clothes);
 
   const subjects = [...out, ...faceBoxes].map((b) => ({
@@ -1024,13 +1056,55 @@ export async function detectSubjects(
   }
 
   /**
+   * Where heads are close together (cheek to cheek, a child held up), which person each pixel
+   * belongs to, from tapping each of those faces with the person-tap segmenter: 0 where no one
+   * close was tapped, else the face's number (1, 2, …). Null when no faces are close.
+   */
+  async function headsOf(faces: SubjectBox[]): Promise<Int16Array | null> {
+    const close = faces.map((f, i) =>
+      faces.some((g, j) => {
+        if (j === i) return false;
+        const size = Math.max(f.width, f.height, g.width, g.height);
+        return Math.hypot(f.x + f.width / 2 - (g.x + g.width / 2), f.y + f.height / 2 - (g.y + g.height / 2)) < size * HEADS_CLOSE;
+      }),
+    );
+    if (!close.some(Boolean)) return null;
+    const tap = await loadPersonTap();
+    const owner = new Int16Array(workW * workH);
+    const best = new Float32Array(workW * workH);
+    faces.forEach((f, i) => {
+      if (!close[i]) return;
+      const keypoint = { x: (f.x + f.width / 2) / workW, y: (f.y + f.height / 2) / workH };
+      tap.segment(canvas, { keypoint }, (r) => {
+        const m = r.confidenceMasks?.[0];
+        if (!m) return;
+        const a = m.getAsFloat32Array();
+        for (let y = 0; y < workH; y++) {
+          const my = Math.min(m.height - 1, Math.floor(((y + 0.5) * m.height) / workH));
+          for (let x = 0; x < workW; x++) {
+            const v = a[my * m.width + Math.min(m.width - 1, Math.floor(((x + 0.5) * m.width) / workW))];
+            const p = y * workW + x;
+            if (v >= HEAD_SURE && v > best[p]) {
+              best[p] = v;
+              owner[p] = i + 1;
+            }
+          }
+        }
+      });
+    });
+    return owner;
+  }
+
+  /**
    * Long hair runs past the square each face's hair is looked for in, and would end in a
    * straight cut; and a face's square can take in someone else's hair. So each face's hair is
    * regrown from its own head: starting right around the face, through all the hair found
    * (on the whole person and around every face), each hair pixel going to the head it is
    * nearest to by steps through the hair.
    */
-  function extendHair(faces: SubjectBox[], hairAll: Uint8Array) {
+  function extendHair(faces: SubjectBox[], hairAll: Uint8Array, heads: Int16Array | null) {
+    // Hair the person-tap segmenter puts on someone else is never this head's.
+    const others = (p: number, o: number) => !!heads && heads[p] !== 0 && heads[p] !== o;
     const n = workW * workH;
     const isHair = Uint8Array.from(hairAll);
     for (const f of faces) if (f.hair) paint(f.hair, isHair);
@@ -1049,7 +1123,7 @@ export async function detectSubjects(
       for (let y = Math.max(0, Math.floor(f.y - pad)); y <= Math.min(workH - 1, f.y + f.height * 0.5); y++) {
         for (let x = Math.max(0, Math.floor(fx - pad)); x <= Math.min(workW - 1, fx + fw + pad); x++) {
           const p = y * workW + x;
-          if (!isHair[p]) continue;
+          if (!isHair[p] || others(p, i + 1)) continue;
           const d = Math.hypot((x - cx) / fw, (y - cy) / f.height);
           if (d < reach[p]) {
             reach[p] = d;
@@ -1088,7 +1162,7 @@ export async function detectSubjects(
       const o = owner[p];
       const x = p % workW;
       for (const q of [x > 0 ? p - 1 : -1, x < workW - 1 ? p + 1 : -1, p - workW, p + workW]) {
-        if (q < 0 || q >= n || done[q] || !isHair[q]) continue;
+        if (q < 0 || q >= n || done[q] || !isHair[q] || others(q, o)) continue;
         const dE = Math.hypot(lab[q * 3] - own[o * 4], lab[q * 3 + 1] - own[o * 4 + 1], lab[q * 3 + 2] - own[o * 4 + 2]);
         const step = q === p - 1 || q === p + 1 ? HAIR_SIDEWAYS : 1;
         const c = d + step * (1 + dE / HAIR_COLOR_STEP);
@@ -1099,6 +1173,10 @@ export async function detectSubjects(
         }
       }
     }
+    // Hair no head reached (each was kept off the others' hair) goes to the person the
+    // person-tap segmenter says it's on, so it isn't left over (left-over hair would be taken
+    // by a face and darken its skin color).
+    if (heads) for (let p = 0; p < n; p++) if (isHair[p] && !owner[p] && heads[p] && faces[heads[p] - 1]?.hair) owner[p] = heads[p];
     faces.forEach((f, i) => {
       if (!f.hair) return;
       let x0 = workW, y0 = workH, x1 = -1, y1 = -1;
