@@ -57,6 +57,8 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
 ];
 /** Most zoom while fixing. */
 const MAX_ZOOM = 5;
+/** Where people can send a photo that came out badly, to have it fixed by hand. */
+const FIX_BY_HAND_EMAIL = "chandlercreative2025@gmail.com";
 /** Shortest drawn line that counts as a line (not a tap), in screen pixels. */
 const MIN_LINE_PX = 8;
 /** Width the photo is drawn at when shown in place of the page (pixels). */
@@ -991,6 +993,16 @@ export default function ColorByNumber() {
               />
               <span>Also share my photo, so you can see exactly what went wrong. It&apos;s kept private and only used to improve the site.</span>
             </label>
+            <p className="text-sm text-zinc-700 dark:text-zinc-300">
+              Does your picture look way off? Email your photo to{" "}
+              <a
+                href={`mailto:${FIX_BY_HAND_EMAIL}?subject=${encodeURIComponent("Please fix my color-by-number")}`}
+                className="font-semibold whitespace-nowrap text-violet-700 hover:underline dark:text-violet-300"
+              >
+                {FIX_BY_HAND_EMAIL}
+              </a>{" "}
+              with what you&apos;d like fixed, and we&apos;ll try to fix it by hand for you.
+            </p>
             <textarea
               value={helpNote}
               onChange={(e) => setHelpNote(e.target.value)}
