@@ -9,6 +9,7 @@ import { DIFFICULTY_PARAMS, WORKING_SIZE, type Difficulty, type RegionMask } fro
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
 import { buildPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 import { runPipelineAsync } from "@/lib/run-pipeline";
+import { labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { cardShape, fitOnPaper, fontFraction, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
@@ -20,6 +21,21 @@ const PEOPLE_SHARE = 0.65;
 
 /** Share of the photo that must be people for the page to be cut out to just them. */
 const MIN_CUTOUT_SHARE = 0.02;
+
+/** Skin is at least this red (Lab a, typical of a face) when faces are shown; greener skin is warmed. */
+const SKIN_MIN_RED = 12;
+/** Only skin less red than this (Lab a) is warmed. */
+const SKIN_WARM_BELOW = 10;
+/** ...and only when that's at most this much (further off is left as the photo has it). */
+const SKIN_MAX_WARM = 3;
+/** Skin darker than this (Lab L) isn't warmed; up to twice it, partly. */
+const SKIN_DARK = 35;
+
+/** Faces smaller than this share of the picture keep the photo's shared colors (too small for colors of their own). */
+const OWN_FACE_MIN_SHARE = 0.006;
+
+/** Shapes inside faces (when shown) may be this share of a level's smallest shape. */
+const FACE_DETAIL: Record<Difficulty, number> = { easy: 0.6, medium: 0.4, hard: 0.3 };
 
 /** Colors per layer when faces are shown (people in the photo's own colors). */
 const PHOTO_COLORS_PALETTE: Record<Difficulty, number> = { easy: 16, medium: 24, hard: 40 };
@@ -132,6 +148,58 @@ async function framing(
   // The animals found, in the subjects' own pixels, so the closer look doesn't lose them.
   const animals = found.animals.map((a) => ({ ...a, x: a.x - subjects.x, y: a.y - subjects.y }));
   return { subjects, scene: small ? { x: 0, y: 0, width: full.width, height: full.height } : scene, animals };
+}
+
+/**
+ * Skin lit by green leaves (under trees) comes out greenish. For faces shown in the photo's own
+ * colors, each face's skin, and the bare skin of the people, is warmed back toward a skin color:
+ * shifted toward red by however much the face's typical color is short of it. Other things keep
+ * their colors. Returns a copy of the pixels.
+ */
+function warmSkin(data: Uint8ClampedArray, width: number, faces: SubjectBox[], bodySkin?: RegionMask): Uint8ClampedArray {
+  const out = Uint8ClampedArray.from(data);
+  const lab = new Float32Array(3);
+  const shifts: number[] = [];
+  const shift = (p: number, da: number) => {
+    rgbToLab(out[p * 4], out[p * 4 + 1], out[p * 4 + 2], lab, 0);
+    // Dark parts (hair over a face turned away, deep shadow) are left alone; they'd turn red.
+    const k = Math.min(1, Math.max(0, (lab[0] - SKIN_DARK) / SKIN_DARK));
+    const rgb = labToRgb(lab[0], lab[1] + da * k, lab[2]);
+    for (let c = 0; c < 3; c++) out[p * 4 + c] = rgb[c];
+  };
+  const each = (m: RegionMask, f: (p: number) => void) => {
+    for (let y = 0; y < m.height; y++) {
+      for (let x = 0; x < m.width; x++) {
+        const px = m.x + x;
+        const py = m.y + y;
+        if (m.data[y * m.width + x] && px >= 0 && px < width && py >= 0 && py * width + px < data.length / 4) f(py * width + px);
+      }
+    }
+  };
+  for (const f of faces) {
+    if (!f.skin) continue;
+    const a: number[] = [];
+    each(f.skin, (p) => {
+      rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
+      a.push(lab[1]);
+    });
+    if (a.length < 20) continue;
+    const median = a.sort((x, y) => x - y)[a.length >> 1];
+    // Only skin that's clearly off (greenish); skin near normal is left as the photo has it.
+    if (median >= SKIN_WARM_BELOW) continue;
+    // Only a little off: far-off skin (strong colored light) is left as the photo has it.
+    const da = Math.max(0, SKIN_MIN_RED - median);
+    if (da > SKIN_MAX_WARM) continue;
+    if (!da) continue;
+    shifts.push(da);
+    each(f.skin, (p) => shift(p, da));
+  }
+  // Bare skin (arms, necks) gets the faces' typical shift.
+  if (bodySkin && shifts.length) {
+    const da = shifts.sort((x, y) => x - y)[shifts.length >> 1];
+    each(bodySkin, (p) => shift(p, da));
+  }
+  return out;
 }
 
 /** `r` trimmed to width/height ratio `aspect`, centered on `focus` as far as `r` allows. */
@@ -393,7 +461,7 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, importance: map.importance, cutout }
+      ? { ...main, data: warmSkin(main.data, main.width, faces, bodySkin), importance: map.importance, faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
       : { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
@@ -401,6 +469,9 @@ export async function makePage(
       // People are kept simple so a page's detail goes into the background; when the whole
       // photo is one layer (no one to cut out), everything gets the level's own detail.
       ...(twoLayers ? {} : { partMinArea: undefined, partMinRadius: undefined }),
+      // Faces shown: smaller shapes are kept inside faces (eyes, brows, the smile), less so on
+      // the small cards.
+      ...(photoColors ? { partMinArea: params.minArea * FACE_DETAIL[difficulty], partMinRadius: params.minRadius * Math.sqrt(FACE_DETAIL[difficulty]) } : {}),
       minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac),
     },
   );

@@ -71,6 +71,12 @@ const HELD_MIN_PIXELS = 40;
 const HELD_MAX_TALL = 2;
 /** A held thing within this ΔE of the clothes around it is part of them. */
 const HELD_LIKE_CLOTHES = 15;
+/** Colors each face gets from its own pixels when people are shown in the photo's colors. */
+const OWN_FACE_COLORS = 6;
+/** ...plus this many per whole picture of face (a face filling a tenth of it gets 6 more)... */
+const OWN_FACE_COLORS_PER_SHARE = 60;
+/** ...up to this many. */
+const OWN_FACE_MAX_COLORS = 12;
 /** Shades for white clothes on detailed pages. */
 const WHITE_SHADES = 3;
 /** A clothes pixel this light (Lab L)... */
@@ -262,7 +268,7 @@ export function separateFaces(
   baseLab: Float32Array,
   w: number,
   h: number,
-  style: "lines" | "shaded" | "faceless" | "photo" = "lines",
+  style: "lines" | "shaded" | "faceless" | "photo" | "own" = "lines",
   bodySkin?: RegionMask,
   person?: Uint8Array,
   /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
@@ -405,7 +411,8 @@ export function separateFaces(
     paintSkin(a, parts, next++, w, h);
   }
 
-  if (person) {
+  // Own-color faces (people shown in the photo's colors) take no more than their own skin.
+  if (person && style !== "own") {
     // Each face's typical color, for what its skin may take.
     if (!bodySkin) for (let p = 0; p < w * h; p++) if (mask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
     const faceLab = faces.map((_, i) => {
@@ -454,7 +461,20 @@ export function separateFaces(
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
     };
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
-    if (style === "photo") {
+    if (style === "own") {
+      // Each face in a few colors picked from its own pixels (skin, shadow, lips, eyes), so
+      // it keeps its own shading instead of sharing the photo's colors with hair and background.
+      faces.forEach((_, i) => {
+        // Bigger faces have more to show (a beard, a smile, sunglasses): more colors.
+        let n = 0;
+        for (let p = 0; p < mask.length; p++) if (mask[p] === i + 1) n++;
+        const colors = Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE)));
+        const own = facePalette(smoothed, mask, i + 1, colors);
+        if (!own) return;
+        const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), i + 1));
+        if (ids.every((id) => id >= 0)) faceTone.set(i + 1, { ids, tone: own.tone });
+      });
+    } else if (style === "photo") {
       // The face's own light and shadow, so eyes, nose and mouth show as shaded shapes.
       faces.forEach((_, i) => {
         const shading = facePhotoShading(smoothed, mask, i + 1, w);
@@ -549,6 +569,59 @@ export function separateFaces(
     mask,
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
   };
+}
+
+/**
+ * A face's own colors, spread over its range of light and dark (lit skin to shadow, lips,
+ * brows, a beard), rather than spent on its most unusual colors (bright sunglasses). Starting
+ * colors are taken at even steps of lightness, then refined. Each pixel's color index in `tone`.
+ */
+function facePalette(
+  smoothed: Uint8ClampedArray,
+  parts: Uint8Array,
+  k: number,
+  n: number,
+): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
+  const px: number[] = [];
+  for (let p = 0; p < parts.length; p++) if (parts[p] === k) px.push(p);
+  if (px.length < n * 20) return null;
+  const lab = new Float32Array(px.length * 3);
+  px.forEach((p, i) => rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, i * 3));
+  const order = px.map((_, i) => i).sort((a, b) => lab[a * 3] - lab[b * 3]);
+  const centers = new Float32Array(n * 3);
+  for (let c = 0; c < n; c++) {
+    // The middle of each lightness band, averaged so it's a typical color of that band.
+    const from = Math.floor((c * order.length) / n);
+    const to = Math.max(from + 1, Math.floor(((c + 1) * order.length) / n));
+    for (let j = from; j < to; j++) for (let a = 0; a < 3; a++) centers[c * 3 + a] += lab[order[j] * 3 + a] / (to - from);
+  }
+  const group = new Uint8Array(px.length);
+  for (let round = 0; round < 8; round++) {
+    const sum = new Float64Array(n * 4);
+    for (let i = 0; i < px.length; i++) {
+      let best = 0;
+      let bestD = Infinity;
+      for (let c = 0; c < n; c++) {
+        const d = labDist2(lab, i * 3, centers, c * 3);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      group[i] = best;
+      for (let a = 0; a < 3; a++) sum[best * 4 + a] += lab[i * 3 + a];
+      sum[best * 4 + 3]++;
+    }
+    for (let c = 0; c < n; c++) if (sum[c * 4 + 3]) for (let a = 0; a < 3; a++) centers[c * 3 + a] = sum[c * 4 + a] / sum[c * 4 + 3];
+  }
+  const rgbSum = new Float64Array(n * 4);
+  px.forEach((p, i) => {
+    for (let a = 0; a < 3; a++) rgbSum[group[i] * 4 + a] += smoothed[p * 4 + a];
+    rgbSum[group[i] * 4 + 3]++;
+  });
+  const rgb = Array.from({ length: n }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))) as RGB);
+  const out = new Float32Array(n * 3);
+  rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
+  const tone = new Map<number, number>();
+  px.forEach((p, i) => tone.set(p, group[i]));
+  return { rgb, lab: out, tone };
 }
 
 /**
