@@ -75,6 +75,8 @@ const HELD_LIKE_CLOTHES = 15;
 const OWN_FACE_COLORS = 6;
 /** On the small cards (people otherwise simplified), a face keeps just this many of its own colors. */
 const CARD_FACE_COLORS = 4;
+/** A card face whose main color is this much darker (Lab L) than plain skin is in shade and lightened. */
+const CARD_FACE_SHADED = 18;
 /** ...plus this many per whole picture of face (a face filling a tenth of it gets 6 more)... */
 const OWN_FACE_COLORS_PER_SHARE = 60;
 /** ...up to this many. */
@@ -463,6 +465,8 @@ export function separateFaces(
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
     };
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
+    /** On cards, each face's plain skin color (for its arms and legs). */
+    const cardSkin = new Map<number, { rgb: RGB[]; lab: Float32Array }>();
     if (style === "own" || style === "card") {
       // Each face in a few colors picked from its own pixels (skin, shadow, lips, eyes), so
       // it keeps its own shading instead of sharing the photo's colors with hair and background.
@@ -476,6 +480,26 @@ export function separateFaces(
             : Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE)));
         const own = facePalette(smoothed, mask, i + 1, colors);
         if (!own) return;
+        if (style === "card") {
+          // A face in shade (sunglasses, trees) reads as normal skin: like simplified faces, a
+          // clearly shaded face is lightened so its main color is the skin a face in good light would have,
+          // keeping the light and dark of its features. Arms and legs take that skin color.
+          const skin = faceShading(smoothed, mask, i + 1, w, 1, true);
+          if (skin) {
+            const count = new Array(colors).fill(0);
+            for (const t of own.tone.values()) count[t]++;
+            const main = count.indexOf(Math.max(...count));
+            const lift = skin.lab[0] - own.lab[main * 3];
+            if (lift > CARD_FACE_SHADED) {
+              own.rgb = own.rgb.map((_, t) => {
+                const rgb = labToRgb(Math.min(97, own.lab[t * 3] + lift), own.lab[t * 3 + 1], own.lab[t * 3 + 2]);
+                return rgb.map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+              });
+              own.rgb.forEach((c, t) => rgbToLab(c[0], c[1], c[2], own.lab, t * 3));
+            }
+            cardSkin.set(i + 1, skin);
+          }
+        }
         const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), i + 1));
         if (ids.every((id) => id >= 0)) faceTone.set(i + 1, { ids, tone: own.tone });
       });
@@ -492,6 +516,12 @@ export function separateFaces(
     for (const [piece, k] of skinPieces) {
       const tone = faceTone.get(k);
       if (!tone) continue;
+      const skin = cardSkin.get(k);
+      if (skin) {
+        const id = add(skin.rgb[0], skin.lab.subarray(0, 3), piece);
+        if (id >= 0) faceTone.set(piece, { ids: [id], tone: new Map() });
+        continue;
+      }
       // Arms and legs take the face's main skin color: the one most of the face has (with a
       // face in several colors of its own, the first is its darkest, not its skin).
       const count = new Array(tone.ids.length).fill(0);
