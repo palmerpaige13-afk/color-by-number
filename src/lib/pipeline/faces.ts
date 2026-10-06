@@ -73,6 +73,8 @@ const HELD_MAX_TALL = 2;
 const HELD_LIKE_CLOTHES = 15;
 /** Colors each face gets from its own pixels when people are shown in the photo's colors. */
 const OWN_FACE_COLORS = 6;
+/** On the small cards (people otherwise simplified), a face keeps just this many of its own colors. */
+const CARD_FACE_COLORS = 4;
 /** ...plus this many per whole picture of face (a face filling a tenth of it gets 6 more)... */
 const OWN_FACE_COLORS_PER_SHARE = 60;
 /** ...up to this many. */
@@ -268,7 +270,7 @@ export function separateFaces(
   baseLab: Float32Array,
   w: number,
   h: number,
-  style: "lines" | "shaded" | "faceless" | "photo" | "own" = "lines",
+  style: "lines" | "shaded" | "faceless" | "photo" | "own" | "card" = "lines",
   bodySkin?: RegionMask,
   person?: Uint8Array,
   /** Tones per head of hair: one reads best (a second, shaded tone cuts hair into odd strips). */
@@ -461,14 +463,17 @@ export function separateFaces(
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: shading.tone });
     };
     const faceTones = style === "faceless" || bodySkin ? 1 : 2;
-    if (style === "own") {
+    if (style === "own" || style === "card") {
       // Each face in a few colors picked from its own pixels (skin, shadow, lips, eyes), so
       // it keeps its own shading instead of sharing the photo's colors with hair and background.
       faces.forEach((_, i) => {
         // Bigger faces have more to show (a beard, a smile, sunglasses): more colors.
         let n = 0;
         for (let p = 0; p < mask.length; p++) if (mask[p] === i + 1) n++;
-        const colors = Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE)));
+        const colors =
+          style === "card"
+            ? CARD_FACE_COLORS
+            : Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE)));
         const own = facePalette(smoothed, mask, i + 1, colors);
         if (!own) return;
         const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), i + 1));
@@ -487,7 +492,11 @@ export function separateFaces(
     for (const [piece, k] of skinPieces) {
       const tone = faceTone.get(k);
       if (!tone) continue;
-      const base = tone.ids[0];
+      // Arms and legs take the face's main skin color: the one most of the face has (with a
+      // face in several colors of its own, the first is its darkest, not its skin).
+      const count = new Array(tone.ids.length).fill(0);
+      for (const t of tone.tone.values()) count[t]++;
+      const base = tone.ids[count.indexOf(Math.max(...count))];
       const id = add(palette[base], labs.slice(base * 3, base * 3 + 3), piece);
       if (id >= 0) faceTone.set(piece, { ids: [id], tone: new Map() });
     }

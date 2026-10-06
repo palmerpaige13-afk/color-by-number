@@ -434,7 +434,10 @@ export async function makePage(
   // With faces shown, people are drawn in the photo's own colors throughout (faces with their
   // eyes and smiles, hair, clothes, what they hold), from more colors, like a paint-by-number
   // kit. Without, people are simplified: blank faces, one hair color, flat clothes.
-  const photoColors = withFaces;
+  // On the small cards there's no room for that: people stay simplified, and faces just keep a
+  // few colors of their own (eyes, smile).
+  const card = !!cardShape(printSize, true);
+  const photoColors = withFaces && !card;
   const colorParams = photoColors ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] } : {};
 
   // The print size decides how small numbers (and so shapes) can be: the smallest number is
@@ -462,7 +465,7 @@ export async function makePage(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
       ? { ...main, data: warmSkin(main.data, main.width, faces, bodySkin), importance: map.importance, faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
-      : { ...main, importance: map.importance, faces, faceStyle: "shaded", cutout, animals, clothes, bodySkin, held },
+      : { ...main, importance: map.importance, faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,

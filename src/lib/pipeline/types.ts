@@ -89,7 +89,7 @@ export interface PipelineInput {
    * How faces are drawn: "lines" keeps shading and draws eyes, nose and mouth as lines;
    * "shaded" keeps shading shapes only; "faceless" is one smooth shape per face.
    */
-  faceStyle?: "lines" | "shaded" | "faceless" | "photo" | "own";
+  faceStyle?: "lines" | "shaded" | "faceless" | "photo" | "own" | "card";
   /** 1 on the subject (people and pets), 0 on background. Background is left blank: no shapes. */
   cutout?: Uint8Array;
   /** Animal masks: each is outlined as its own part. */
