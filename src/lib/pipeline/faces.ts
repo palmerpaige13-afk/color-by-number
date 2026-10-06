@@ -1363,7 +1363,17 @@ function faceShading(
   const litTone = means[means.length - 1];
   const litLuma = 0.299 * litTone[0] + 0.587 * litTone[1] + 0.114 * litTone[2];
   const boost = brighten ? Math.min(FACE_MAX_BOOST, Math.max(1, FACE_MIN_LUMA / Math.max(1, litLuma))) : 1;
-  let rgb = means.map((m) => m.map((v) => Math.min(255, Math.round(v * boost))) as RGB);
+  // Brightened by raising lightness only: multiplying the red, green and blue would also make
+  // the color stronger (a shaded face turning bright orange).
+  let rgb = means.map((m) => {
+    if (boost === 1) return m.map((v) => Math.min(255, Math.round(v))) as RGB;
+    const lab = new Float32Array(3);
+    rgbToLab(Math.round(m[0]), Math.round(m[1]), Math.round(m[2]), lab, 0);
+    const boosted = new Float32Array(3);
+    const b = m.map((v) => Math.min(255, Math.round(v * boost)));
+    rgbToLab(b[0], b[1], b[2], boosted, 0);
+    return labToRgb(boosted[0], lab[1], lab[2]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+  });
   if (!brighten) {
     // Hair is never a dull blue-gray of its own: that's the sky lighting the top of the head.
     // It keeps its lightness with a natural light-brown tint (gray hair, which is barely

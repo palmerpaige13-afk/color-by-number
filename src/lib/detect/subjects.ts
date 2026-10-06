@@ -61,6 +61,8 @@ const SEGMENT_SIZE = 256;
 const SEGMENT_PAD = 3;
 /** A face's own hair starts within this much of its size around the face. */
 const HAIR_SEED_PAD = 0.35;
+/** Face skin beside a known face at least this share of its box's area is another face (a kiss). */
+const SIDE_FACE_SHARE = 0.25;
 /** Growing hair: each ΔE this big between a pixel and the head's hair color costs one more step. */
 const HAIR_COLOR_STEP = 2;
 /** Owner of clothes no face reaches (held things, someone with no face found). */
@@ -968,14 +970,26 @@ export async function detectSubjects(
         }
       }
       if (pix.length < minArea) continue;
-      // Skin right next to a known face (the neck, an ear) is part of that person, not a face.
+      // Skin right next to a known face (the neck, an ear) is part of that person, not a face;
+      // but a big area of face skin beside a known face, at its height (the other face of a
+      // kiss, turned sideways), is a face of its own.
+      let mx = 0, my = 0;
+      for (const q of pix) {
+        mx += q % workW;
+        my += Math.floor(q / workW);
+      }
+      mx /= pix.length;
+      my /= pix.length;
       const touchesKnown = known.some((f) => {
         const pad = 0.6;
-        return pix.some((q) => {
+        const near = pix.some((q) => {
           const x = q % workW;
           const y = (q - x) / workW;
           return x >= f.x - f.width * pad && x <= f.x + f.width * (1 + pad) && y >= f.y - f.height * pad && y <= f.y + f.height * (1 + pad);
         });
+        if (!near) return false;
+        const beside = (mx < f.x || mx > f.x + f.width) && my >= f.y - f.height * 0.2 && my <= f.y + f.height * 0.8;
+        return !(beside && pix.length >= f.width * f.height * SIDE_FACE_SHARE);
       });
       if (touchesKnown) continue;
       let bx0 = workW, bx1 = 0, by0 = workH, by1 = 0;
