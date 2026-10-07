@@ -97,8 +97,14 @@ export async function photoLink(path: string, download = false): Promise<string 
 
 /** Marks a report reviewed (or new again). */
 export async function setReviewed(id: string, reviewed: boolean): Promise<void> {
-  if (!/^[0-9a-f-]{36}$/.test(id)) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/fix_reports?id=eq.${id}`, {
+  await setManyReviewed([id], reviewed);
+}
+
+/** Marks several reports reviewed (or new again) at once. */
+export async function setManyReviewed(ids: string[], reviewed: boolean): Promise<void> {
+  const ok = ids.filter((id) => /^[0-9a-f-]{36}$/.test(id));
+  if (!ok.length) return;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/fix_reports?id=in.(${ok.join(",")})`, {
     method: "PATCH",
     headers: { ...headers(), "Content-Type": "application/json", Prefer: "return=minimal" },
     body: JSON.stringify({ reviewed_at: reviewed ? new Date().toISOString() : null }),

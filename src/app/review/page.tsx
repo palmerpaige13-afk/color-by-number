@@ -4,7 +4,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { loadReports, photoLink, reviewSetupMissing, signedIn, type Fix, type Report } from "@/lib/review";
-import { markReviewed, signIn, signOut } from "./actions";
+import { markAllReviewed, markReviewed, signIn, signOut } from "./actions";
 
 export const metadata: Metadata = { title: "Reports · Color by Number", robots: { index: false, follow: false } };
 
@@ -165,6 +165,14 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
         <Link href={all ? "/review" : "/review?all=1"} className="text-sm font-semibold text-violet-700 hover:underline dark:text-violet-300">
           {all ? "Show only new" : "Show all"}
         </Link>
+        {reports.some((r) => !r.reviewed_at) && (
+          <form action={markAllReviewed}>
+            <input type="hidden" name="ids" value={reports.filter((r) => !r.reviewed_at).map((r) => r.id).join(",")} />
+            <button type="submit" className="rounded-full bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700">
+              Mark all reviewed
+            </button>
+          </form>
+        )}
         <form action={signOut} className="ml-auto">
           <button type="submit" className="text-sm text-zinc-500 hover:underline">
             Sign out
