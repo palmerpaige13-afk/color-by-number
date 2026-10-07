@@ -1,13 +1,18 @@
 // Starts a payment for one PDF download: a Stripe Checkout Session shown inside the page, so
-// the person keeps their finished picture while they pay. The price is set here, on the
-// server, so it can't be changed from the browser.
+// the person keeps their finished picture while they pay. The browser says which kind of page
+// (a photo page, a Halloween page); the price comes from lib/price on the server, so it can't
+// be changed from the browser.
 
 import Stripe from "stripe";
-import { PRICE_CENTS } from "@/lib/price";
+import { PRODUCTS, isProduct } from "@/lib/price";
 
-export async function POST() {
+export async function POST(request: Request) {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return Response.json({ error: "Payments aren't set up yet." }, { status: 503 });
+  const body = await request.json().catch(() => ({}));
+  const kind = body?.product ?? "photo";
+  if (!isProduct(kind)) return Response.json({ error: "Unknown product." }, { status: 400 });
+  const product = PRODUCTS[kind];
   try {
     const stripe = new Stripe(key);
     const session = await stripe.checkout.sessions.create({
@@ -19,11 +24,8 @@ export async function POST() {
           quantity: 1,
           price_data: {
             currency: "usd",
-            unit_amount: PRICE_CENTS,
-            product_data: {
-              name: "Color-by-number PDF",
-              description: "Your printable color-by-number page and its color key",
-            },
+            unit_amount: product.cents,
+            product_data: { name: product.name, description: product.description },
           },
         },
       ],

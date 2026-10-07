@@ -7,7 +7,7 @@
 
 import { loadStripe, type StripeEmbeddedCheckout } from "@stripe/stripe-js";
 import { useEffect, useRef, useState } from "react";
-import { PRICE_LABEL } from "@/lib/price";
+import { priceLabel, type Product } from "@/lib/price";
 
 const PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 
@@ -16,7 +16,17 @@ export const paymentsOn = !!PUBLISHABLE_KEY;
 
 const stripePromise = PUBLISHABLE_KEY ? loadStripe(PUBLISHABLE_KEY) : null;
 
-export function Checkout({ onPaid, onClose }: { onPaid: () => void; onClose: () => void }) {
+export function Checkout({
+  product = "photo",
+  onPaid,
+  onClose,
+}: {
+  /** What's being bought (sets the price, on the server). */
+  product?: Product;
+  onPaid: () => void;
+  onClose: () => void;
+}) {
+  const price = priceLabel(product);
   const box = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"loading" | "open" | "checking" | "failed" | "unavailable">("loading");
 
@@ -30,7 +40,11 @@ export function Checkout({ onPaid, onClose }: { onPaid: () => void; onClose: () 
         if (!stripe || cancelled) throw new Error("Stripe didn't load");
         checkout = await stripe.createEmbeddedCheckoutPage({
           fetchClientSecret: async () => {
-            const res = await fetch("/api/checkout", { method: "POST" });
+            const res = await fetch("/api/checkout", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ product }),
+            });
             const data = await res.json();
             if (!res.ok || !data.clientSecret) throw new Error(data.error ?? "Couldn't start the payment");
             sessionId = data.id;
@@ -66,13 +80,15 @@ export function Checkout({ onPaid, onClose }: { onPaid: () => void; onClose: () 
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 print:hidden"
       role="dialog"
       aria-modal="true"
-      aria-label={`Pay ${PRICE_LABEL} for your PDF`}
+      aria-label={`Pay ${price} for your PDF`}
     >
       <div className="my-6 w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl dark:bg-zinc-900">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <h2 className="font-semibold">Get your PDF: {PRICE_LABEL}</h2>
-            <p className="text-sm text-zinc-500">Secure payment by Stripe. Your photo isn&apos;t sent anywhere.</p>
+            <h2 className="font-semibold">Get your PDF: {price}</h2>
+            <p className="text-sm text-zinc-500">
+              Secure payment by Stripe.{product === "photo" && " Your photo isn't sent anywhere."}
+            </p>
           </div>
           <button
             type="button"

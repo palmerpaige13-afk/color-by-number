@@ -6,7 +6,7 @@ import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, lineSh
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
-import { PRICE_LABEL } from "@/lib/price";
+import { priceLabel } from "@/lib/price";
 import { type Difficulty } from "@/lib/pipeline";
 import { drawPage, type Page } from "@/lib/page";
 import { pagePdf, saveFile } from "@/lib/page-pdf";
@@ -523,7 +523,7 @@ export default function ColorByNumber() {
           href="/halloween"
           className="mt-3 inline-flex items-center gap-2 rounded-full bg-orange-100 px-4 py-1.5 text-sm font-semibold text-orange-800 hover:bg-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:hover:bg-orange-900"
         >
-          🎃 Free Halloween pages to print
+          🎃 Halloween pages to print
         </Link>
       </header>
 
@@ -967,7 +967,7 @@ export default function ColorByNumber() {
               disabled={!!busy}
               className="rounded-full bg-zinc-900 px-6 py-3 font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${PRICE_LABEL}` : ""}
+              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${priceLabel("photo")}` : ""}
             </button>
             <span className="text-sm text-zinc-500">The page to color, the color key, and the finished picture.</span>
             {paying && (

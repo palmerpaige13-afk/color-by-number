@@ -4,7 +4,9 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DESIGNS, type HalloweenDesign } from "@/lib/halloween/designs";
 import { drawHalloweenPage, makeHalloweenPage, previewSvg, type HalloweenPage } from "@/lib/halloween/make";
+import { Checkout, paymentsOn } from "@/app/checkout";
 import { pagePdf, saveFile } from "@/lib/page-pdf";
+import { priceLabel } from "@/lib/price";
 import { fitOnPaper, fontFraction } from "@/lib/print";
 
 /** The pages print on Letter paper. */
@@ -34,6 +36,9 @@ export function HalloweenGallery() {
   const [colored, setColored] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Pages paid for this visit (each download is paid for once), and the checkout box is open. */
+  const [paid, setPaid] = useState<Set<string>>(new Set());
+  const [paying, setPaying] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pageRef = useRef<HTMLElement>(null);
   /** Gallery pictures shown with numbers instead of colored in, and their drawings. */
@@ -95,18 +100,21 @@ export function HalloweenGallery() {
     });
   }
 
-  async function download() {
-    if (!made) return;
+  async function download(hp = made) {
+    if (!hp) return;
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(await pagePdf(made.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, made, view, s)), `halloween-${made.design.id}.pdf`);
+      saveFile(await pagePdf(hp.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, hp, view, s)), `halloween-${hp.design.id}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
       setBusy(null);
     }
   }
+
+  /** This page has to be paid for before it downloads. */
+  const mustPay = paymentsOn && !!chosen && !paid.has(chosen.id);
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
@@ -116,7 +124,7 @@ export function HalloweenGallery() {
         </Link>
         <h1 className="mt-3 text-3xl font-bold tracking-tight">Halloween Color by Number 🎃</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Fifteen cute Halloween pages full of colors and shapes. Pick one to see it, then print it for free.
+          Fifteen cute Halloween pages full of colors and shapes. Pick one to see it, then download it to print on Letter paper.
         </p>
       </header>
 
@@ -208,14 +216,25 @@ export function HalloweenGallery() {
               <button
                 type="button"
                 disabled={!made || !!busy}
-                onClick={download}
+                onClick={() => (mustPay ? setPaying(true) : download())}
                 className="rounded-full bg-orange-500 px-5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-40"
               >
-                {busy ?? "Download free PDF (Letter)"}
+                {busy ?? `Download PDF (Letter)${mustPay ? `: ${priceLabel("halloween")}` : ""}`}
               </button>
             </div>
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {paying && made && (
+            <Checkout
+              product="halloween"
+              onClose={() => setPaying(false)}
+              onPaid={() => {
+                setPaid((p) => new Set(p).add(made.design.id));
+                setPaying(false);
+                download(made);
+              }}
+            />
+          )}
           <div className="relative mx-auto aspect-square w-full max-w-xl rounded-xl border border-zinc-200 bg-white dark:border-zinc-800">
             {made ? (
               <canvas ref={canvasRef} className="h-full w-full rounded-xl" aria-label={`${chosen.title} color-by-number page`} />
