@@ -81,6 +81,16 @@ const CARD_FACE_SHADED = 18;
 const OWN_FACE_COLORS_PER_SHARE = 60;
 /** ...up to this many. */
 const OWN_FACE_MAX_COLORS = 12;
+/** Dark photo colors (Lab L below this) are looked at for dark jeans... */
+const DARK_BLUE_MAX_L = 28;
+/** ...a near-black one (below this)... */
+const NEAR_BLACK_L = 10;
+/** ...on pixels that are faintly blue (Lab b below minus this)... */
+const NAVY_HINT = 1;
+/** ...goes to the piece's darkest clearly blue color (Lab b below minus this)... */
+const DARK_BLUE_MIN = 6;
+/** ...when the piece has at least this share as much of it. */
+const NAVY_MIN_SHARE = 0.15;
 /** Shades for white clothes on detailed pages. */
 const WHITE_SHADES = 3;
 /** A clothes pixel this light (Lab L)... */
@@ -573,6 +583,41 @@ export function separateFaces(
     }
     return best;
   };
+  // Dark jeans in shade round to the photo's black: for a piece of clothes that also has dark
+  // blue (navy denim), its pixels that came out black but are faintly blue in the photo take
+  // its darkest blue instead, so the jeans read as navy, not black.
+  const navyOf = new Map<number, number>(); // part * 256 + black base -> navy base
+  {
+    const sums = new Map<number, number[]>(); // part * 256 + base -> L, a, b, n
+    for (let p = 0; p < parts.length; p++) {
+      const k = parts[p];
+      if (!k || kindOf.get(k) !== PartKind.clothes || faceTone.has(k)) continue;
+      const base = indices[p];
+      if (group[base] !== 0 || baseLab[base * 3] >= DARK_BLUE_MAX_L) continue;
+      const id = k * 256 + base;
+      let sum = sums.get(id);
+      if (!sum) sums.set(id, (sum = [0, 0, 0, 0]));
+      const px = new Float32Array(3);
+      rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], px, 0);
+      for (let c = 0; c < 3; c++) sum[c] += px[c];
+      sum[3]++;
+    }
+    for (const [id, sum] of sums) {
+      const k = Math.floor(id / 256);
+      const base = id % 256;
+      const ownB = sum[2] / sum[3];
+      if (baseLab[base * 3] >= NEAR_BLACK_L || ownB > -NAVY_HINT || baseLab[base * 3 + 2] < -NAVY_HINT) continue;
+      // The darkest clearly blue photo color this piece also uses (enough of it).
+      let navy = -1;
+      for (const [id2, sum2] of sums) {
+        if (Math.floor(id2 / 256) !== k || sum2[3] < sum[3] * NAVY_MIN_SHARE) continue;
+        const b2 = id2 % 256;
+        if (baseLab[b2 * 3 + 2] > -DARK_BLUE_MIN) continue;
+        if (navy < 0 || baseLab[b2 * 3] < baseLab[navy * 3]) navy = b2;
+      }
+      if (navy >= 0) navyOf.set(id, navy);
+    }
+  }
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
     if (!k) continue;
@@ -586,8 +631,9 @@ export function separateFaces(
       indices[p] = whiteTone.get(k)!.ids[white];
       continue;
     }
-    const base = indices[p];
+    let base = indices[p];
     if (group[base] !== 0) continue; // already a part color
+    base = navyOf.get(k * 256 + base) ?? base;
     const id = k * 256 + base;
     let twin = twins.get(id);
     if (twin === undefined) {
