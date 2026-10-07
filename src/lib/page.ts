@@ -141,7 +141,7 @@ export function buildPage(
   maxColors = Infinity,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
-  type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string };
+  type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
   const entries: Entry[] = [];
   layers.forEach(({ result, scale, natural }, layer) => {
     const area = new Float64Array(result.palette.length);
@@ -153,7 +153,7 @@ export function buildPage(
       // Whose skin or clothes this is (a person's clothes are a part of their own).
       const face =
         kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
-      entries.push({ layer, index, rgb: kind || natural ? rgb : coolBoost(rgb, cool), area: area[index], kind, face });
+      entries.push({ layer, index, rgb: kind || natural ? rgb : coolBoost(rgb, cool), area: area[index], kind, face, natural });
     });
   });
 
@@ -192,6 +192,8 @@ export function buildPage(
     area: number;
     faces: boolean;
     hair: boolean;
+    /** Has colors of a layer drawn in the photo's own colors (faces shown). */
+    natural: boolean;
     /** The faces (and skin), and people's clothes, whose colors are in this cluster. */
     who: Set<string>;
   };
@@ -207,6 +209,7 @@ export function buildPage(
     area: e.area,
     faces: e.kind === FACE,
     hair: e.kind === HAIR,
+    natural: !!e.natural,
     who: new Set(e.face ? [e.face] : []),
   }));
   // A face and hair never share a number, however close their colors are. The skin (or
@@ -215,6 +218,9 @@ export function buildPage(
   // person's arms and legs are exact copies of their face's color, so they still join it.)
   const canMerge = (a: Cluster, b: Cluster, d2: number) => {
     if ((a.faces && b.hair) || (a.hair && b.faces)) return false;
+    // With people in the photo's own colors, faces' colors and everything else (hair right
+    // next to them) keep apart, so giving faces colors of their own doesn't change the hair.
+    if ((a.natural || b.natural) && a.faces !== b.faces) return false;
     if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;
     return true;
   };
@@ -244,6 +250,7 @@ export function buildPage(
       area,
       faces: a.faces || b.faces,
       hair: a.hair || b.hair,
+      natural: a.natural || b.natural,
       who: new Set([...a.who, ...b.who]),
     });
   }

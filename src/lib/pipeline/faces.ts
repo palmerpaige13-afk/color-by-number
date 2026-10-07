@@ -73,6 +73,8 @@ const HELD_MAX_TALL = 2;
 const HELD_LIKE_CLOTHES = 15;
 /** Colors each face gets from its own pixels when people are shown in the photo's colors. */
 const OWN_FACE_COLORS = 6;
+/** A face's color range runs from this share in from its darkest to as far from its lightest. */
+const FACE_RANGE_SKIP = 0.02;
 /** On the small cards (people otherwise simplified), a face keeps just this many of its own colors. */
 const CARD_FACE_COLORS = 4;
 /** A card face whose main color is this much darker (Lab L) than plain skin is in shade and lightened. */
@@ -674,11 +676,19 @@ function facePalette(
   px.forEach((p, i) => rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, i * 3));
   const order = px.map((_, i) => i).sort((a, b) => lab[a * 3] - lab[b * 3]);
   const centers = new Float32Array(n * 3);
+  // Starting colors at even steps of lightness from the face's darkest to its lightest parts
+  // (not even shares of its pixels), so small dark and light features (brows, pupils, teeth)
+  // get colors of their own rather than being outnumbered by plain skin.
+  const lo = lab[order[Math.floor(order.length * FACE_RANGE_SKIP)] * 3];
+  const hi = lab[order[Math.min(order.length - 1, Math.floor(order.length * (1 - FACE_RANGE_SKIP)))] * 3];
   for (let c = 0; c < n; c++) {
-    // The middle of each lightness band, averaged so it's a typical color of that band.
-    const from = Math.floor((c * order.length) / n);
-    const to = Math.max(from + 1, Math.floor(((c + 1) * order.length) / n));
-    for (let j = from; j < to; j++) for (let a = 0; a < 3; a++) centers[c * 3 + a] += lab[order[j] * 3 + a] / (to - from);
+    const target = lo + ((hi - lo) * (c + 0.5)) / n;
+    // The typical color of the pixels nearest that lightness.
+    let j = 0;
+    while (j < order.length - 1 && lab[order[j] * 3] < target) j++;
+    const from = Math.max(0, j - 20);
+    const to = Math.min(order.length, j + 20);
+    for (let q = from; q < to; q++) for (let a = 0; a < 3; a++) centers[c * 3 + a] += lab[order[q] * 3 + a] / (to - from);
   }
   const group = new Uint8Array(px.length);
   for (let round = 0; round < 8; round++) {
