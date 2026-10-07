@@ -19,6 +19,8 @@ export async function POST(request: Request) {
       ui_mode: "embedded_page",
       mode: "payment",
       redirect_on_completion: "never",
+      // Promo codes made in the Stripe dashboard (a 100%-off code makes the PDF free).
+      allow_promotion_codes: true,
       line_items: [
         {
           quantity: 1,
