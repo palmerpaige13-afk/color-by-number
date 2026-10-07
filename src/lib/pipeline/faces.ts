@@ -61,6 +61,8 @@ const PHOTO_FACE_SOFTEN = 0.4;
 const HAIR_DARK_SKIP = 0.4;
 /** Hair at least this blue (Lab b) is lit by the sky; gray hair or a white cap is barely blue. */
 const SKY_HAIR_BLUE = -5;
+/** Simplified faces: a face color whose Lab hue (degrees) is below this (pink turning purple) is turned to it. */
+const SKIN_MIN_HUE = 30;
 /** Cool hair more colorful than this (Lab chroma) is dyed and keeps its color. */
 const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
@@ -1710,6 +1712,20 @@ function faceShading(
     rgbToLab(b[0], b[1], b[2], boosted, 0);
     return labToRgb(boosted[0], lab[1], lab[2]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
   });
+  if (brighten) {
+    // Skin is never purple: a face in the shade under a blue sky is lit by the sky, and its
+    // color turns mauve, as if the background had run into it. Its tint turns back toward warm
+    // skin (same lightness and strength); skin that already looks like skin is left alone.
+    const skinLab = new Float32Array(3);
+    rgb = rgb.map((c) => {
+      rgbToLab(c[0], c[1], c[2], skinLab, 0);
+      const hue = (Math.atan2(skinLab[2], skinLab[1]) * 180) / Math.PI;
+      if (hue >= SKIN_MIN_HUE || hue < SKIN_MIN_HUE - 180) return c;
+      const chroma = Math.hypot(skinLab[1], skinLab[2]);
+      const t = (SKIN_MIN_HUE * Math.PI) / 180;
+      return labToRgb(skinLab[0], chroma * Math.cos(t), chroma * Math.sin(t)).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+    });
+  }
   if (!brighten) {
     // Hair is never a dull blue-gray of its own: that's the sky lighting the top of the head.
     // It keeps its lightness with a natural light-brown tint (gray hair, which is barely
