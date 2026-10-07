@@ -9,8 +9,8 @@ import { fitOnPaper, fontFraction } from "@/lib/print";
 
 /** The pages print on Letter paper. */
 const FIT = fitOnPaper(1, "letter");
-/** Numbers half again the usual smallest size: these pages are for little hands. */
-const FONT_FRAC = fontFraction(FIT.w) * 1.5;
+/** Numbers a quarter bigger than the usual smallest size, for younger colorers. */
+const FONT_FRAC = fontFraction(FIT.w) * 1.25;
 
 const previewUrl = (d: HalloweenDesign) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(previewSvg(d))}`;
 
@@ -70,7 +70,7 @@ export function HalloweenGallery() {
         </Link>
         <h1 className="mt-3 text-3xl font-bold tracking-tight">Halloween Color by Number 🎃</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Fifteen cute, easy pages with big shapes and big numbers. Pick one to see it, then print it for free.
+          Fifteen cute Halloween pages full of colors and shapes. Pick one to see it, then print it for free.
         </p>
       </header>
 

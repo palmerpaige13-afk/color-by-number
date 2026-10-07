@@ -3,7 +3,7 @@
 // color is a shape, numbered by its color. The page is the same kind as a photo's, so it's
 // drawn, printed and keyed the same way; only the ink details are added on top.
 
-import { drawPage, type Page } from "@/lib/page";
+import { drawPage, minLabelRadius, type Page } from "@/lib/page";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { rgbToLab } from "@/lib/pipeline/color";
@@ -80,6 +80,34 @@ function joinSpecks(map: Uint8Array, w: number, h: number) {
   }
 }
 
+/**
+ * Shapes too thin to hold a number (where a background line just grazes a shape) take the
+ * color of the neighbor they share the most border with. Paper and ink are left as they are.
+ */
+function joinThin(map: Uint8Array, w: number, h: number, minRadius: number) {
+  for (let round = 0; round < 3; round++) {
+    const { labels, count, color } = labelComponents(map, w, h);
+    const { radius } = labelPoints(labels, count, w, h, boundaryDistance(labels, w, h));
+    const thin = (l: number) => color[l] !== 0 && radius[l] < minRadius;
+    const votes = new Map<number, Map<number, number>>();
+    for (let p = 0; p < w * h; p++) {
+      const l = labels[p];
+      if (!thin(l)) continue;
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= w * h || map[q] === 0 || labels[q] === l) continue;
+        const v = votes.get(l) ?? new Map<number, number>();
+        v.set(map[q], (v.get(map[q]) ?? 0) + 1);
+        votes.set(l, v);
+      }
+    }
+    if (!votes.size) break;
+    const to = new Int16Array(count).fill(-1);
+    for (const [l, v] of votes) to[l] = [...v.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    for (let p = 0; p < w * h; p++) if (to[labels[p]] >= 0) map[p] = to[labels[p]];
+  }
+}
+
 /** The color-by-number page of `design`, with numbers at least `fontFrac` of the page width. */
 export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: number): Promise<HalloweenPage> {
   const colors = paints(design);
@@ -121,6 +149,8 @@ export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: numbe
   }
   joinSpecks(map, GRID, GRID);
   for (let p = 0; p < map.length; p++) if (map[p] === INK_ID) map[p] = 0;
+  const minRadius = minLabelRadius(GRID, 1, fontFrac);
+  joinThin(map, GRID, GRID, minRadius);
 
   const comps = labelComponents(map, GRID, GRID);
   const labels = Uint16Array.from(comps.labels);
@@ -159,7 +189,6 @@ export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: numbe
 
   let shapes = 0;
   let unnumbered = 0;
-  const minRadius = (GRID * fontFrac) / 1.1;
   for (let i = 0; i < comps.count; i++) {
     if (comps.color[i] === 0) continue;
     shapes++;
