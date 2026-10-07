@@ -41,6 +41,12 @@ const SHADOW_SOFTEN = 0.45;
 /** Rounding a traced face outline: passes, and how many points each side are averaged. */
 const OUTLINE_ROUND_PASSES = 2;
 const OUTLINE_ROUND_REACH = 2;
+/**
+ * smoothChins: how far around each pixel it looks (a share of the face's height), and how far
+ * below the chin it works (also a share of the face's height).
+ */
+const CHIN_SMOOTH_RADIUS = 0.09;
+const CHIN_SMOOTH_BELOW = 0.4;
 /** Most palette entries the parts may use; the one after is kept for a blank background. */
 const MAX_PART_PALETTE = 254;
 /** Photo-shaded faces: blur (share of the face's size), and the darkest and lightest shares of it. */
@@ -146,6 +152,15 @@ export interface FaceRegions {
   mask: Uint8Array;
   /** Per palette entry: what it colors (see PartKind). */
   kind: Uint8Array;
+  /** Shaded pages: each traced face's jaw, for smoothChins. */
+  jaws?: Jaw[];
+}
+
+/** A traced face (its part id and rounded outline) and the bare-skin pieces that are its neck and arms. */
+export interface Jaw {
+  face: number;
+  outline: [number, number][];
+  skin: number[];
 }
 
 /** What a palette color is used for: 0 the photo in general, then face, hair, clothes, pet. */
@@ -335,6 +350,9 @@ export function separateFaces(
   growFaces(parts, faces, smoothed, w, h, hairAt);
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
+  // Each traced face's chin (its outline's lowest point), on shaded pages: skin touching the
+  // face below it is a neck, a piece of its own, so the face keeps its chin line.
+  const chins = style === "shaded" ? faces.map((f) => (traced(f) ? Math.max(...f.outline!.map((pt) => pt[1])) : undefined)) : undefined;
   // What people hold comes before hair, skin and clothes, so flowers held against long hair or
   // a dress aren't painted as hair or dress.
   // Each held thing (each bouquet, each shoe) is a part of its own, so a red shoe and a pink
@@ -394,7 +412,9 @@ export function separateFaces(
     for (let p = 0; p < w * h; p++) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
   }
   const skinPieces =
-    bodySkin && faces.length ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250, clothesByFace) : new Map<number, number>();
+    bodySkin && faces.length
+      ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250, clothesByFace, chins)
+      : new Map<number, number>();
   for (const k of skinPieces.keys()) next = Math.max(next, k + 1);
   const kindOf = new Map<number, number>();
   for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
@@ -655,7 +675,97 @@ export function separateFaces(
     group: Uint8Array.from(group),
     mask,
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
+    jaws: chins
+      ? faces.flatMap((f, i) =>
+          traced(f) ? [{ face: i + 1, outline: roundOutline(f.outline!), skin: [...skinPieces].filter(([, k]) => k === i + 1).map(([piece]) => piece) }] : [],
+        )
+      : undefined,
   };
+}
+
+/**
+ * Smooths each traced face's chin: the line where face and neck meet keeps its place but loses
+ * its bumps and notches (shading in the photo makes it wobble). Each pixel of the lower face
+ * or its neck goes to whichever of the two has most of the pixels around it. Only face and its
+ * own neck trade pixels (they're the same skin color), so nothing else on the page moves.
+ * Works on the final color map.
+ */
+export function smoothChins(colorMap: Uint8Array, w: number, h: number, faces: FaceRegions): Uint8Array {
+  if (!faces.jaws?.length) return colorMap;
+  const out = Uint8Array.from(colorMap);
+  const { group, kind } = faces;
+  for (const { face, outline, skin } of faces.jaws) {
+    if (!skin.length) continue;
+    const ys = outline.map((pt) => pt[1]);
+    const xs = outline.map((pt) => pt[0]);
+    const top = Math.min(...ys), chin = Math.max(...ys);
+    const r = Math.max(2, Math.round((chin - top) * CHIN_SMOOTH_RADIUS));
+    // The lower half of the face and what's below it, to well past the chin.
+    const bx0 = Math.max(0, Math.floor(Math.min(...xs)) - 2 * r);
+    const bx1 = Math.min(w - 1, Math.ceil(Math.max(...xs)) + 2 * r);
+    const by0 = Math.max(0, Math.round((top + chin) / 2));
+    const by1 = Math.min(h - 1, Math.round(chin + (chin - top) * CHIN_SMOOTH_BELOW));
+    if (bx1 <= bx0 || by1 <= by0) continue;
+    const bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    const isFace = (c: number) => kind[c] === PartKind.face && group[c] === face;
+    const isNeck = (c: number) => kind[c] === PartKind.face && skin.includes(group[c]);
+    const faceAt = new Float32Array(bw * bh);
+    const either = new Float32Array(bw * bh);
+    const faceCount = new Map<number, number>();
+    const neckCount = new Map<number, number>();
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const c = colorMap[(by0 + y) * w + bx0 + x];
+        if (isFace(c)) {
+          faceAt[y * bw + x] = either[y * bw + x] = 1;
+          faceCount.set(c, (faceCount.get(c) ?? 0) + 1);
+        } else if (isNeck(c)) {
+          either[y * bw + x] = 1;
+          neckCount.set(c, (neckCount.get(c) ?? 0) + 1);
+        }
+      }
+    }
+    const main = (m: Map<number, number>) => [...m].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const faceColor = main(faceCount);
+    const neckColor = main(neckCount);
+    if (faceColor === undefined || neckColor === undefined) continue;
+    const faceNear = boxBlur(boxBlur(faceAt, bw, bh, r), bw, bh, r);
+    const near = boxBlur(boxBlur(either, bw, bh, r), bw, bh, r);
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const i = y * bw + x;
+        if (!either[i]) continue;
+        const p = (by0 + y) * w + bx0 + x;
+        const wantFace = faceNear[i] * 2 >= near[i];
+        if (wantFace && !faceAt[i]) out[p] = faceColor;
+        else if (!wantFace && faceAt[i]) out[p] = neckColor;
+      }
+    }
+  }
+  return out;
+}
+
+/** A box blur of radius `r` (sum over the square, edges clamped), rows then columns. */
+function boxBlur(src: Float32Array, w: number, h: number, r: number): Float32Array {
+  const tmp = new Float32Array(w * h);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    let sum = 0;
+    for (let x = -r; x <= r; x++) sum += src[y * w + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[y * w + x] = sum;
+      sum += src[y * w + Math.min(w - 1, x + r + 1)] - src[y * w + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let y = -r; y <= r; y++) sum += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = sum;
+      sum += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+    }
+  }
+  return out;
 }
 
 /**
@@ -1072,6 +1182,8 @@ function matchBodySkin(
   firstId: number,
   limit: number,
   clothes?: RegionMask,
+  /** Each face's chin (y), where known: skin below it is a neck, not the face. */
+  chins?: (number | undefined)[],
 ): Map<number, number> {
   const n = w * h;
   const inSkin = new Uint8Array(n);
@@ -1151,7 +1263,7 @@ function matchBodySkin(
     if (touched >= 0) {
       // Beside the face rather than below the chin: it is the face itself.
       owner.set(firstId + i, touched + 1);
-      if (pieceSum[i * 6 + 4] / m < bottom[touched]) inFace.add(i);
+      if (pieceSum[i * 6 + 4] / m < Math.min(bottom[touched], chins?.[touched] ?? Infinity)) inFace.add(i);
       continue;
     }
     let worn = -1;

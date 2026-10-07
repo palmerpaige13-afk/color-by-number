@@ -3,7 +3,7 @@
 import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
-import { PartKind, paintSkin, separateFaces } from "./faces";
+import { PartKind, paintSkin, separateFaces, smoothChins } from "./faces";
 import { labDist2 } from "./color";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
@@ -411,6 +411,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       group,
     );
   }
+
+  if (faces) colorMap = smoothChins(colorMap, w, h, faces);
 
   // Last resort: anything still too small for a readable number (a sliver of face, hair or
   // pet that had nothing of its own kind to join) merges into any neighbor, so every shape on
