@@ -99,6 +99,15 @@ const NAVY_HINT = 1;
 const DARK_BLUE_MIN = 6;
 /** ...when the piece has at least this share as much of it. */
 const NAVY_MIN_SHARE = 0.15;
+/**
+ * Clothes in the photo's shared colors: the pixels of a piece given one shared color take their
+ * own average color instead when that average is at least this far from it...
+ */
+const CLOTHES_OWN_MISMATCH = 10;
+/** ...with differences in tint (Lab a and b) counted this many times over. */
+const CLOTHES_OWN_TINT = 2;
+/** ...and they are at least this share of the piece. */
+const CLOTHES_OWN_MIN_SHARE = 0.03;
 /** Shades for white clothes on detailed pages. */
 const WHITE_SHADES = 3;
 /** A clothes pixel this light (Lab L)... */
@@ -640,6 +649,48 @@ export function separateFaces(
       if (navy >= 0) navyOf.set(id, navy);
     }
   }
+  // Clothes in the photo's shared colors take the nearest one, and a photo's colors are mostly
+  // its background: a black-and-brown print comes out in the bushes' greens, a white shirt in
+  // shade in the sky's blue. Where the pixels of a piece of clothes given one shared color are,
+  // on average, clearly a different color in the photo, they take that average instead.
+  const ownOf = new Map<number, number>(); // part * 256 + base -> palette index
+  if (clothesColors === 0) {
+    const sums = new Map<number, number[]>(); // part * 256 + base -> L, a, b, n
+    const size = new Map<number, number>(); // part -> pixels
+    const px = new Float32Array(3);
+    for (let p = 0; p < parts.length; p++) {
+      const k = parts[p];
+      if (!k || kindOf.get(k) !== PartKind.clothes || faceTone.has(k) || whiteTone.get(k)?.tone.has(p)) continue;
+      let base = indices[p];
+      if (group[base] !== 0) continue;
+      base = navyOf.get(k * 256 + base) ?? base;
+      const id = k * 256 + base;
+      let sum = sums.get(id);
+      if (!sum) sums.set(id, (sum = [0, 0, 0, 0]));
+      rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], px, 0);
+      for (let c = 0; c < 3; c++) sum[c] += px[c];
+      sum[3]++;
+      size.set(k, (size.get(k) ?? 0) + 1);
+    }
+    for (const [id, sum] of sums) {
+      const k = Math.floor(id / 256);
+      const base = id % 256;
+      if (sum[3] < size.get(k)! * CLOTHES_OWN_MIN_SHARE) continue;
+      const mean = Float32Array.from(sum.slice(0, 3).map((v) => v / sum[3]));
+      // Tint counts more than lightness: a gray print given an olive green reads as green.
+      const dL = mean[0] - baseLab[base * 3];
+      const dA = (mean[1] - baseLab[base * 3 + 1]) * CLOTHES_OWN_TINT;
+      const dB = (mean[2] - baseLab[base * 3 + 2]) * CLOTHES_OWN_TINT;
+      if (dL * dL + dA * dA + dB * dB < CLOTHES_OWN_MISMATCH * CLOTHES_OWN_MISMATCH) continue;
+      const rgb = labToRgb(mean[0], mean[1], mean[2]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
+      const lab = new Float32Array(3);
+      rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+      const own = add(rgb, lab, k);
+      if (own < 0) break;
+      partTwins.set(k, [...(partTwins.get(k) ?? []), own]);
+      ownOf.set(id, own);
+    }
+  }
   for (let p = 0; p < parts.length; p++) {
     const k = parts[p];
     if (!k) continue;
@@ -657,6 +708,11 @@ export function separateFaces(
     if (group[base] !== 0) continue; // already a part color
     base = navyOf.get(k * 256 + base) ?? base;
     const id = k * 256 + base;
+    const own = ownOf.get(id);
+    if (own !== undefined) {
+      indices[p] = own;
+      continue;
+    }
     let twin = twins.get(id);
     if (twin === undefined) {
       twin = add(basePalette[base], baseLab.subarray(base * 3, base * 3 + 3), k);
