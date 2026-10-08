@@ -654,15 +654,17 @@ export function separateFaces(
   // Clothes in the photo's shared colors take the nearest one, and a photo's colors are mostly
   // its background: a black-and-brown print comes out in the bushes' greens, a white shirt in
   // shade in the sky's blue. Where the pixels of a piece of clothes given one shared color are,
-  // on average, clearly a different color in the photo, they take that average instead.
+  // on average, clearly a different color in the photo, they take that average instead. Pets
+  // too, on every page (a brown cow in the shade comes out in the sky's mauve).
   const ownOf = new Map<number, number>(); // part * 256 + base -> palette index
-  if (clothesColors === 0) {
+  const ownTint = (k: number) => (kindOf.get(k) === PartKind.clothes && clothesColors === 0) || kindOf.get(k) === PartKind.pet;
+  {
     const sums = new Map<number, number[]>(); // part * 256 + base -> L, a, b, n
     const size = new Map<number, number>(); // part -> pixels
     const px = new Float32Array(3);
     for (let p = 0; p < parts.length; p++) {
       const k = parts[p];
-      if (!k || kindOf.get(k) !== PartKind.clothes || faceTone.has(k) || whiteTone.get(k)?.tone.has(p)) continue;
+      if (!k || !ownTint(k) || faceTone.has(k) || whiteTone.get(k)?.tone.has(p)) continue;
       let base = indices[p];
       if (group[base] !== 0) continue;
       base = navyOf.get(k * 256 + base) ?? base;
