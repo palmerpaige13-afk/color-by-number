@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 const UPDATED = "October 7, 2026";
 /** How long after buying someone can ask for a fix or a refund. */
-const REFUND_DAYS = 14;
+const REFUND_DAYS = 7;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
