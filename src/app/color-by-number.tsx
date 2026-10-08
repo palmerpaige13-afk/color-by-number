@@ -516,7 +516,10 @@ export default function ColorByNumber() {
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
       <header className="print:hidden">
-        <h1 className="text-3xl font-bold tracking-tight">Color by Number</h1>
+        <Link href="/" className="text-sm font-semibold text-violet-700 hover:underline dark:text-violet-300">
+          ← All pages
+        </Link>
+        <h1 className="mt-3 text-3xl font-bold tracking-tight">Color by Number</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
           Upload a photo, pick a print size, and get a printable color-by-number page.
         </p>
