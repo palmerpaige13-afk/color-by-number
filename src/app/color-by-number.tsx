@@ -7,6 +7,7 @@ import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { priceLabel } from "@/lib/price";
+import { CONTACT_EMAIL } from "@/lib/contact";
 import { type Difficulty } from "@/lib/pipeline";
 import { drawPage, type Page } from "@/lib/page";
 import { pagePdf, saveFile } from "@/lib/page-pdf";
@@ -47,7 +48,7 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
 /** Most zoom while fixing. */
 const MAX_ZOOM = 5;
 /** Where people can send a photo that came out badly, to have it fixed by hand. */
-const FIX_BY_HAND_EMAIL = "chandlercreative2025@gmail.com";
+const FIX_BY_HAND_EMAIL = CONTACT_EMAIL;
 /** Shortest drawn line that counts as a line (not a tap), in screen pixels. */
 const MIN_LINE_PX = 8;
 /** Width the photo is drawn at when shown in place of the page (pixels). */

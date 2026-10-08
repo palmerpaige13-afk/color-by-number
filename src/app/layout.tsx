@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { VisitCounter } from "./visit-counter";
+import { CONTACT_EMAIL } from "@/lib/contact";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,7 +33,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           Your photos stay on your device. ·{" "}
           <Link href="/privacy" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
             Privacy
-          </Link>
+          </Link>{" "}
+          ·{" "}
+          <Link href="/terms" className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
+            Terms &amp; Refunds
+          </Link>{" "}
+          ·{" "}
+          <a href={`mailto:${CONTACT_EMAIL}`} className="font-semibold text-violet-700 hover:underline dark:text-violet-300">
+            Contact
+          </a>
         </footer>
       </body>
     </html>
