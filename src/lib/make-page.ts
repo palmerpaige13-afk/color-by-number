@@ -92,7 +92,9 @@ const COLORFUL_MIN_CHROMA = 26;
 /** ...picked from this many colors before the key is cut down to MURAL_MAX_COLORS... */
 const COLORFUL_PALETTE = 40;
 /** ...in patches about this share of a sheet's width... */
-const COLORFUL_PATCH = 0.4;
+const COLORFUL_PATCH = 0.28;
+/** ...people's clothes drift this much as far (faces and skin not at all). */
+const COLORFUL_PEOPLE = 0.6;
 /** ...and only where the picture is smooth: less local variation than this (0-255 lightness). */
 const COLORFUL_SMOOTH_BELOW = 18;
 
@@ -145,8 +147,18 @@ function localVariation(data: Uint8ClampedArray, w: number, h: number, r: number
   return mean.map((m, p) => Math.sqrt(Math.max(0, sq[p] - m * m)));
 }
 
-/** See COLORFUL_HUE. `keep(x, y)` marks pixels left as they are (people). Returns new pixels. */
-function colorful(data: Uint8ClampedArray, w: number, h: number, patchPx: number, keep?: (x: number, y: number) => boolean): Uint8ClampedArray {
+/**
+ * See COLORFUL_HUE. `keep(x, y)` marks pixels left as they are (faces, skin); `strength` (0-1)
+ * how far colors drift. Returns new pixels.
+ */
+function colorful(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  patchPx: number,
+  keep?: (x: number, y: number) => boolean,
+  strength = 1,
+): Uint8ClampedArray {
   const hue = noiseField(w, h, patchPx, 17);
   const light = noiseField(w, h, patchPx * 0.8, 91);
   const variation = localVariation(data, w, h, Math.max(2, Math.round(patchPx / 8)));
@@ -154,7 +166,9 @@ function colorful(data: Uint8ClampedArray, w: number, h: number, patchPx: number
   const lab = new Float32Array(3);
   for (let p = 0; p < w * h; p++) {
     if (keep?.(p % w, Math.floor(p / w))) continue;
-    const k = Math.max(0, Math.min(1, 1.5 * (1 - variation[p] / COLORFUL_SMOOTH_BELOW)));
+    // Clothes (strength below 1) drift everywhere, folds and all; elsewhere only plain areas do.
+    const smooth = Math.max(0, Math.min(1, 1.5 * (1 - variation[p] / COLORFUL_SMOOTH_BELOW)));
+    const k = strength < 1 ? strength : smooth;
     if (k <= 0) continue;
     rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
     let [L, a, b] = lab;
@@ -585,11 +599,19 @@ export async function makePage(
     pageWidth = frame.scene.width * k;
   }
   /** A mural's working image with its plain areas in extra colors (if asked), people left alone. */
-  const colored = (img: { width: number; height: number; data: Uint8ClampedArray }, people: SubjectBox[]) => {
+  // Faces and bare skin keep their own colors; clothes (a white robe) get gentler extra colors.
+  const colored = (img: { width: number; height: number; data: Uint8ClampedArray }, faceBoxes: SubjectBox[], skin?: RegionMask, strength = 1) => {
     if (sheets <= 1 || !extraColors) return img.data;
     const sheetPx = img.width / (fit.mural ? fit.mural.cols : 1);
-    return colorful(img.data, img.width, img.height, sheetPx * COLORFUL_PATCH, (x, y) =>
-      people.some((b) => x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height),
+    const inSkin = (x: number, y: number) =>
+      !!skin && x >= skin.x && y >= skin.y && x < skin.x + skin.width && y < skin.y + skin.height && !!skin.data[(y - skin.y) * skin.width + x - skin.x];
+    return colorful(
+      img.data,
+      img.width,
+      img.height,
+      sheetPx * COLORFUL_PATCH,
+      (x, y) => inSkin(x, y) || faceBoxes.some((b) => x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height),
+      strength,
     );
   };
   const budget = (share: number) => ({
@@ -601,8 +623,8 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(twoLayers ? main.data : colored(main, subjects.filter((s) => s.kind !== "animal")), main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
-      : { ...main, data: twoLayers ? main.data : colored(main, subjects.filter((s) => s.kind !== "animal")), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
+      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
+      : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,
