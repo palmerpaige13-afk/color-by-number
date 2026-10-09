@@ -62,6 +62,18 @@ export type DrawSheet = (canvas: HTMLCanvasElement, page: Page, view: "outline" 
 
 /** The page rendered at print resolution for `fit`, as a three-sheet PDF. */
 export async function pagePdf(page: Page, fit: Fit, draw: DrawSheet = drawPage): Promise<Blob> {
+  return makePdf(await pageSheets(page, fit, draw));
+}
+
+/** Several pages in one PDF, each as its three sheets (a bundle of pages bought together). */
+export async function pagesPdf(pages: { page: Page; fit: Fit; draw?: DrawSheet }[]): Promise<Blob> {
+  const sheets: PdfPage[] = [];
+  for (const { page, fit, draw } of pages) sheets.push(...(await pageSheets(page, fit, draw)));
+  return makePdf(sheets);
+}
+
+/** A page's three printed sheets: the page to color, its color key, and the finished picture. */
+async function pageSheets(page: Page, fit: Fit, draw: DrawSheet = drawPage): Promise<PdfPage[]> {
   const longIn = Math.max(fit.w, fit.h);
   const dpi = Math.min(PRINT_DPI, MAX_PRINT_PX / longIn, Math.sqrt(MAX_PRINT_AREA / (fit.w * fit.h)));
   // One sheet at a time, each let go once it's in the PDF, so a phone never holds more
@@ -79,12 +91,11 @@ export async function pagePdf(page: Page, fit: Fit, draw: DrawSheet = drawPage):
   const painted = document.createElement("canvas");
   await draw(painted, page, "colored", (fit.w * dpi) / page.width);
   const finished = await sheetJpeg(painted, 0.9);
-  const pages: PdfPage[] = [
+  return [
     { ...outline, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h, cut: fit.cut },
     { ...key, paperW: fit.paperW, paperH: fit.paperH, x: 0, y: 0, w: fit.paperW, h: fit.paperH },
     { ...finished, paperW: fit.paperW, paperH: fit.paperH, x: fit.x, y: fit.y, w: fit.w, h: fit.h, cut: fit.cut },
   ];
-  return makePdf(pages);
 }
 
 /** Saves `blob` as a file named `name`. */

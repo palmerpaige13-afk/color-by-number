@@ -5,8 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { DESIGNS, type HalloweenDesign } from "@/lib/halloween/designs";
 import { drawHalloweenPage, makeHalloweenPage, previewSvg, type HalloweenPage } from "@/lib/halloween/make";
 import { Checkout, paymentsOn } from "@/app/checkout";
-import { pagePdf, saveFile } from "@/lib/page-pdf";
-import { priceLabel } from "@/lib/price";
+import { pagePdf, pagesPdf, saveFile } from "@/lib/page-pdf";
+import { PRODUCTS, priceLabel } from "@/lib/price";
 import { fitOnPaper, fontFraction } from "@/lib/print";
 
 /** The pages print on Letter paper. */
@@ -39,6 +39,9 @@ export function HalloweenGallery() {
   /** Pages paid for this visit (each download is paid for once), and the checkout box is open. */
   const [paid, setPaid] = useState<Set<string>>(new Set());
   const [paying, setPaying] = useState(false);
+  /** The checkout box for all the pages at once is open. */
+  const [payingAll, setPayingAll] = useState(false);
+  const [busyAll, setBusyAll] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pageRef = useRef<HTMLElement>(null);
   /** Gallery pictures shown with numbers instead of colored in, and their drawings. */
@@ -113,6 +116,26 @@ export function HalloweenGallery() {
     }
   }
 
+  /** Every page in one PDF (the bundle). */
+  async function downloadAll() {
+    setBusyAll(true);
+    setError(null);
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const all = [];
+      for (const d of DESIGNS) all.push(await pageFor(d));
+      const pdf = await pagesPdf(all.map((hp) => ({ page: hp.page, fit: FIT, draw: (c, _page, view, s) => drawHalloweenPage(c, hp, view, s) })));
+      saveFile(pdf, "halloween-all-pages.pdf");
+    } catch {
+      setError("Sorry, something went wrong making the PDF.");
+    } finally {
+      setBusyAll(false);
+    }
+  }
+  const allPaid = DESIGNS.every((d) => paid.has(d.id));
+  /** What all the pages would cost one at a time, as people see it. */
+  const separately = `$${(DESIGNS.length * PRODUCTS.halloween.cents) / 100}`;
+
   /** This page has to be paid for before it downloads. */
   const mustPay = paymentsOn && !!chosen && !paid.has(chosen.id);
 
@@ -127,6 +150,34 @@ export function HalloweenGallery() {
           Fifteen cute Halloween pages full of colors and shapes. Pick one to see it, then download it to print on Letter paper.
         </p>
       </header>
+
+      <section className="flex flex-col gap-3 rounded-2xl bg-orange-100 p-4 sm:flex-row sm:items-center dark:bg-orange-950">
+        <div className="flex-1">
+          <p className="font-bold text-orange-950 dark:text-orange-100">🎃 Get all {DESIGNS.length} pages for {priceLabel("halloween-all")}</p>
+          <p className="text-sm text-orange-900 dark:text-orange-200">
+            Every design in one PDF, each with its color key: {separately} if bought one by one.
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={busyAll}
+          onClick={() => (paymentsOn && !allPaid ? setPayingAll(true) : downloadAll())}
+          className="shrink-0 rounded-full bg-orange-500 px-5 py-2 font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-60"
+        >
+          {busyAll ? "Preparing all the pages…" : paymentsOn && !allPaid ? `Buy all ${DESIGNS.length}: ${priceLabel("halloween-all")}` : `Download all ${DESIGNS.length}`}
+        </button>
+      </section>
+      {payingAll && (
+        <Checkout
+          product="halloween-all"
+          onClose={() => setPayingAll(false)}
+          onPaid={() => {
+            setPaid(new Set(DESIGNS.map((d) => d.id)));
+            setPayingAll(false);
+            downloadAll();
+          }}
+        />
+      )}
 
       <div className="-mb-4 flex items-center justify-end gap-2">
         <span className="text-sm text-zinc-500">Show all:</span>
