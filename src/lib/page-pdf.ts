@@ -118,39 +118,48 @@ export const sheetName = (row: number, col: number) => `${String.fromCharCode(65
 /**
  * A mural's PDF: a map of how the sheets go together (the finished picture with the grid on
  * it), the shared color key, then every sheet on its own Letter page, labeled, with a small
- * map of where it goes and a dashed line to trim along.
+ * map of where it goes and a dashed line to trim along. A mystery mural's map is a blank grid,
+ * and the finished picture comes last, as the reveal.
  */
-export async function muralPdf(page: Page, fit: Fit): Promise<Blob> {
+export async function muralPdf(page: Page, fit: Fit, { mystery = false }: { mystery?: boolean } = {}): Promise<Blob> {
   const m = fit.mural!;
   const u = page.width / fit.w; // page units per inch
   const pages: PdfPage[] = [];
   const letter = (landscape: boolean) => (landscape ? { w: 11, h: 8.5 } : { w: 8.5, h: 11 });
 
-  // 1. How it goes together.
-  {
+  /**
+   * A map of the whole mural on one sheet, with the grid and each sheet's name: with the
+   * colored picture, or (a mystery mural) as a blank grid that gives nothing away.
+   */
+  const mapSheet = async (title: string, note: string, showPicture: boolean) => {
     const paper = letter(fit.w > fit.h);
     const dpi = 150;
     const c = document.createElement("canvas");
     c.width = Math.round(paper.w * dpi);
     c.height = Math.round(paper.h * dpi);
-    const ctx = c.getContext("2d")!;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.fillStyle = "#222";
     ctx.textBaseline = "top";
     ctx.font = `bold ${Math.round(0.3 * dpi)}px Arial, sans-serif`;
-    ctx.fillText(`Your mural: ${m.cols * m.rows} sheets`, 0.5 * dpi, 0.45 * dpi);
+    ctx.fillText(title, 0.5 * dpi, 0.45 * dpi);
     ctx.font = `${Math.round(0.15 * dpi)}px Arial, sans-serif`;
-    ctx.fillText("Color each sheet with the color key, trim along the dashed lines, and put them together like this.", 0.5 * dpi, 0.85 * dpi);
+    ctx.fillText(note, 0.5 * dpi, 0.85 * dpi);
     const top = 1.25 * dpi;
     const s = Math.min((c.width - dpi) / fit.w, (c.height - top - 0.5 * dpi) / fit.h); // px per inch
-    const pic = document.createElement("canvas");
-    pic.getContext("2d", { willReadFrequently: true });
-    await drawPage(pic, page, "colored", (s * fit.w) / page.width);
     const px = (c.width - fit.w * s) / 2;
-    ctx.drawImage(pic, px, top);
-    pic.width = pic.height = 0;
-    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    if (showPicture) {
+      const pic = document.createElement("canvas");
+      pic.getContext("2d", { willReadFrequently: true });
+      await drawPage(pic, page, "colored", (s * fit.w) / page.width);
+      ctx.drawImage(pic, px, top);
+      pic.width = pic.height = 0;
+    } else {
+      ctx.fillStyle = "#f4f4f5";
+      ctx.fillRect(px, top, fit.w * s, fit.h * s);
+    }
+    ctx.strokeStyle = showPicture ? "rgba(255,255,255,0.95)" : "#888";
     ctx.lineWidth = Math.max(2, 0.02 * dpi);
     for (let i = 0; i <= m.cols; i++) {
       ctx.beginPath(); ctx.moveTo(px + i * m.cellW * s, top); ctx.lineTo(px + i * m.cellW * s, top + fit.h * s); ctx.stroke();
@@ -165,13 +174,27 @@ export async function muralPdf(page: Page, fit: Fit): Promise<Blob> {
     for (let r = 0; r < m.rows; r++) {
       for (let col = 0; col < m.cols; col++) {
         const cx = px + (col + 0.5) * m.cellW * s, cy = top + (r + 0.5) * m.cellH * s;
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.beginPath(); ctx.arc(cx, cy, label * 0.95, 0, Math.PI * 2); ctx.fill();
+        if (showPicture) {
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.beginPath(); ctx.arc(cx, cy, label * 0.95, 0, Math.PI * 2); ctx.fill();
+        }
         ctx.fillStyle = "#222";
         ctx.fillText(sheetName(r, col), cx, cy);
       }
     }
     pages.push({ ...(await sheetJpegOf(c, 0.9)), paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
+  };
+
+  // 1. How it goes together (in a mystery mural, without showing what it is).
+  const sheetCount = m.cols * m.rows;
+  if (mystery) {
+    await mapSheet(
+      `Your mystery mural: ${sheetCount} sheets`,
+      "Color each sheet with the color key, trim along the dashed lines, and put them together like this. It's a surprise!",
+      false,
+    );
+  } else {
+    await mapSheet(`Your mural: ${sheetCount} sheets`, "Color each sheet with the color key, trim along the dashed lines, and put them together like this.", true);
   }
 
   // 2. The color key, shared by every sheet.
@@ -227,6 +250,8 @@ export async function muralPdf(page: Page, fit: Fit): Promise<Blob> {
       pages.push({ ...(await sheetJpegOf(c, MURAL_JPEG)), paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
     }
   }
+  // The answer, last, so it can be left unprinted or kept hidden until the mural is done.
+  if (mystery) await mapSheet("The big reveal: don't peek!", "What your mural turns into, once every sheet is colored and put together.", true);
   return makePdf(pages);
 }
 

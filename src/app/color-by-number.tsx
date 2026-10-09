@@ -71,6 +71,8 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** A mystery mural: the PDF doesn't show the picture until its last page. */
+  const [mystery, setMystery] = useState(false);
   const [printSize, setPrintSize] = useState<PrintSizeId>(startMural ? "mural-4" : "letter");
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
@@ -507,7 +509,7 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(fit.mural ? await muralPdf(result, fit) : await pagePdf(result, fit), `color-by-number-${printSize}.pdf`);
+      saveFile(fit.mural ? await muralPdf(result, fit, { mystery }) : await pagePdf(result, fit), `color-by-number-${printSize}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF. Try a smaller print size.");
     } finally {
@@ -604,9 +606,10 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
               </button>
             ))}
           </div>
-          <label className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">Or make a mural:</span>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span id="mural-label" className="text-sm font-medium">Or make a mural:</span>
             <select
+              aria-labelledby="mural-label"
               value={isMural(printSize) ? printSize : ""}
               onChange={(e) => {
                 setPrintSize((e.target.value || "letter") as PrintSizeId);
@@ -625,11 +628,17 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
                 </option>
               ))}
             </select>
+            {isMural(printSize) && (
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={mystery} onChange={(e) => setMystery(e.target.checked)} className="h-4 w-4 accent-violet-600" />
+                Mystery mural: keep the picture a surprise until it&apos;s put together
+              </label>
+            )}
             <span className="w-full text-sm text-zinc-500">
               One picture split across several Letter sheets: everyone colors a sheet, then you put them together into a big
               picture. Great for classes, parties and family get-togethers.
             </span>
-          </label>
+          </div>
           <p className="mt-2 text-sm text-zinc-500">
             Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
             regular paper with a dashed line to cut along; the picture fills the card.
@@ -1022,7 +1031,9 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
               Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${priceLabel(product)}` : ""}
             </button>
             <span className="text-sm text-zinc-500">
-              {fit?.mural
+              {fit?.mural && mystery
+                ? "A map of where each sheet goes, the color key, every sheet to color, and the big reveal on the last page."
+                : fit?.mural
                 ? "A map of how the sheets go together, the color key, and every sheet to color."
                 : "The page to color, the color key, and the finished picture."}
             </span>
