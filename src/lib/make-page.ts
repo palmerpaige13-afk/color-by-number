@@ -75,6 +75,10 @@ const MURAL_SHAPES_PER_SHEET = 170;
 const MURAL_MAX_SHAPES = 4500;
 /** A mural's working raster grows with its size, up to this (long side, px). */
 const MURAL_MAX_WORKING = 2600;
+/** A mural's colors, at most. */
+const MURAL_MAX_COLORS = 30;
+/** Detail kept everywhere on a mural (0-1: how much plain areas count as important). */
+const MURAL_MIN_IMPORTANCE = 0.6;
 
 /** Expert pages work on a bigger raster, so fur, feathers and scales survive as shapes. */
 const EXPERT_WORKING_SIZE = 1500;
@@ -391,6 +395,11 @@ export async function makePage(
   const sheets = isMural(printSize) ? MURALS.find((m) => m.id === printSize)!.sheets : 1;
   const base = DIFFICULTY_PARAMS[difficulty];
   const params = sheets > 1 ? { ...base, maxShapes: Math.min(MURAL_MAX_SHAPES, MURAL_SHAPES_PER_SHEET * sheets) } : base;
+  // A mural's colors are shared by everyone coloring it: few enough for one box of markers.
+  const maxColors = sheets > 1 ? MURAL_MAX_COLORS : Infinity;
+  // Every sheet should have something to color: a mural keeps detail everywhere (the sky's
+  // shades of blue as shapes of their own), not just on the people.
+  const even = (importance: Float32Array) => (sheets > 1 ? importance.map((v) => Math.max(v, MURAL_MIN_IMPORTANCE)) : importance);
   const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 ? Math.min(MURAL_MAX_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets))) : WORKING_SIZE;
 
   // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
@@ -483,8 +492,8 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(main.data, main.width, faces, bodySkin), importance: map.importance, faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
-      : { ...main, importance: map.importance, faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
+      ? { ...main, data: warmSkin(main.data, main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
+      : { ...main, importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,
@@ -511,7 +520,7 @@ export async function makePage(
     const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
     onStep?.("Building the background…");
     const sceneResult = await runPipelineAsync(
-      { ...scene, importance: structureMap(scene.data, scene.width, scene.height), cutout: keep },
+      { ...scene, importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
       { ...params, ...colorParams, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
     );
     const layers: Layer[] = [
@@ -525,7 +534,7 @@ export async function makePage(
         natural: photoColors,
       },
     ];
-    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty]);
+    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors);
   } else {
     page = buildPage(
       main.width * SCALE,
@@ -534,6 +543,7 @@ export async function makePage(
       fontFrac,
       KEY_DISTINCT[difficulty],
       COOL_BOOST[difficulty],
+      maxColors,
     );
   }
   return { page, fit, shows: frame?.scene ?? photoRect, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };
