@@ -11,7 +11,8 @@ import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineR
 
 export * from "./types";
 
-export type Difficulty = "easy" | "medium" | "hard";
+/** Expert is for ready-made detailed pages (animals for grown-ups), not picked by print size. */
+export type Difficulty = "easy" | "medium" | "hard" | "expert";
 
 /** Smallest label radius (working px) whose number is still legible when drawn at 1.5x. */
 const MIN_PRINT_RADIUS = 4.3;
@@ -102,6 +103,16 @@ export const DIFFICULTY_PARAMS: Record<Difficulty, PipelineParams> = {
     smoothPasses: 1,
     boundaryPasses: 1,
     maxShapes: 280,
+    oneSkinTone: true,
+  }),
+  // Fur, feathers and scales kept: little smoothing, many small shapes, more colors.
+  expert: tuned({
+    paletteSize: 32,
+    minArea: 14,
+    minRadius: 2,
+    smoothPasses: 0,
+    boundaryPasses: 1,
+    maxShapes: 1200,
     oneSkinTone: true,
   }),
 };

@@ -14,11 +14,16 @@ import { pagePdf, saveFile } from "@/lib/page-pdf";
 import { loadPhoto, makePage, type Photo } from "@/lib/make-page";
 import { PRINT_SIZES, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
 
+/** While testing locally, ?level=expert tries the Expert level (no print size picks it). */
+const testLevel = (): Difficulty | null =>
+  window.location.hostname === "localhost" && new URLSearchParams(window.location.search).get("level") === "expert" ? "expert" : null;
+
 /** How each level of detail is described (the print size picks the level). */
 const LEVEL_NAMES: Record<Difficulty, string> = {
   easy: "Simple: big shapes, few colors",
   medium: "Medium: more shapes and detail",
   hard: "Detailed: lots of small shapes",
+  expert: "Expert: hundreds of tiny shapes",
 };
 
 /** The optional nudge to a size's detail. */
@@ -474,7 +479,7 @@ export default function ColorByNumber() {
     }
     const { page, fit: pageFit, shows, people, faces } = await makePage(
       photo,
-      { printSize, difficulty, faces: withFaces, zoomOut: wide },
+      { printSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide },
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);

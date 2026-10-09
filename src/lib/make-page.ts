@@ -35,22 +35,24 @@ const SKIN_DARK = 35;
 const OWN_FACE_MIN_SHARE = 0.006;
 
 /** Shapes inside faces (when shown) may be this share of a level's smallest shape. */
-const FACE_DETAIL: Record<Difficulty, number> = { easy: 0.6, medium: 0.4, hard: 0.3 };
+const FACE_DETAIL: Record<Difficulty, number> = { easy: 0.6, medium: 0.4, hard: 0.3, expert: 0.3 };
 
 /** Colors per layer when faces are shown (people in the photo's own colors). */
-const PHOTO_COLORS_PALETTE: Record<Difficulty, number> = { easy: 16, medium: 24, hard: 40 };
+const PHOTO_COLORS_PALETTE: Record<Difficulty, number> = { easy: 16, medium: 24, hard: 40, expert: 40 };
 
 /**
  * How different two paint colors must be (ΔE) to get their own numbers. Easy keeps colors
  * clearly apart; Hard allows nearby shades, so water, sky and grass get several.
  */
-const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6 };
+/** Expert pages print their numbers this much smaller (as adult kits do), so shapes can be smaller. */
+const EXPERT_FONT = 0.75;
+const KEY_DISTINCT: Record<Difficulty, number> = { easy: 10, medium: 8, hard: 6, expert: 4 };
 /**
  * How much the background's muted tones are nudged toward soft greens and blues (0–1), so
  * harder pages get some subtle green and blue shapes among the tans instead of everything
  * being close in color.
  */
-const COOL_BOOST: Record<Difficulty, number> = { easy: 0, medium: 0.4, hard: 0.8 };
+const COOL_BOOST: Record<Difficulty, number> = { easy: 0, medium: 0.4, hard: 0.8, expert: 0.3 };
 /** Separate bits of the cut-out smaller than this share of the picture are dropped. */
 const MIN_CUTOUT_PIECE = 0.002;
 /** Holes inside the people smaller than this share of the picture are filled in. */
@@ -68,9 +70,12 @@ const PET_SHARE = 0.05;
 /** With background, the scene is framed so the people and pets span this share of it. */
 const SUBJECT_FILL = 0.8;
 
-/** Downscales `bitmap` to the working raster. */
-function toWorkingImage(bitmap: ImageBitmap) {
-  const s = Math.min(1, WORKING_SIZE / Math.max(bitmap.width, bitmap.height));
+/** Expert pages work on a bigger raster, so fur, feathers and scales survive as shapes. */
+const EXPERT_WORKING_SIZE = 1500;
+
+/** Downscales `bitmap` to the working raster (`size` px on its long side). */
+function toWorkingImage(bitmap: ImageBitmap, size = WORKING_SIZE) {
+  const s = Math.min(1, size / Math.max(bitmap.width, bitmap.height));
   const width = Math.max(1, Math.round(bitmap.width * s));
   const height = Math.max(1, Math.round(bitmap.height * s));
   const canvas = document.createElement("canvas");
@@ -369,7 +374,10 @@ export async function makePage(
   { onStep, onNote }: { onStep?: (step: string) => void; onNote?: (note: string) => void } = {},
 ): Promise<MadePage> {
   const { full } = photo;
-  let frame = photo.frame;
+  // Expert pages (ready-made animal art) are one detailed scene: no people or pets are looked
+  // for, so nothing is cut out and simplified the way people are.
+  const plain = difficulty === "expert";
+  let frame = plain ? null : photo.frame;
   // Zoomed out: the whole photo around the people, not framed closer on them.
   if (frame && zoomOut) frame = { ...frame, scene: { x: 0, y: 0, width: full.width, height: full.height } };
   const params = DIFFICULTY_PARAMS[difficulty];
@@ -393,13 +401,13 @@ export async function makePage(
 
   // The main layer: the people (and pets) on their own when there are some, else the photo.
   const mainRect: Rect = frame?.subjects ?? photoRect;
-  const foundKey = `${!!frame} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
+  const foundKey = `${plain ? "plain" : !!frame} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
   let found = photo.found.get(foundKey);
   if (!found) {
     const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
-    const image = toWorkingImage(mainBitmap);
+    const image = toWorkingImage(mainBitmap, plain ? EXPERT_WORKING_SIZE : WORKING_SIZE);
     found = { main: image, subjects: [], animals: [], note: "" };
-    try {
+    if (!plain) try {
       Object.assign(
         found,
         await detectSubjects(mainBitmap, image.width, image.height, {
@@ -444,7 +452,7 @@ export async function makePage(
   // a fixed share of the picture's width, from how wide it will be printed.
   const pageRect = twoLayers && frame ? frame.scene : { width: main.width, height: main.height };
   const fit = fitOnPaper(pageRect.width / pageRect.height, printSize);
-  const fontFrac = fontFraction(fit.w);
+  const fontFrac = fontFraction(fit.w) * (difficulty === "expert" ? EXPERT_FONT : 1);
 
   // How big each layer is drawn decides how small its shapes can be and stay readable.
   let k = 0; // page px per photo px (two layers)
