@@ -10,9 +10,9 @@ import { priceLabel } from "@/lib/price";
 import { CONTACT_EMAIL } from "@/lib/contact";
 import { type Difficulty } from "@/lib/pipeline";
 import { drawPage, type Page } from "@/lib/page";
-import { pagePdf, saveFile } from "@/lib/page-pdf";
+import { muralPdf, pagePdf, saveFile, sheetName } from "@/lib/page-pdf";
 import { loadPhoto, makePage, type Photo } from "@/lib/make-page";
-import { PRINT_SIZES, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
+import { MURALS, PRINT_SIZES, isMural, levelFor, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** While testing locally, ?level=expert tries the Expert level (no print size picks it). */
 const testLevel = (): Difficulty | null =>
@@ -64,14 +64,14 @@ const MAX_LOG = 300;
 const MAX_UNDO = 30;
 
 
-export default function ColorByNumber() {
+export default function ColorByNumber({ startMural = false }: { startMural?: boolean }) {
   const [file, setFile] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [result, setResult] = useState<Page | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [printSize, setPrintSize] = useState<PrintSizeId>("letter");
+  const [printSize, setPrintSize] = useState<PrintSizeId>(startMural ? "mural-4" : "letter");
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
   const difficulty = levelFor(printSize, detailShift);
@@ -507,7 +507,7 @@ export default function ColorByNumber() {
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(await pagePdf(result, fit), `color-by-number-${printSize}.pdf`);
+      saveFile(fit.mural ? await muralPdf(result, fit) : await pagePdf(result, fit), `color-by-number-${printSize}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF. Try a smaller print size.");
     } finally {
@@ -516,7 +516,9 @@ export default function ColorByNumber() {
   }
 
   const key = result?.key ?? [];
-  const sizeLabel = PRINT_SIZES.find((p) => p.id === printSize)?.label;
+  const sizeLabel = PRINT_SIZES.find((p) => p.id === printSize)?.label ?? `mural, ${MURALS.find((m) => m.id === printSize)?.label}`;
+  /** What the download costs: a mural is priced by its number of sheets. */
+  const product = isMural(printSize) ? printSize : "photo";
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
@@ -602,6 +604,32 @@ export default function ColorByNumber() {
               </button>
             ))}
           </div>
+          <label className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Or make a mural:</span>
+            <select
+              value={isMural(printSize) ? printSize : ""}
+              onChange={(e) => {
+                setPrintSize((e.target.value || "letter") as PrintSizeId);
+                setDetailShift(0);
+                setResult(null);
+              }}
+              className={`rounded-lg border-2 bg-white px-3 py-1.5 text-sm dark:bg-zinc-900 ${
+                isMural(printSize) ? "border-violet-500" : "border-zinc-200 dark:border-zinc-800"
+              }`}
+            >
+              <option value="">Choose how many sheets…</option>
+              {MURALS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                  {paymentsOn ? `: ${priceLabel(m.id)}` : ""}
+                </option>
+              ))}
+            </select>
+            <span className="w-full text-sm text-zinc-500">
+              One picture split across several Letter sheets: everyone colors a sheet, then you put them together into a big
+              picture. Great for classes, parties and family get-togethers.
+            </span>
+          </label>
           <p className="mt-2 text-sm text-zinc-500">
             Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
             regular paper with a dashed line to cut along; the picture fills the card.
@@ -852,6 +880,21 @@ export default function ColorByNumber() {
               />
               <canvas ref={highlightRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />
               {peek && fixing && <canvas ref={peekRef} className="pointer-events-none absolute inset-0 h-full w-full print:hidden" />}
+              {fit?.mural && (
+                // Where the mural's sheets split, with each sheet's name.
+                <div
+                  className="pointer-events-none absolute inset-0 grid print:hidden"
+                  style={{ gridTemplateColumns: `repeat(${fit.mural.cols}, 1fr)`, gridTemplateRows: `repeat(${fit.mural.rows}, 1fr)` }}
+                >
+                  {Array.from({ length: fit.mural.cols * fit.mural.rows }, (_, i) => (
+                    <div key={i} className="relative border border-dashed border-violet-500/80">
+                      <span className="absolute top-1 left-1 rounded bg-violet-600/85 px-1.5 text-[10px] font-semibold text-white">
+                        {sheetName(Math.floor(i / fit.mural!.cols), i % fit.mural!.cols)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div
               className={`pointer-events-none absolute inset-y-0 w-1 -translate-x-1/2 bg-violet-500/80 print:hidden ${fixing ? "hidden" : ""}`}
@@ -976,11 +1019,16 @@ export default function ColorByNumber() {
               disabled={!!busy}
               className="rounded-full bg-zinc-900 px-6 py-3 font-semibold text-white hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${priceLabel("photo")}` : ""}
+              Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${priceLabel(product)}` : ""}
             </button>
-            <span className="text-sm text-zinc-500">The page to color, the color key, and the finished picture.</span>
+            <span className="text-sm text-zinc-500">
+              {fit?.mural
+                ? "A map of how the sheets go together, the color key, and every sheet to color."
+                : "The page to color, the color key, and the finished picture."}
+            </span>
             {paying && (
               <Checkout
+                product={product}
                 onClose={() => setPaying(false)}
                 onPaid={() => {
                   setPaid(true);

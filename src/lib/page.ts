@@ -333,24 +333,38 @@ export function buildPage(
 
 const EDGE: RGB = [70, 70, 70];
 
+/** A part of the page (in page units): one sheet of a mural. */
+export interface PageRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /**
  * Draws the page at `pxScale` times its layout size (1 for the screen, more for printing).
- * Lines stay thin but visible at any resolution; numbers keep their printed size.
+ * Lines stay thin but visible at any resolution; numbers keep their printed size. With
+ * `region`, only that part is drawn (one sheet of a mural), and every piece of a shape the
+ * region's edge cuts through gets a number of its own.
  */
-export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" | "colored", pxScale = 1) {
-  const W = Math.round(page.width * pxScale);
-  const H = Math.round(page.height * pxScale);
+export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" | "colored", pxScale = 1, region?: PageRegion) {
+  const fullW = Math.round(page.width * pxScale);
+  const ox = region ? region.x * pxScale : 0;
+  const oy = region ? region.y * pxScale : 0;
+  const W = region ? Math.round(region.w * pxScale) : fullW;
+  const H = region ? Math.round(region.h * pxScale) : Math.round(page.height * pxScale);
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext("2d")!;
   const img = ctx.createImageData(W, H);
   img.data.fill(255);
 
-  const MIN_FONT = minFont(W, page.fontFrac);
+  // Numbers follow the whole page's width (a share of it), so a mural's sheets match each other.
+  const MIN_FONT = minFont(fullW, page.fontFrac);
   const MAX_FONT = MIN_FONT * MAX_FONT_RATIO;
-  /** Line thickness in pixels: about 0.2 mm when printed. */
+  /** Line thickness in pixels: about 0.2 mm when printed (one sheet's width, for a mural). */
   const t = Math.max(1, Math.round(W / 1800));
-  const placed = page.layers.map((l) => ({ ...l, x: l.x * pxScale, y: l.y * pxScale, scale: l.scale * pxScale }));
+  const placed = page.layers.map((l) => ({ ...l, x: l.x * pxScale - ox, y: l.y * pxScale - oy, scale: l.scale * pxScale }));
   placed.forEach((layer, li) => {
     const { result, scale } = layer;
     const { width: w, height: h, labels, regionColor } = result;
@@ -399,7 +413,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
 
   // Frame a full scene; a cut-out stands on its own.
   const bottom = page.layers[0]?.result;
-  if (bottom && bottom.background === undefined) {
+  if (!region && bottom && bottom.background === undefined) {
     ctx.strokeStyle = "#464646";
     ctx.lineWidth = t;
     ctx.strokeRect(t / 2, t / 2, W - t, H - t);
@@ -423,6 +437,10 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     ctx.fillStyle = "#555";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    if (region) {
+      drawRegionNumbers(ctx, layer, page.numbers[li], W, H, MIN_FONT, MAX_FONT);
+      return;
+    }
     for (let i = 0; i < result.regionCount; i++) {
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
@@ -436,6 +454,63 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       );
     }
   });
+}
+
+/**
+ * Numbers for the part of a layer showing on a W × H canvas (one sheet of a mural): the shapes
+ * are cut at the canvas's edges, and each piece that's big enough gets its shape's number,
+ * placed where the piece is widest.
+ */
+function drawRegionNumbers(
+  ctx: CanvasRenderingContext2D,
+  layer: Layer,
+  numbers: Uint8Array,
+  W: number,
+  H: number,
+  minFontPx: number,
+  maxFontPx: number,
+) {
+  const { result, x, y, scale } = layer;
+  const { width: w, height: h, labels, regionColor, regionKind } = result;
+  // The layer's pixels under the canvas.
+  const x0 = Math.max(0, Math.floor(-x / scale));
+  const y0 = Math.max(0, Math.floor(-y / scale));
+  const x1 = Math.min(w, Math.ceil((W - x) / scale));
+  const y1 = Math.min(h, Math.ceil((H - y) / scale));
+  const cw = x1 - x0;
+  const ch = y1 - y0;
+  if (cw <= 0 || ch <= 0) return;
+  // Pieces: connected pixels of one shape inside the cut.
+  const piece = new Int32Array(cw * ch).fill(-1);
+  const pieceShape: number[] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < cw * ch; start++) {
+    if (piece[start] !== -1) continue;
+    const shape = labels[(y0 + Math.floor(start / cw)) * w + x0 + (start % cw)];
+    const id = pieceShape.length;
+    pieceShape.push(shape);
+    piece[start] = id;
+    stack.push(start);
+    while (stack.length) {
+      const p = stack.pop()!;
+      const px = p % cw;
+      for (const q of [px > 0 ? p - 1 : -1, px < cw - 1 ? p + 1 : -1, p - cw, p + cw]) {
+        if (q < 0 || q >= cw * ch || piece[q] !== -1) continue;
+        if (labels[(y0 + Math.floor(q / cw)) * w + x0 + (q % cw)] !== shape) continue;
+        piece[q] = id;
+        stack.push(q);
+      }
+    }
+  }
+  const pts = labelPoints(piece, pieceShape.length, cw, ch, boundaryDistance(piece, cw, ch));
+  for (let i = 0; i < pieceShape.length; i++) {
+    const shape = pieceShape[i];
+    if (regionColor[shape] === result.background) continue;
+    const size = Math.min(maxFontPx, pts.radius[i] * scale * 1.1);
+    if (size < (regionKind?.[shape] === HAIR ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
+    ctx.font = `${Math.round(size)}px Arial, sans-serif`;
+    ctx.fillText(String(numbers[regionColor[shape]]), x + (x0 + pts.x[i]) * scale, y + (y0 + pts.y[i]) * scale);
+  }
 }
 
 /** Traced outlines per layer result (they don't depend on the drawing size, so reuse them). */

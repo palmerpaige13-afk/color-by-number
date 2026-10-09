@@ -12,6 +12,14 @@ const CHOICES = [
     tint: "bg-violet-100 text-violet-950 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-100 dark:hover:bg-violet-900",
   },
   {
+    href: "/photo?mural=1",
+    emoji: "🧩",
+    title: "Group mural",
+    blurb: "One photo split across 2 to 36 sheets. Everyone colors a piece, then put it together!",
+    price: `from ${priceLabel("mural-2")}`,
+    tint: "bg-sky-100 text-sky-950 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-100 dark:hover:bg-sky-900",
+  },
+  {
     href: "/halloween",
     emoji: "🎃",
     title: "Halloween pages",
@@ -28,7 +36,7 @@ export default function Home() {
         <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Color by Number</h1>
         <p className="mt-2 text-zinc-600 dark:text-zinc-400">Printable color-by-number pages. What would you like to color?</p>
       </header>
-      <ul className="grid gap-5 sm:grid-cols-2">
+      <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {CHOICES.map((c) => (
           <li key={c.href}>
             <Link
@@ -40,7 +48,7 @@ export default function Home() {
               </span>
               <span className="text-xl font-bold">{c.title}</span>
               <span className="opacity-80">{c.blurb}</span>
-              <span className="mt-auto rounded-full bg-white/70 px-3 py-1 text-sm font-semibold dark:bg-black/30">{c.price} a page</span>
+              <span className="mt-auto rounded-full bg-white/70 px-3 py-1 text-sm font-semibold dark:bg-black/30">{c.price.startsWith("from") ? c.price : `${c.price} a page`}</span>
             </Link>
           </li>
         ))}

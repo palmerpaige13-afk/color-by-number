@@ -10,7 +10,7 @@ import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/imp
 import { buildPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
 import { runPipelineAsync } from "@/lib/run-pipeline";
 import { labToRgb, rgbToLab } from "@/lib/pipeline/color";
-import { cardShape, fitOnPaper, fontFraction, type Fit, type PrintSizeId } from "@/lib/print";
+import { MURALS, cardShape, fitOnPaper, fontFraction, isMural, pictureShape, type Fit, type PrintSizeId } from "@/lib/print";
 
 /** Page pixels per working pixel of the most detailed layer. */
 const SCALE = 1.5;
@@ -69,6 +69,12 @@ const SIDE_PERSON_SHARE = 0.25;
 const PET_SHARE = 0.05;
 /** With background, the scene is framed so the people and pets span this share of it. */
 const SUBJECT_FILL = 0.8;
+
+/** A mural gets about this many shapes per sheet, up to MURAL_MAX_SHAPES in all. */
+const MURAL_SHAPES_PER_SHEET = 170;
+const MURAL_MAX_SHAPES = 4500;
+/** A mural's working raster grows with its size, up to this (long side, px). */
+const MURAL_MAX_WORKING = 2600;
 
 /** Expert pages work on a bigger raster, so fur, feathers and scales survive as shapes. */
 const EXPERT_WORKING_SIZE = 1500;
@@ -380,13 +386,18 @@ export async function makePage(
   let frame = plain ? null : photo.frame;
   // Zoomed out: the whole photo around the people, not framed closer on them.
   if (frame && zoomOut) frame = { ...frame, scene: { x: 0, y: 0, width: full.width, height: full.height } };
-  const params = DIFFICULTY_PARAMS[difficulty];
+  // A mural is many pages' worth of detail: more shapes in all (about MURAL_SHAPES_PER_SHEET
+  // per sheet) and a bigger working raster, so each sheet is as full as a Letter page.
+  const sheets = isMural(printSize) ? MURALS.find((m) => m.id === printSize)!.sheets : 1;
+  const base = DIFFICULTY_PARAMS[difficulty];
+  const params = sheets > 1 ? { ...base, maxShapes: Math.min(MURAL_MAX_SHAPES, MURAL_SHAPES_PER_SHEET * sheets) } : base;
+  const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 ? Math.min(MURAL_MAX_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets))) : WORKING_SIZE;
 
   // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
   // around the people.
   let photoRect: Rect = { x: 0, y: 0, width: full.width, height: full.height };
   if (frame) {
-    const shape = cardShape(printSize, frame.scene.width > frame.scene.height);
+    const shape = pictureShape(printSize, frame.scene.width / frame.scene.height);
     if (shape) {
       const scene = toAspect(frame.scene, shape, frame.subjects);
       const subjects = intersect(frame.subjects, scene);
@@ -395,17 +406,17 @@ export async function makePage(
       frame = { scene, subjects, animals };
     }
   } else {
-    const shape = cardShape(printSize, full.width > full.height);
+    const shape = pictureShape(printSize, full.width / full.height);
     if (shape) photoRect = toAspect(photoRect, shape, photoRect);
   }
 
   // The main layer: the people (and pets) on their own when there are some, else the photo.
   const mainRect: Rect = frame?.subjects ?? photoRect;
-  const foundKey = `${plain ? "plain" : !!frame} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
+  const foundKey = `${plain ? "plain" : !!frame} ${workingSize} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
   let found = photo.found.get(foundKey);
   if (!found) {
     const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
-    const image = toWorkingImage(mainBitmap, plain ? EXPERT_WORKING_SIZE : WORKING_SIZE);
+    const image = toWorkingImage(mainBitmap, workingSize);
     found = { main: image, subjects: [], animals: [], note: "" };
     if (!plain) try {
       Object.assign(
@@ -491,7 +502,7 @@ export async function makePage(
   if (twoLayers && frame && cutout) {
     // Scene layer underneath: the framed photo, coarser, with the people's area left out.
     const sceneBitmap = await crop(full, frame.scene);
-    const scene = toWorkingImage(sceneBitmap);
+    const scene = toWorkingImage(sceneBitmap, workingSize);
     sceneBitmap.close();
     const keep = sceneMask(scene, frame.scene, { ...main, cutout }, mainRect);
     const sceneScale = (k * frame.scene.width) / scene.width;

@@ -107,3 +107,132 @@ export function saveFile(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
+
+/** Mural sheets print at this resolution: sharp enough for coloring, small enough for 36 sheets. */
+const MURAL_DPI = 200;
+/** JPEG quality of mural sheets: line drawings stay crisp, and 36 sheets stay a manageable download. */
+const MURAL_JPEG = 0.8;
+/** A mural sheet's name: its row as a letter and its column as a number ("B3"). */
+export const sheetName = (row: number, col: number) => `${String.fromCharCode(65 + row)}${col + 1}`;
+
+/**
+ * A mural's PDF: a map of how the sheets go together (the finished picture with the grid on
+ * it), the shared color key, then every sheet on its own Letter page, labeled, with a small
+ * map of where it goes and a dashed line to trim along.
+ */
+export async function muralPdf(page: Page, fit: Fit): Promise<Blob> {
+  const m = fit.mural!;
+  const u = page.width / fit.w; // page units per inch
+  const pages: PdfPage[] = [];
+  const letter = (landscape: boolean) => (landscape ? { w: 11, h: 8.5 } : { w: 8.5, h: 11 });
+
+  // 1. How it goes together.
+  {
+    const paper = letter(fit.w > fit.h);
+    const dpi = 150;
+    const c = document.createElement("canvas");
+    c.width = Math.round(paper.w * dpi);
+    c.height = Math.round(paper.h * dpi);
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = "#222";
+    ctx.textBaseline = "top";
+    ctx.font = `bold ${Math.round(0.3 * dpi)}px Arial, sans-serif`;
+    ctx.fillText(`Your mural: ${m.cols * m.rows} sheets`, 0.5 * dpi, 0.45 * dpi);
+    ctx.font = `${Math.round(0.15 * dpi)}px Arial, sans-serif`;
+    ctx.fillText("Color each sheet with the color key, trim along the dashed lines, and put them together like this.", 0.5 * dpi, 0.85 * dpi);
+    const top = 1.25 * dpi;
+    const s = Math.min((c.width - dpi) / fit.w, (c.height - top - 0.5 * dpi) / fit.h); // px per inch
+    const pic = document.createElement("canvas");
+    pic.getContext("2d", { willReadFrequently: true });
+    await drawPage(pic, page, "colored", (s * fit.w) / page.width);
+    const px = (c.width - fit.w * s) / 2;
+    ctx.drawImage(pic, px, top);
+    pic.width = pic.height = 0;
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = Math.max(2, 0.02 * dpi);
+    for (let i = 0; i <= m.cols; i++) {
+      ctx.beginPath(); ctx.moveTo(px + i * m.cellW * s, top); ctx.lineTo(px + i * m.cellW * s, top + fit.h * s); ctx.stroke();
+    }
+    for (let j = 0; j <= m.rows; j++) {
+      ctx.beginPath(); ctx.moveTo(px, top + j * m.cellH * s); ctx.lineTo(px + fit.w * s, top + j * m.cellH * s); ctx.stroke();
+    }
+    const label = Math.max(12, Math.min(m.cellW * s * 0.22, 0.4 * dpi));
+    ctx.font = `bold ${Math.round(label)}px Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let r = 0; r < m.rows; r++) {
+      for (let col = 0; col < m.cols; col++) {
+        const cx = px + (col + 0.5) * m.cellW * s, cy = top + (r + 0.5) * m.cellH * s;
+        ctx.fillStyle = "rgba(255,255,255,0.85)";
+        ctx.beginPath(); ctx.arc(cx, cy, label * 0.95, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#222";
+        ctx.fillText(sheetName(r, col), cx, cy);
+      }
+    }
+    pages.push({ ...(await sheetJpegOf(c, 0.9)), paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
+  }
+
+  // 2. The color key, shared by every sheet.
+  {
+    const paper = letter(false);
+    const key = drawKeySheet(page, { paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
+    pages.push({ ...(await sheetJpegOf(key, 0.9)), paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
+  }
+
+  // 3. Each sheet.
+  const paper = letter(m.landscape);
+  const margin = (paper.w - m.cellW) / 2;
+  const dpi = MURAL_DPI;
+  for (let r = 0; r < m.rows; r++) {
+    for (let col = 0; col < m.cols; col++) {
+      const c = document.createElement("canvas");
+      c.width = Math.round(paper.w * dpi);
+      c.height = Math.round(paper.h * dpi);
+      const ctx = c.getContext("2d", { willReadFrequently: true })!;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, c.width, c.height);
+      const tile = document.createElement("canvas");
+      // Kept in memory rather than on the graphics card: copying a big drawing from the graphics
+      // card can come back blank in a busy or background tab.
+      tile.getContext("2d", { willReadFrequently: true });
+      await drawPage(tile, page, "outline", dpi / u, { x: col * m.cellW * u, y: r * m.cellH * u, w: m.cellW * u, h: m.cellH * u });
+      const tx = margin * dpi, ty = ((paper.h - m.cellH) / 2) * dpi;
+      ctx.drawImage(tile, tx, ty);
+      tile.width = tile.height = 0;
+      // Trim line around the picture.
+      ctx.strokeStyle = "#888";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([12, 8]);
+      ctx.strokeRect(tx, ty, m.cellW * dpi, m.cellH * dpi);
+      ctx.setLineDash([]);
+      // Its name and where it goes, in the top margin.
+      const band = ty;
+      ctx.fillStyle = "#222";
+      ctx.textBaseline = "middle";
+      ctx.font = `bold ${Math.round(band * 0.5)}px Arial, sans-serif`;
+      ctx.fillText(`Sheet ${sheetName(r, col)}`, tx, band / 2);
+      ctx.font = `${Math.round(band * 0.3)}px Arial, sans-serif`;
+      ctx.fillStyle = "#666";
+      ctx.fillText(`row ${r + 1}, column ${col + 1} · ${r * m.cols + col + 1} of ${m.rows * m.cols}`, tx + band * 2.6, band / 2);
+      const cell = Math.min((band * 0.7) / m.rows, (band * 1.6) / m.cols);
+      const mx = tx + m.cellW * dpi - cell * m.cols, my = (band - cell * m.rows) / 2;
+      for (let rr = 0; rr < m.rows; rr++) {
+        for (let cc = 0; cc < m.cols; cc++) {
+          ctx.fillStyle = rr === r && cc === col ? "#222" : "#e2e2e2";
+          ctx.fillRect(mx + cc * cell + 1, my + rr * cell + 1, cell - 2, cell - 2);
+        }
+      }
+      pages.push({ ...(await sheetJpegOf(c, MURAL_JPEG)), paperW: paper.w, paperH: paper.h, x: 0, y: 0, w: paper.w, h: paper.h });
+    }
+  }
+  return makePdf(pages);
+}
+
+/** A canvas as a JPEG for the PDF, letting go of the canvas's memory afterwards. */
+async function sheetJpegOf(canvas: HTMLCanvasElement, quality?: number) {
+  const out = { jpeg: await canvasJpeg(canvas, quality), pxW: canvas.width, pxH: canvas.height };
+  canvas.width = canvas.height = 0;
+  return out;
+}
