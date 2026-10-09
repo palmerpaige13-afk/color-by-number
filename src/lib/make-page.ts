@@ -71,8 +71,11 @@ const PET_SHARE = 0.05;
 const SUBJECT_FILL = 0.8;
 
 /** A mural gets about this many shapes per sheet, up to MURAL_MAX_SHAPES in all. */
-const MURAL_SHAPES_PER_SHEET = 170;
-const MURAL_MAX_SHAPES = 4500;
+const MURAL_SHAPES_PER_SHEET = 300;
+const MURAL_MAX_SHAPES = 7000;
+/** A mural's numbers print this much smaller than a page's (about 4.5 pt), and its shapes can be this much smaller. */
+const MURAL_FONT = 0.75;
+const MURAL_SHAPE_SIZE = 0.5;
 /** A mural's working raster grows with its size, up to this (long side, px). */
 const MURAL_MAX_WORKING = 2600;
 /** A mural's colors, at most. */
@@ -92,7 +95,7 @@ const COLORFUL_MIN_CHROMA = 26;
 /** ...picked from this many colors before the key is cut down to MURAL_MAX_COLORS... */
 const COLORFUL_PALETTE = 40;
 /** ...in patches about this share of a sheet's width... */
-const COLORFUL_PATCH = 0.28;
+const COLORFUL_PATCH = 0.3;
 /** ...people's clothes drift this much as far (faces and skin not at all). */
 const COLORFUL_PEOPLE = 0.6;
 /** ...and only where the picture is smooth: less local variation than this (0-255 lightness). */
@@ -159,8 +162,11 @@ function colorful(
   keep?: (x: number, y: number) => boolean,
   strength = 1,
 ): Uint8ClampedArray {
-  const hue = noiseField(w, h, patchPx, 17);
-  const light = noiseField(w, h, patchPx * 0.8, 91);
+  // Two sizes of patches (big and a third the size), so plain areas break into many small shapes.
+  const fine = noiseField(w, h, patchPx / 3, 53);
+  const fineLight = noiseField(w, h, patchPx / 3, 29);
+  const hue = noiseField(w, h, patchPx, 17).map((v, p) => 0.65 * v + 0.45 * fine[p]);
+  const light = noiseField(w, h, patchPx * 0.8, 91).map((v, p) => 0.6 * v + 0.5 * fineLight[p]);
   const variation = localVariation(data, w, h, Math.max(2, Math.round(patchPx / 8)));
   const out = Uint8ClampedArray.from(data);
   const lab = new Float32Array(3);
@@ -505,7 +511,15 @@ export async function makePage(
   // per sheet) and a bigger working raster, so each sheet is as full as a Letter page.
   const sheets = isMural(printSize) ? MURALS.find((m) => m.id === printSize)!.sheets : 1;
   const base = DIFFICULTY_PARAMS[difficulty];
-  const params = sheets > 1 ? { ...base, maxShapes: Math.min(MURAL_MAX_SHAPES, MURAL_SHAPES_PER_SHEET * sheets) } : base;
+  const params =
+    sheets > 1
+      ? {
+          ...base,
+          maxShapes: Math.min(MURAL_MAX_SHAPES, MURAL_SHAPES_PER_SHEET * sheets),
+          minArea: base.minArea * MURAL_SHAPE_SIZE,
+          minRadius: base.minRadius * Math.sqrt(MURAL_SHAPE_SIZE),
+        }
+      : base;
   // A mural's colors are shared by everyone coloring it: few enough for one box of markers.
   const maxColors = sheets > 1 ? MURAL_MAX_COLORS : Infinity;
   // Every sheet should have something to color: a mural keeps detail everywhere (the sky's
@@ -587,7 +601,7 @@ export async function makePage(
   // a fixed share of the picture's width, from how wide it will be printed.
   const pageRect = twoLayers && frame ? frame.scene : { width: main.width, height: main.height };
   const fit = fitOnPaper(pageRect.width / pageRect.height, printSize);
-  const fontFrac = fontFraction(fit.w) * (difficulty === "expert" ? EXPERT_FONT : 1);
+  const fontFrac = fontFraction(fit.w) * (difficulty === "expert" ? EXPERT_FONT : sheets > 1 ? MURAL_FONT : 1);
 
   // How big each layer is drawn decides how small its shapes can be and stay readable.
   let k = 0; // page px per photo px (two layers)
