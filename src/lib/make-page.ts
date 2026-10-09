@@ -79,6 +79,101 @@ const MURAL_MAX_WORKING = 2600;
 const MURAL_MAX_COLORS = 30;
 /** Detail kept everywhere on a mural (0-1: how much plain areas count as important). */
 const MURAL_MIN_IMPORTANCE = 0.6;
+/**
+ * "Extra colorful" murals: plain areas (sky, walls, water) drift into neighboring colors in
+ * patches, like a painter's mural (blue sky with purple, teal and green), so every sheet has
+ * several colors to color, not one. Hue turns up to this far (degrees) either way...
+ */
+const COLORFUL_HUE = 70;
+/** ...lightness moves up to this much (Lab L)... */
+const COLORFUL_LIGHT = 14;
+/** ...pale colors get at least this much color (Lab chroma)... */
+const COLORFUL_MIN_CHROMA = 26;
+/** ...picked from this many colors before the key is cut down to MURAL_MAX_COLORS... */
+const COLORFUL_PALETTE = 40;
+/** ...in patches about this share of a sheet's width... */
+const COLORFUL_PATCH = 0.4;
+/** ...and only where the picture is smooth: less local variation than this (0-255 lightness). */
+const COLORFUL_SMOOTH_BELOW = 18;
+
+/** Smooth random values (-1..1) over a w × h image, varying over about `cell` pixels. */
+function noiseField(w: number, h: number, cell: number, seed: number): Float32Array {
+  let state = seed >>> 0;
+  const rnd = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+  const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2;
+  const grid = Float32Array.from({ length: gw * gh }, rnd);
+  const out = new Float32Array(w * h);
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  for (let y = 0; y < h; y++) {
+    const gy = y / cell, y0 = Math.floor(gy), ty = smooth(gy - y0);
+    for (let x = 0; x < w; x++) {
+      const gx = x / cell, x0 = Math.floor(gx), tx = smooth(gx - x0);
+      const a = grid[y0 * gw + x0], b = grid[y0 * gw + x0 + 1], c = grid[(y0 + 1) * gw + x0], d = grid[(y0 + 1) * gw + x0 + 1];
+      out[y * w + x] = (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+    }
+  }
+  return out;
+}
+
+/** Local variation of lightness (standard deviation over about r pixels), per pixel. */
+function localVariation(data: Uint8ClampedArray, w: number, h: number, r: number): Float32Array {
+  const n = w * h;
+  const Y = new Float32Array(n);
+  for (let p = 0; p < n; p++) Y[p] = 0.299 * data[p * 4] + 0.587 * data[p * 4 + 1] + 0.114 * data[p * 4 + 2];
+  const box = (src: Float32Array) => {
+    const t = new Float32Array(n), o = new Float32Array(n);
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = -r; x <= r; x++) sum += src[y * w + Math.min(w - 1, Math.max(0, x))];
+      for (let x = 0; x < w; x++) {
+        t[y * w + x] = sum / (2 * r + 1);
+        sum += src[y * w + Math.min(w - 1, x + r + 1)] - src[y * w + Math.max(0, x - r)];
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let y = -r; y <= r; y++) sum += t[Math.min(h - 1, Math.max(0, y)) * w + x];
+      for (let y = 0; y < h; y++) {
+        o[y * w + x] = sum / (2 * r + 1);
+        sum += t[Math.min(h - 1, y + r + 1) * w + x] - t[Math.max(0, y - r) * w + x];
+      }
+    }
+    return o;
+  };
+  const mean = box(Y);
+  const sq = box(Y.map((v) => v * v));
+  return mean.map((m, p) => Math.sqrt(Math.max(0, sq[p] - m * m)));
+}
+
+/** See COLORFUL_HUE. `keep(x, y)` marks pixels left as they are (people). Returns new pixels. */
+function colorful(data: Uint8ClampedArray, w: number, h: number, patchPx: number, keep?: (x: number, y: number) => boolean): Uint8ClampedArray {
+  const hue = noiseField(w, h, patchPx, 17);
+  const light = noiseField(w, h, patchPx * 0.8, 91);
+  const variation = localVariation(data, w, h, Math.max(2, Math.round(patchPx / 8)));
+  const out = Uint8ClampedArray.from(data);
+  const lab = new Float32Array(3);
+  for (let p = 0; p < w * h; p++) {
+    if (keep?.(p % w, Math.floor(p / w))) continue;
+    const k = Math.max(0, Math.min(1, 1.5 * (1 - variation[p] / COLORFUL_SMOOTH_BELOW)));
+    if (k <= 0) continue;
+    rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
+    let [L, a, b] = lab;
+    let chroma = Math.hypot(a, b);
+    let angle = Math.atan2(b, a);
+    // Grays and pale colors take on the patch's color.
+    if (chroma < COLORFUL_MIN_CHROMA) {
+      if (chroma < 4) angle = hue[p] * Math.PI;
+      chroma += (COLORFUL_MIN_CHROMA - chroma) * k;
+    }
+    angle += (hue[p] * COLORFUL_HUE * Math.PI * k) / 180;
+    L = Math.max(5, Math.min(97, L + light[p] * COLORFUL_LIGHT * k));
+    a = chroma * Math.cos(angle);
+    b = chroma * Math.sin(angle);
+    const rgb = labToRgb(L, a, b);
+    for (let c = 0; c < 3; c++) out[p * 4 + c] = Math.max(0, Math.min(255, Math.round(rgb[c])));
+  }
+  return out;
+}
 
 /** Expert pages work on a bigger raster, so fur, feathers and scales survive as shapes. */
 const EXPERT_WORKING_SIZE = 1500;
@@ -364,6 +459,8 @@ export interface PageChoices {
   faces: boolean;
   /** The whole photo around the people, not framed closer on them. */
   zoomOut: boolean;
+  /** A mural's plain areas in extra colors (see COLORFUL_HUE). */
+  colorful?: boolean;
 }
 
 export interface MadePage {
@@ -380,7 +477,7 @@ export interface MadePage {
 /** Makes a page. `onStep` hears each step as it starts, and `onNote` what was found. */
 export async function makePage(
   photo: Photo,
-  { printSize, difficulty, faces: withFaces, zoomOut }: PageChoices,
+  { printSize, difficulty, faces: withFaces, zoomOut, colorful: extraColors = false }: PageChoices,
   { onStep, onNote }: { onStep?: (step: string) => void; onNote?: (note: string) => void } = {},
 ): Promise<MadePage> {
   const { full } = photo;
@@ -466,7 +563,11 @@ export async function makePage(
   // few colors of their own (eyes, smile).
   const card = !!cardShape(printSize, true);
   const photoColors = withFaces && !card;
-  const colorParams = photoColors ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] } : {};
+  const colorParams = photoColors
+    ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] }
+    : sheets > 1 && extraColors
+      ? { paletteSize: COLORFUL_PALETTE }
+      : {};
 
   // The print size decides how small numbers (and so shapes) can be: the smallest number is
   // a fixed share of the picture's width, from how wide it will be printed.
@@ -483,6 +584,14 @@ export async function makePage(
     mainScale = (k * mainRect.width) / main.width;
     pageWidth = frame.scene.width * k;
   }
+  /** A mural's working image with its plain areas in extra colors (if asked), people left alone. */
+  const colored = (img: { width: number; height: number; data: Uint8ClampedArray }, people: SubjectBox[]) => {
+    if (sheets <= 1 || !extraColors) return img.data;
+    const sheetPx = img.width / (fit.mural ? fit.mural.cols : 1);
+    return colorful(img.data, img.width, img.height, sheetPx * COLORFUL_PATCH, (x, y) =>
+      people.some((b) => x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height),
+    );
+  };
   const budget = (share: number) => ({
     ...params,
     maxShapes: params.maxShapes && Math.round(params.maxShapes * share),
@@ -492,8 +601,8 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(main.data, main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
-      : { ...main, importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
+      ? { ...main, data: warmSkin(twoLayers ? main.data : colored(main, subjects.filter((s) => s.kind !== "animal")), main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })), faceStyle: "own" as const, cutout }
+      : { ...main, data: twoLayers ? main.data : colored(main, subjects.filter((s) => s.kind !== "animal")), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,
@@ -520,7 +629,7 @@ export async function makePage(
     const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
     onStep?.("Building the background…");
     const sceneResult = await runPipelineAsync(
-      { ...scene, importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
+      { ...scene, data: colored(scene, []), importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
       { ...params, ...colorParams, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
     );
     const layers: Layer[] = [

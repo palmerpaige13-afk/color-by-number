@@ -73,6 +73,8 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
   const [error, setError] = useState<string | null>(null);
   /** A mystery mural: the PDF doesn't show the picture until its last page. */
   const [mystery, setMystery] = useState(false);
+  /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
+  const [extraColors, setExtraColors] = useState(true);
   const [printSize, setPrintSize] = useState<PrintSizeId>(startMural ? "mural-4" : "letter");
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
@@ -481,7 +483,7 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
     }
     const { page, fit: pageFit, shows, people, faces } = await makePage(
       photo,
-      { printSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide },
+      { printSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide, colorful: extraColors },
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);
@@ -628,6 +630,20 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
                 </option>
               ))}
             </select>
+            {isMural(printSize) && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={extraColors}
+                  onChange={(e) => {
+                    setExtraColors(e.target.checked);
+                    setResult(null);
+                  }}
+                  className="h-4 w-4 accent-violet-600"
+                />
+                Extra colorful: add fun colors to plain areas like sky, so every sheet has lots to color
+              </label>
+            )}
             {isMural(printSize) && (
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={mystery} onChange={(e) => setMystery(e.target.checked)} className="h-4 w-4 accent-violet-600" />
