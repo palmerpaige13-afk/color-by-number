@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "How Color by Number handles your photos and the fixes you choose to send.",
 };
 
-const UPDATED = "September 27, 2026";
+const UPDATED = "October 9, 2026";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -50,8 +50,9 @@ export default function Privacy() {
       <Section title="Counting visits">
         <p>
           Each visit to the site is counted once, so we know how much it&apos;s used. The count includes only whether
-          you used a phone, tablet or computer, which page you arrived on, and the date. It includes nothing from your
-          photo and nothing that identifies you, and nothing is saved on your device to recognize you later.
+          you used a phone, tablet or computer, which page you arrived on, the date, and where you came from as one
+          word (like &ldquo;facebook&rdquo; or &ldquo;google&rdquo;, never the full address). It includes nothing from
+          your photo and nothing that identifies you, and nothing is saved on your device to recognize you later.
         </p>
       </Section>
 

@@ -95,6 +95,41 @@ export async function photoLink(path: string, download = false): Promise<string 
   return download ? `${url}&download=${encodeURIComponent(path.split("/").pop() ?? "photo.jpg")}` : url;
 }
 
+export interface VisitStats {
+  /** Visits in the last `days` days, today's, and the counts by where people came from. */
+  days: number;
+  total: number;
+  today: number;
+  bySource: [string, number][];
+  byPage: [string, number][];
+}
+
+/** How many people visited lately, and where from (Facebook, Instagram, a shared link…). */
+export async function loadVisitStats(days = 7): Promise<VisitStats> {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/visits?select=source,page,created_at&created_at=gte.${since}&limit=50000`, {
+    headers: headers(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Couldn't load the visits (${res.status}).`);
+  const rows = (await res.json()) as { source: string | null; page: string | null; created_at: string }[];
+  // "Today" in the owner's time zone.
+  const day = (iso: string) => new Date(iso).toLocaleDateString("en-US", { timeZone: "America/Denver" });
+  const today = day(new Date().toISOString());
+  const count = (key: (r: (typeof rows)[number]) => string) => {
+    const m = new Map<string, number>();
+    for (const r of rows) m.set(key(r), (m.get(key(r)) ?? 0) + 1);
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  return {
+    days,
+    total: rows.length,
+    today: rows.filter((r) => day(r.created_at) === today).length,
+    bySource: count((r) => r.source ?? "not tracked yet"),
+    byPage: count((r) => r.page ?? "?"),
+  };
+}
+
 /** Marks a report reviewed (or new again). */
 export async function setReviewed(id: string, reviewed: boolean): Promise<void> {
   await setManyReviewed([id], reviewed);

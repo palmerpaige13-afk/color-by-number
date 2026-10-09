@@ -1,8 +1,8 @@
 // Sends a fix report: what someone fixed by hand on their page, so the automatic results can
 // be improved. Only sent when the person taps Send; their photo only if they also ask to share
-// it. Also counts visits (just the kind of device and the page, nothing about the person), so
-// the site's owner can see how much it's used. Both go to the site's Supabase project, where
-// the public key can add rows and shared photos but not read them back.
+// it. Also counts visits (the kind of device, the page and where they came from, nothing about
+// the person), so the site's owner can see how much it's used. Both go to the site's Supabase
+// project, where the public key can add rows and shared photos but not read them back.
 
 const SUPABASE_URL = "https://axdbxneqepcrlpfmwtjv.supabase.co";
 /** Publishable (public) key: safe in the browser; the database only lets it add reports. */
@@ -69,13 +69,47 @@ export async function sendReport(report: FixReport, photo?: Blob): Promise<void>
   if (!res.ok) throw new Error("Couldn't send the report");
 }
 
+/** Sites people arrive from, by a part of their address (or app name), and the name each is counted as. */
+const SOURCES: [RegExp, string][] = [
+  [/facebook|fb\.(com|me)|com\.facebook/, "facebook"],
+  [/instagram/, "instagram"],
+  [/pinterest|pin\.it/, "pinterest"],
+  [/tiktok/, "tiktok"],
+  [/(^|\.)t\.co$|twitter|(^|\.)x\.com$/, "x"],
+  [/youtube|youtu\.be/, "youtube"],
+  [/reddit/, "reddit"],
+  [/google/, "google"],
+  [/bing|yahoo|duckduckgo/, "search"],
+];
+
+/**
+ * Where a visitor came from, as one word: a ?from= tag on the link they followed (links shared
+ * on social media can carry one), else the site that sent them (just its name, never the full
+ * address), else "direct".
+ */
+function visitSource(): string {
+  const tag = new URLSearchParams(window.location.search).get("from")?.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 30);
+  if (tag) return tag;
+  let host = "";
+  try {
+    host = document.referrer ? new URL(document.referrer).hostname : "";
+  } catch {
+    host = document.referrer.slice(0, 60); // e.g. android-app://com.facebook.katana
+  }
+  if (host === window.location.hostname) host = "";
+  // Facebook's and Instagram's own browsers often send no address at all, but say who they are.
+  const app = /FBAN|FBAV/.test(navigator.userAgent) ? "facebook" : /Instagram/.test(navigator.userAgent) ? "instagram" : "";
+  for (const [pattern, name] of SOURCES) if (pattern.test(host)) return name;
+  return app || (host ? "other" : "direct");
+}
+
 /** Marks this browser tab as counted, so reloads and new pages in the same visit don't count again. */
 const VISIT_KEY = "counted-visit";
 
 /**
- * Counts one visit to the site: the kind of device and the page they arrived on, nothing
- * else. Once per browser tab session. Never blocks or breaks the page if it can't be sent,
- * and isn't counted while testing locally.
+ * Counts one visit to the site: the kind of device, the page they arrived on and where they
+ * came from (see visitSource), nothing else. Once per browser tab session. Never blocks or
+ * breaks the page if it can't be sent, and isn't counted while testing locally.
  */
 export function countVisit() {
   if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
@@ -88,7 +122,7 @@ export function countVisit() {
   fetch(`${SUPABASE_URL}/rest/v1/visits`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ device: device(), page: window.location.pathname.slice(0, 100), app_version: APP_VERSION }),
+    body: JSON.stringify({ device: device(), page: window.location.pathname.slice(0, 100), source: visitSource(), app_version: APP_VERSION }),
     keepalive: true,
   }).catch(() => {});
 }

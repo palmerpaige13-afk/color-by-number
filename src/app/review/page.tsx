@@ -3,7 +3,7 @@
 
 import type { Metadata } from "next";
 import Link from "next/link";
-import { loadReports, photoLink, reviewSetupMissing, signedIn, type Fix, type Report } from "@/lib/review";
+import { loadReports, loadVisitStats, photoLink, reviewSetupMissing, signedIn, type Fix, type Report, type VisitStats } from "@/lib/review";
 import { markAllReviewed, markReviewed, signIn, signOut } from "./actions";
 
 export const metadata: Metadata = { title: "Reports · Color by Number", robots: { index: false, follow: false } };
@@ -38,6 +38,50 @@ function Swatches({ fixes }: { fixes: Fix[] }) {
         </span>
       ))}
     </div>
+  );
+}
+
+const SOURCE_NAMES: Record<string, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  pinterest: "Pinterest",
+  tiktok: "TikTok",
+  x: "X (Twitter)",
+  youtube: "YouTube",
+  reddit: "Reddit",
+  google: "Google",
+  search: "Other search",
+  other: "Other websites",
+  direct: "Typed in or bookmarked",
+};
+
+/** Visits lately: how many, and where people came from. */
+function Visits({ stats }: { stats: VisitStats }) {
+  const row = (label: string, n: number) => (
+    <li key={label} className="flex justify-between gap-4">
+      <span>{label}</span>
+      <span className="font-semibold tabular-nums">{n}</span>
+    </li>
+  );
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800">
+      <h2 className="text-lg font-bold">
+        Visits <span className="text-sm font-normal text-zinc-500">last {stats.days} days</span>
+      </h2>
+      <p>
+        <span className="text-2xl font-bold">{stats.total}</span> visits · <span className="font-semibold">{stats.today}</span> today
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <h3 className="mb-1 font-semibold text-zinc-600 dark:text-zinc-400">Where they came from</h3>
+          <ul className="flex flex-col gap-0.5">{stats.bySource.map(([s, n]) => row(SOURCE_NAMES[s] ?? (s === "not tracked yet" ? "Before tracking began" : `Link tagged “${s}”`), n))}</ul>
+        </div>
+        <div>
+          <h3 className="mb-1 font-semibold text-zinc-600 dark:text-zinc-400">Page they arrived on</h3>
+          <ul className="flex flex-col gap-0.5">{stats.byPage.slice(0, 6).map(([p, n]) => row(p === "/" ? "Home" : p, n))}</ul>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -156,6 +200,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   } catch (e) {
     error = e instanceof Error ? e.message : "Couldn't load the reports.";
   }
+  const visits = await loadVisitStats().catch(() => null);
 
   return shell(
     <>
@@ -179,6 +224,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
           </button>
         </form>
       </div>
+      {visits && <Visits stats={visits} />}
       {error && <p className="text-red-700">{error}</p>}
       {!error && reports.length === 0 && <p className="text-zinc-500">Nothing new. 🎉</p>}
       <ul className="flex flex-col gap-3">
