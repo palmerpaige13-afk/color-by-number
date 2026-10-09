@@ -4,6 +4,7 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
+import { UNCOUNTED_PAGES } from "@/lib/feedback";
 
 const SUPABASE_URL = "https://axdbxneqepcrlpfmwtjv.supabase.co";
 const BUCKET = "shared-photos";
@@ -112,7 +113,10 @@ export async function loadVisitStats(days = 7): Promise<VisitStats> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Couldn't load the visits (${res.status}).`);
-  const rows = (await res.json()) as { source: string | null; page: string | null; created_at: string }[];
+  // Visits counted on the review, privacy and terms pages before those stopped counting.
+  const rows = ((await res.json()) as { source: string | null; page: string | null; created_at: string }[]).filter(
+    (r) => !UNCOUNTED_PAGES.some((p) => r.page === p || r.page?.startsWith(p + "/")),
+  );
   // "Today" in the owner's time zone.
   const day = (iso: string) => new Date(iso).toLocaleDateString("en-US", { timeZone: "America/Denver" });
   const today = day(new Date().toISOString());

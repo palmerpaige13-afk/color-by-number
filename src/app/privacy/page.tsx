@@ -49,7 +49,7 @@ export default function Privacy() {
 
       <Section title="Counting visits">
         <p>
-          Each visit to the site is counted once, so we know how much it&apos;s used. The count includes only whether
+          Each visit to the site&apos;s pages (not this one or the terms) is counted once, so we know how much it&apos;s used. The count includes only whether
           you used a phone, tablet or computer, which page you arrived on, the date, and where you came from as one
           word (like &ldquo;facebook&rdquo; or &ldquo;google&rdquo;, never the full address). It includes nothing from
           your photo and nothing that identifies you, and nothing is saved on your device to recognize you later.

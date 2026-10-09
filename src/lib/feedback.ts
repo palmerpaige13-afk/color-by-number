@@ -105,6 +105,13 @@ function visitSource(): string {
 
 /** Marks this browser tab as counted, so reloads and new pages in the same visit don't count again. */
 const VISIT_KEY = "counted-visit";
+/**
+ * Pages that aren't counted: the owner's review page (and the rest of a visit that starts
+ * there, which is the owner too), and the privacy and terms pages. Every page people shop on
+ * (home, the photo maker, Halloween, any page added later) counts.
+ */
+export const UNCOUNTED_PAGES = ["/review", "/privacy", "/terms"];
+const uncounted = (path: string) => UNCOUNTED_PAGES.some((p) => path === p || path.startsWith(p + "/"));
 
 /**
  * Counts one visit to the site: the kind of device, the page they arrived on and where they
@@ -113,16 +120,21 @@ const VISIT_KEY = "counted-visit";
  */
 export function countVisit() {
   if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
+  const path = window.location.pathname;
   try {
     if (sessionStorage.getItem(VISIT_KEY)) return;
+    // A visit starting on the review page is the owner's: the rest of it isn't counted either.
+    if (path === "/review" || path.startsWith("/review/")) sessionStorage.setItem(VISIT_KEY, "owner");
+    if (uncounted(path)) return;
     sessionStorage.setItem(VISIT_KEY, "1");
   } catch {
     // Private browsing without storage: count it anyway.
+    if (uncounted(path)) return;
   }
   fetch(`${SUPABASE_URL}/rest/v1/visits`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json", Prefer: "return=minimal" },
-    body: JSON.stringify({ device: device(), page: window.location.pathname.slice(0, 100), source: visitSource(), app_version: APP_VERSION }),
+    body: JSON.stringify({ device: device(), page: path.slice(0, 100), source: visitSource(), app_version: APP_VERSION }),
     keepalive: true,
   }).catch(() => {});
 }
