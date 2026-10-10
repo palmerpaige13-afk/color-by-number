@@ -139,6 +139,8 @@ export function buildPage(
   distinct = DISTINCT,
   cool = 0,
   maxColors = Infinity,
+  /** Biggest shape (page px²): bigger ones are broken into patches of the nearest other colors (murals). */
+  maxArea?: number,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
@@ -288,6 +290,8 @@ export function buildPage(
   // every person keeps their outline. Each layer's palette becomes the key
   // (index = number, 0 = blank background).
   const palette: RGB[] = [[255, 255, 255], ...key.map((k) => k.rgb)];
+  const keyLab = new Float32Array(key.length * 3);
+  key.forEach((k, i) => rgbToLab(k.rgb[0], k.rgb[1], k.rgb[2], keyLab, i * 3));
   const merged = layers.map((layer, li) => {
     const { result } = layer;
     const { width: w, height: h, labels } = result;
@@ -302,6 +306,7 @@ export function buildPage(
       byNumber[p] = c === result.background ? 0 : numbers[li][c];
       owner[p] = ownerOf(c);
     }
+    if (maxArea) breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab);
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
     const regionKind = new Uint8Array(comps.count);
@@ -329,6 +334,76 @@ export function buildPage(
     for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== 0) shapes++;
   }
   return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac };
+}
+
+/** A shape broken up by breakUpBig takes patches of the nearest other key colors at least this far (ΔE)... */
+const BREAKUP_MIN = 6;
+/** ...and at most this far, so it still reads as the same thing (a robe's creams and golds). */
+const BREAKUP_MAX = 45;
+
+/** Smooth random values (-1..1) over a w × h grid, varying over about `cell` cells. */
+function blobs(w: number, h: number, cell: number, seed: number): Float32Array {
+  let state = seed >>> 0;
+  const rnd = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+  const gw = Math.ceil(w / cell) + 2;
+  const grid = Float32Array.from({ length: gw * (Math.ceil(h / cell) + 2) }, rnd);
+  const out = new Float32Array(w * h);
+  const s = (t: number) => t * t * (3 - 2 * t);
+  for (let y = 0; y < h; y++) {
+    const gy = y / cell, y0 = Math.floor(gy), ty = s(gy - y0);
+    for (let x = 0; x < w; x++) {
+      const gx = x / cell, x0 = Math.floor(gx), tx = s(gx - x0);
+      const a = grid[y0 * gw + x0], b = grid[y0 * gw + x0 + 1], c = grid[(y0 + 1) * gw + x0], d = grid[(y0 + 1) * gw + x0 + 1];
+      out[y * w + x] = (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+    }
+  }
+  return out;
+}
+
+/**
+ * Murals: any shape (one number, one owner) bigger than `maxArea` (layer px²) is broken into
+ * blob-shaped patches of the nearest other key colors, so no one piece fills much of a sheet.
+ * Works on the final numbers, so the color count can't merge the patches back. In place.
+ */
+function breakUpBig(byNumber: Uint8Array, owner: Uint8Array, w: number, h: number, maxArea: number, keyLab: Float32Array) {
+  const colors = keyLab.length / 3;
+  const near = new Map<number, number[]>();
+  const nearFor = (n: number) => {
+    let found = near.get(n);
+    if (found) return found;
+    const list: [number, number][] = [];
+    for (let o = 1; o <= colors; o++) {
+      if (o === n) continue;
+      const d = Math.sqrt(labDist2(keyLab, (n - 1) * 3, keyLab, (o - 1) * 3));
+      if (d >= BREAKUP_MIN && d <= BREAKUP_MAX) list.push([o, d]);
+    }
+    list.sort((a, b) => a[1] - b[1]);
+    found = list.slice(0, 3).map(([o]) => o);
+    near.set(n, found);
+    return found;
+  };
+  const cell = Math.max(3, Math.sqrt(maxArea) * 0.45);
+  for (let round = 0; round < 4; round++) {
+    const comps = labelComponents(byNumber, w, h, owner);
+    const big = new Uint8Array(comps.count);
+    let any = false;
+    for (let i = 0; i < comps.count; i++) {
+      if (comps.area[i] <= maxArea || comps.color[i] === 0) continue;
+      big[i] = 1;
+      any = true;
+    }
+    if (!any) return;
+    const a = blobs(w, h, cell, 11 + round * 97);
+    const b = blobs(w, h, cell * 0.7, 23 + round * 89);
+    for (let p = 0; p < w * h; p++) {
+      if (!big[comps.labels[p]]) continue;
+      const alts = nearFor(byNumber[p]);
+      if (!alts.length) continue;
+      if (a[p] > 0.2) byNumber[p] = alts[0];
+      else if (b[p] > 0.3 && alts[1]) byNumber[p] = alts[1];
+      else if (a[p] < -0.45 && alts[2]) byNumber[p] = alts[2];
+    }
+  }
 }
 
 const EDGE: RGB = [70, 70, 70];

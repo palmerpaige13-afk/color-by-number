@@ -76,6 +76,8 @@ const MURAL_MAX_SHAPES = 7000;
 /** A mural's numbers print this much smaller than a page's (about 4.5 pt), and its shapes can be this much smaller. */
 const MURAL_FONT = 0.75;
 const MURAL_SHAPE_SIZE = 0.5;
+/** No piece of a mural is bigger than this share of a sheet (1/30): bigger ones are broken up. */
+const MURAL_PIECES = 30;
 /** A mural's working raster grows with its size, up to this (long side, px). */
 const MURAL_MAX_WORKING = 2600;
 /** A mural's colors, at most. */
@@ -98,6 +100,15 @@ const COLORFUL_PALETTE = 40;
 const COLORFUL_PATCH = 0.3;
 /** ...people's clothes drift this much as far (faces and skin not at all). */
 const COLORFUL_PEOPLE = 0.6;
+/** Clothes' patches, as a share of the background's... */
+const COLORFUL_CLOTHES_PATCH = 0.45;
+/** ...pale cloth (Lab chroma below this) turns warm: around this hue (degrees: 70 is a golden yellow)... */
+const COLORFUL_WARM_BELOW = 22;
+const COLORFUL_WARM_HUE = 70;
+/** ...anywhere from this far either way (peach and orange to yellow)... */
+const COLORFUL_WARM_SPREAD = 40;
+/** ...with about this much color (Lab chroma). */
+const COLORFUL_WARM_CHROMA = 30;
 /** ...and only where the picture is smooth: less local variation than this (0-255 lightness). */
 const COLORFUL_SMOOTH_BELOW = 18;
 
@@ -161,6 +172,7 @@ function colorful(
   patchPx: number,
   keep?: (x: number, y: number) => boolean,
   strength = 1,
+  clothes = false,
 ): Uint8ClampedArray {
   // Two sizes of patches (big and a third the size), so plain areas break into many small shapes.
   const fine = noiseField(w, h, patchPx / 3, 53);
@@ -170,16 +182,30 @@ function colorful(
   const variation = localVariation(data, w, h, Math.max(2, Math.round(patchPx / 8)));
   const out = Uint8ClampedArray.from(data);
   const lab = new Float32Array(3);
+  // Clothes: smaller patches of their own.
+  const clothesHue = clothes ? noiseField(w, h, patchPx * COLORFUL_CLOTHES_PATCH, 61) : null;
+  const clothesLight = clothes ? noiseField(w, h, patchPx * COLORFUL_CLOTHES_PATCH, 73) : null;
   for (let p = 0; p < w * h; p++) {
     if (keep?.(p % w, Math.floor(p / w))) continue;
-    // Clothes (strength below 1) drift everywhere, folds and all; elsewhere only plain areas do.
-    const smooth = Math.max(0, Math.min(1, 1.5 * (1 - variation[p] / COLORFUL_SMOOTH_BELOW)));
-    const k = strength < 1 ? strength : smooth;
-    if (k <= 0) continue;
     rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
     let [L, a, b] = lab;
     let chroma = Math.hypot(a, b);
     let angle = Math.atan2(b, a);
+    if (clothesHue && clothesLight) {
+      // Clothes, folds and all: pale cloth (a white robe) in warm patches (cream, gold, yellow,
+      // peach, light orange); colored cloth turns a little either way and keeps its color.
+      if (chroma < COLORFUL_WARM_BELOW) {
+        angle = ((COLORFUL_WARM_HUE + clothesHue[p] * COLORFUL_WARM_SPREAD) * Math.PI) / 180;
+        chroma = COLORFUL_WARM_CHROMA * (0.6 + 0.5 * Math.abs(clothesHue[p] + clothesLight[p]));
+      } else angle += (clothesHue[p] * 35 * Math.PI) / 180;
+      L = Math.max(8, Math.min(96, L + clothesLight[p] * COLORFUL_LIGHT));
+      const rgb = labToRgb(L, chroma * Math.cos(angle), chroma * Math.sin(angle));
+      for (let c = 0; c < 3; c++) out[p * 4 + c] = Math.max(0, Math.min(255, Math.round(rgb[c])));
+      continue;
+    }
+    // Only plain areas drift; detailed ones keep their colors.
+    const k = strength * Math.max(0, Math.min(1, 1.5 * (1 - variation[p] / COLORFUL_SMOOTH_BELOW)));
+    if (k <= 0) continue;
     // Grays and pale colors take on the patch's color.
     if (chroma < COLORFUL_MIN_CHROMA) {
       if (chroma < 4) angle = hue[p] * Math.PI;
@@ -626,8 +652,11 @@ export async function makePage(
       sheetPx * COLORFUL_PATCH,
       (x, y) => inSkin(x, y) || faceBoxes.some((b) => x >= b.x && y >= b.y && x < b.x + b.width && y < b.y + b.height),
       strength,
+      strength < 1,
     );
   };
+  /** A mural's biggest piece (page px²): a share of a sheet. */
+  const maxPiece = sheets > 1 ? (pageWidth * pageWidth * (fit.h / fit.w)) / sheets / MURAL_PIECES : undefined;
   const budget = (share: number) => ({
     ...params,
     maxShapes: params.maxShapes && Math.round(params.maxShapes * share),
@@ -679,7 +708,7 @@ export async function makePage(
         natural: photoColors,
       },
     ];
-    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors);
+    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece);
   } else {
     page = buildPage(
       main.width * SCALE,
@@ -689,6 +718,7 @@ export async function makePage(
       KEY_DISTINCT[difficulty],
       COOL_BOOST[difficulty],
       maxColors,
+      maxPiece,
     );
   }
   return { page, fit, shows: frame?.scene ?? photoRect, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };
