@@ -12,7 +12,7 @@ const CHOICES = [
     tint: "bg-violet-100 text-violet-950 hover:bg-violet-200 dark:bg-violet-950 dark:text-violet-100 dark:hover:bg-violet-900",
   },
   {
-    href: "/photo?mural=1",
+    href: "/mural",
     emoji: "🧩",
     title: "Group mural",
     blurb: "One photo split across 2 to 36 sheets. Everyone colors a piece, then put it together!",

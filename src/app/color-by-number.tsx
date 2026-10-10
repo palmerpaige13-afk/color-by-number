@@ -64,7 +64,9 @@ const MAX_LOG = 300;
 const MAX_UNDO = 30;
 
 
-export default function ColorByNumber({ startMural = false }: { startMural?: boolean }) {
+/** "mural": the Group mural page (only mural sizes); else the photo page (only regular sizes). */
+export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mural" }) {
+  const muralMode = mode === "mural";
   const [file, setFile] = useState<File | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [result, setResult] = useState<Page | null>(null);
@@ -75,7 +77,7 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
   const [mystery, setMystery] = useState(false);
   /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
   const [extraColors, setExtraColors] = useState(true);
-  const [printSize, setPrintSize] = useState<PrintSizeId>(startMural ? "mural-4" : "letter");
+  const [printSize, setPrintSize] = useState<PrintSizeId>(muralMode ? "mural-4" : "letter");
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
   const difficulty = levelFor(printSize, detailShift);
@@ -530,16 +532,12 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
         <Link href="/" className="text-sm font-semibold text-violet-700 hover:underline dark:text-violet-300">
           ← All pages
         </Link>
-        <h1 className="mt-3 text-3xl font-bold tracking-tight">Color by Number</h1>
+        <h1 className="mt-3 text-3xl font-bold tracking-tight">{muralMode ? "Group mural 🧩" : "Color by Number"}</h1>
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Upload a photo, pick a print size, and get a printable color-by-number page.
+          {muralMode
+            ? "One picture split across several Letter sheets: everyone colors a sheet, then you put them together into a big picture. Great for classes, parties and family get-togethers."
+            : "Upload a photo, pick a print size, and get a printable color-by-number page."}
         </p>
-        <Link
-          href="/halloween"
-          className="mt-3 inline-flex items-center gap-2 rounded-full bg-orange-100 px-4 py-1.5 text-sm font-semibold text-orange-800 hover:bg-orange-200 dark:bg-orange-950 dark:text-orange-200 dark:hover:bg-orange-900"
-        >
-          🎃 Halloween pages to print
-        </Link>
       </header>
 
       <section className="flex flex-col gap-6 print:hidden">
@@ -583,55 +581,26 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
         </div>
 
         <div>
-          <h2 className="mb-2 font-semibold">2. Print size</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3" role="radiogroup">
-            {PRINT_SIZES.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={printSize === p.id}
-                onClick={() => {
-                  setPrintSize(p.id);
-                  // A nudge that does nothing at the new size goes back to standard.
-                  if (levelFor(p.id, detailShift) === levelFor(p.id, 0)) setDetailShift(0);
+          <h2 className="mb-2 font-semibold">{muralMode ? "2. How many sheets" : "2. Print size"}</h2>
+          {muralMode ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="How many sheets"
+                value={printSize}
+                onChange={(e) => {
+                  setPrintSize(e.target.value as PrintSizeId);
                   setResult(null);
                 }}
-                className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${
-                  printSize === p.id
-                    ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
-                    : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
-                }`}
+                className="rounded-lg border-2 border-violet-500 bg-white px-3 py-1.5 text-sm dark:bg-zinc-900"
               >
-                <div className="font-semibold">{p.label}</div>
-                <div className="text-sm text-zinc-600 dark:text-zinc-400">{p.blurb}</div>
-              </button>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span id="mural-label" className="text-sm font-medium">Or make a mural:</span>
-            <select
-              aria-labelledby="mural-label"
-              value={isMural(printSize) ? printSize : ""}
-              onChange={(e) => {
-                setPrintSize((e.target.value || "letter") as PrintSizeId);
-                setDetailShift(0);
-                setResult(null);
-              }}
-              className={`rounded-lg border-2 bg-white px-3 py-1.5 text-sm dark:bg-zinc-900 ${
-                isMural(printSize) ? "border-violet-500" : "border-zinc-200 dark:border-zinc-800"
-              }`}
-            >
-              <option value="">Choose how many sheets…</option>
-              {MURALS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                  {paymentsOn ? `: ${priceLabel(m.id)}` : ""}
-                </option>
-              ))}
-            </select>
-            {isMural(printSize) && (
-              <label className="flex items-center gap-2 text-sm">
+                {MURALS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                    {paymentsOn ? `: ${priceLabel(m.id)}` : ""}
+                  </option>
+                ))}
+              </select>
+              <label className="flex w-full items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   checked={extraColors}
@@ -643,49 +612,74 @@ export default function ColorByNumber({ startMural = false }: { startMural?: boo
                 />
                 Extra colorful: add fun colors to plain areas like sky, so every sheet has lots to color
               </label>
-            )}
-            {isMural(printSize) && (
-              <label className="flex items-center gap-2 text-sm">
+              <label className="flex w-full items-center gap-2 text-sm">
                 <input type="checkbox" checked={mystery} onChange={(e) => setMystery(e.target.checked)} className="h-4 w-4 accent-violet-600" />
                 Mystery mural: keep the picture a surprise until it&apos;s put together
               </label>
-            )}
-            <span className="w-full text-sm text-zinc-500">
-              One picture split across several Letter sheets: everyone colors a sheet, then you put them together into a big
-              picture. Great for classes, parties and family get-togethers.
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-zinc-500">
-            Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
-            regular paper with a dashed line to cut along; the picture fills the card.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">Detail:</span>
-            <div className="inline-flex rounded-full border border-zinc-200 p-0.5 dark:border-zinc-800" role="radiogroup" aria-label="Detail">
-              {DETAIL_SHIFTS.map((d) => (
-                <button
-                  key={d.shift}
-                  type="button"
-                  role="radio"
-                  aria-checked={detailShift === d.shift}
-                  // Already as simple (or detailed) as it gets at this size.
-                  disabled={d.shift !== 0 && levelFor(printSize, d.shift) === levelFor(printSize, 0)}
-                  onClick={() => {
-                    setDetailShift(d.shift);
-                    setResult(null);
-                  }}
-                  className={`rounded-full px-3 py-1 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
-                    detailShift === d.shift
-                      ? "bg-violet-600 text-white"
-                      : "text-zinc-600 hover:text-violet-700 dark:text-zinc-400 dark:hover:text-violet-300"
-                  }`}
-                >
-                  {d.label}
-                </button>
-              ))}
+              <span className="w-full text-sm text-zinc-500">
+                Tip: colorful pictures with color all the way to the edges make the best murals. After making it, tap Face to
+                show faces.
+              </span>
             </div>
-            <span className="text-sm text-zinc-500">{LEVEL_NAMES[difficulty]}</span>
-          </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3" role="radiogroup">
+                {PRINT_SIZES.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={printSize === p.id}
+                    onClick={() => {
+                      setPrintSize(p.id);
+                      // A nudge that does nothing at the new size goes back to standard.
+                      if (levelFor(p.id, detailShift) === levelFor(p.id, 0)) setDetailShift(0);
+                      setResult(null);
+                    }}
+                    className={`rounded-xl border-2 px-4 py-3 text-left transition-colors ${
+                      printSize === p.id
+                        ? "border-violet-500 bg-violet-50 dark:bg-violet-950/30"
+                        : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
+                    }`}
+                  >
+                    <div className="font-semibold">{p.label}</div>
+                    <div className="text-sm text-zinc-600 dark:text-zinc-400">{p.blurb}</div>
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-sm text-zinc-500">
+                Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
+                regular paper with a dashed line to cut along; the picture fills the card.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">Detail:</span>
+                <div className="inline-flex rounded-full border border-zinc-200 p-0.5 dark:border-zinc-800" role="radiogroup" aria-label="Detail">
+                  {DETAIL_SHIFTS.map((d) => (
+                    <button
+                      key={d.shift}
+                      type="button"
+                      role="radio"
+                      aria-checked={detailShift === d.shift}
+                      // Already as simple (or detailed) as it gets at this size.
+                      disabled={d.shift !== 0 && levelFor(printSize, d.shift) === levelFor(printSize, 0)}
+                      onClick={() => {
+                        setDetailShift(d.shift);
+                        setResult(null);
+                      }}
+                      className={`rounded-full px-3 py-1 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                        detailShift === d.shift
+                          ? "bg-violet-600 text-white"
+                          : "text-zinc-600 hover:text-violet-700 dark:text-zinc-400 dark:hover:text-violet-300"
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-sm text-zinc-500">{LEVEL_NAMES[difficulty]}</span>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
