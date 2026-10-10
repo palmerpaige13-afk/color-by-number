@@ -639,12 +639,14 @@ export async function makePage(
     pageWidth = frame.scene.width * k;
   }
   /** A mural's working image with its plain areas in extra colors (if asked), people left alone. */
-  // Faces and bare skin keep their own colors; clothes (a white robe) get gentler extra colors.
+  // Faces, hair and bare skin keep their own colors; clothes (a white robe) get gentler extra colors.
   const colored = (img: { width: number; height: number; data: Uint8ClampedArray }, faceBoxes: SubjectBox[], skin?: RegionMask, strength = 1) => {
     if (sheets <= 1 || !extraColors) return img.data;
     const sheetPx = img.width / (fit.mural ? fit.mural.cols : 1);
-    const inSkin = (x: number, y: number) =>
-      !!skin && x >= skin.x && y >= skin.y && x < skin.x + skin.width && y < skin.y + skin.height && !!skin.data[(y - skin.y) * skin.width + x - skin.x];
+    const inMask = (m: RegionMask | undefined, x: number, y: number) =>
+      !!m && x >= m.x && y >= m.y && x < m.x + m.width && y < m.y + m.height && !!m.data[(y - m.y) * m.width + x - m.x];
+    const hair = img === main ? faceBoxes.map((f) => (f as SubjectBox & { hair?: RegionMask }).hair).filter((m) => !!m) : [];
+    const inSkin = (x: number, y: number) => inMask(skin, x, y) || hair.some((m) => inMask(m, x, y));
     return colorful(
       img.data,
       img.width,

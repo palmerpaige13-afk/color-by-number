@@ -306,7 +306,15 @@ export function buildPage(
       byNumber[p] = c === result.background ? 0 : numbers[li][c];
       owner[p] = ownerOf(c);
     }
-    if (maxArea) breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab);
+    if (maxArea) {
+      // Faces, skin and hair are never broken up: a face in patches of random colors isn't a face.
+      const keep = new Uint8Array(w * h);
+      for (let p = 0; p < keep.length; p++) {
+        const kind = result.partKind?.[result.regionColor[labels[p]]];
+        keep[p] = kind === FACE || kind === HAIR ? 1 : 0;
+      }
+      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab, keep);
+    }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
     const regionKind = new Uint8Array(comps.count);
@@ -362,10 +370,19 @@ function blobs(w: number, h: number, cell: number, seed: number): Float32Array {
 
 /**
  * Murals: any shape (one number, one owner) bigger than `maxArea` (layer px²) is broken into
- * blob-shaped patches of the nearest other key colors, so no one piece fills much of a sheet.
+ * blob-shaped patches of the nearest other key colors, so no one piece fills much of a sheet
+ * (faces, skin and hair, marked in `keep`, are left whole).
  * Works on the final numbers, so the color count can't merge the patches back. In place.
  */
-function breakUpBig(byNumber: Uint8Array, owner: Uint8Array, w: number, h: number, maxArea: number, keyLab: Float32Array) {
+function breakUpBig(
+  byNumber: Uint8Array,
+  owner: Uint8Array,
+  w: number,
+  h: number,
+  maxArea: number,
+  keyLab: Float32Array,
+  keep: Uint8Array,
+) {
   const colors = keyLab.length / 3;
   const near = new Map<number, number[]>();
   const nearFor = (n: number) => {
@@ -396,7 +413,7 @@ function breakUpBig(byNumber: Uint8Array, owner: Uint8Array, w: number, h: numbe
     const a = blobs(w, h, cell, 11 + round * 97);
     const b = blobs(w, h, cell * 0.7, 23 + round * 89);
     for (let p = 0; p < w * h; p++) {
-      if (!big[comps.labels[p]]) continue;
+      if (!big[comps.labels[p]] || keep[p]) continue;
       const alts = nearFor(byNumber[p]);
       if (!alts.length) continue;
       if (a[p] > 0.2) byNumber[p] = alts[0];
