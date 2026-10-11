@@ -71,15 +71,20 @@ const PET_SHARE = 0.05;
 const SUBJECT_FILL = 0.8;
 
 /** A mural gets about this many shapes per sheet, up to MURAL_MAX_SHAPES in all. */
-const MURAL_SHAPES_PER_SHEET = 300;
+const MURAL_SHAPES_PER_SHEET = 135;
 const MURAL_MAX_SHAPES = 7000;
 /** A mural's numbers print this much smaller than a page's (about 4.5 pt), and its shapes can be this much smaller. */
 const MURAL_FONT = 0.75;
-const MURAL_SHAPE_SIZE = 0.5;
-/** No piece of a mural is bigger than this share of a sheet (1/30): bigger ones are broken up. */
-const MURAL_PIECES = 30;
+const MURAL_SHAPE_SIZE = 0.8;
+/**
+ * No piece of a mural is bigger than this share of a sheet (1/14): bigger ones are broken up.
+ * With the shape budget above, a sheet has about 150-200 shapes: 30-40 minutes to color.
+ */
+const MURAL_PIECES = 14;
 /** A mural's working raster grows with its size, up to this (long side, px). */
 const MURAL_MAX_WORKING = 2600;
+/** ...and is at least this, so small murals' sheets are as full as big ones'. */
+const MURAL_MIN_WORKING = 1800;
 /** A mural's colors, at most. */
 const MURAL_MAX_COLORS = 30;
 /** Detail kept everywhere on a mural (0-1: how much plain areas count as important). */
@@ -551,7 +556,7 @@ export async function makePage(
   // Every sheet should have something to color: a mural keeps detail everywhere (the sky's
   // shades of blue as shapes of their own), not just on the people.
   const even = (importance: Float32Array) => (sheets > 1 ? importance.map((v) => Math.max(v, MURAL_MIN_IMPORTANCE)) : importance);
-  const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 ? Math.min(MURAL_MAX_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets))) : WORKING_SIZE;
+  const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 ? Math.min(MURAL_MAX_WORKING, Math.max(MURAL_MIN_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets)))) : WORKING_SIZE;
 
   // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
   // around the people.
