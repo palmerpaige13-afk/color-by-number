@@ -8,6 +8,7 @@ import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { priceLabel } from "@/lib/price";
 import { CONTACT_EMAIL } from "@/lib/contact";
+import { MURAL_PICTURES, muralSrc, muralThumb, type MuralPicture } from "@/lib/murals";
 import { type Difficulty } from "@/lib/pipeline";
 import { drawPage, type Page } from "@/lib/page";
 import { muralPdf, pagePdf, saveFile, sheetName } from "@/lib/page-pdf";
@@ -442,8 +443,24 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     setHint(TOOLS.find((x) => x.id === t)?.hint ?? null);
   }
 
-  function pickFile(f: File | undefined) {
+  /** The gallery picture picked for a mural, if any (cleared when someone uploads their own). */
+  const [galleryPick, setGalleryPick] = useState<string | null>(null);
+
+  /** Picks a ready-made mural picture: loads it like an upload, with faces shown if it has people. */
+  async function pickMuralPicture(m: MuralPicture) {
+    setGalleryPick(m.id);
+    setShowFaces(m.faces);
+    try {
+      const blob = await (await fetch(muralSrc(m))).blob();
+      pickFile(new File([blob], `${m.id}.jpg`, { type: "image/jpeg" }), true);
+    } catch {
+      setError("Sorry, that picture didn't load. Check your connection and try again.");
+    }
+  }
+
+  function pickFile(f: File | undefined, fromGallery = false) {
     if (!f) return;
+    if (!fromGallery) setGalleryPick(null);
     if (!f.type.startsWith("image/")) {
       setError("That file isn't a photo. Try a JPG or PNG.");
       return;
@@ -541,8 +558,35 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
       </header>
 
       <section className="flex flex-col gap-6 print:hidden">
+        {muralMode && (
+          <div>
+            <h2 className="mb-2 font-semibold">1. Pick a picture</h2>
+            <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">
+              These are chosen to give every sheet lots of color. Or upload your own photo below.
+            </p>
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {MURAL_PICTURES.map((m) => (
+                <li key={m.id}>
+                  <button
+                    type="button"
+                    onClick={() => pickMuralPicture(m)}
+                    aria-pressed={galleryPick === m.id}
+                    className={`flex w-full flex-col overflow-hidden rounded-xl border-2 text-left transition-colors ${
+                      galleryPick === m.id ? "border-violet-500" : "border-zinc-200 hover:border-violet-300 dark:border-zinc-800"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- small static picture */}
+                    <img src={muralThumb(m)} alt="" className="aspect-[3/4] w-full object-cover" />
+                    <span className="px-2 pt-1.5 text-sm font-semibold">{m.title}</span>
+                    <span className="px-2 pb-1.5 text-xs text-zinc-500">{m.credit}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div>
-          <h2 className="mb-2 font-semibold">1. Upload a photo</h2>
+          <h2 className="mb-2 font-semibold">{muralMode ? "Or upload your own photo" : "1. Upload a photo"}</h2>
           <label
             onDragOver={(e) => {
               e.preventDefault();
