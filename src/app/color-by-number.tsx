@@ -79,6 +79,10 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
   const [extraColors, setExtraColors] = useState(true);
   const [printSize, setPrintSize] = useState<PrintSizeId>(muralMode ? "mural-4" : "letter");
+  /** Letter on the photo page can be split across 2 or 4 sheets (same price as one page). */
+  const [split, setSplit] = useState<1 | 2 | 4>(1);
+  /** The size the page is made at: the chosen size, or a 2- or 4-sheet split of Letter. */
+  const pageSize: PrintSizeId = !muralMode && printSize === "letter" && split > 1 ? (split === 2 ? "mural-2" : "mural-4") : printSize;
   /** The print size decides the detail; people can make it one step simpler or more detailed. */
   const [detailShift, setDetailShift] = useState<-1 | 0 | 1>(0);
   const difficulty = levelFor(printSize, detailShift);
@@ -417,7 +421,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
           difficulty,
           // Every page keeps the scene around the people (reports still say so).
           background: "keep",
-          print_size: printSize,
+          print_size: pageSize,
           people: made.current.people,
           faces: made.current.faces,
           shapes_before: made.current.shapes,
@@ -504,7 +508,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     }
     const { page, fit: pageFit, shows, people, faces } = await makePage(
       photo,
-      { printSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide, colorful: extraColors },
+      { printSize: pageSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide, colorful: muralMode && extraColors, ownColors: !muralMode },
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);
@@ -533,7 +537,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(fit.mural ? await muralPdf(result, fit, { mystery }) : await pagePdf(result, fit), `color-by-number-${printSize}.pdf`);
+      saveFile(fit.mural ? await muralPdf(result, fit, { mystery }) : await pagePdf(result, fit), `color-by-number-${pageSize}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF. Try a smaller print size.");
     } finally {
@@ -542,8 +546,11 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   }
 
   const key = result?.key ?? [];
-  const sizeLabel = PRINT_SIZES.find((p) => p.id === printSize)?.label ?? `mural, ${MURALS.find((m) => m.id === printSize)?.label}`;
-  /** What the download costs: a mural is priced by its number of sheets. */
+  const sizeLabel =
+    pageSize !== printSize
+      ? `Letter, ${split} sheets`
+      : (PRINT_SIZES.find((p) => p.id === printSize)?.label ?? `mural, ${MURALS.find((m) => m.id === printSize)?.label}`);
+  /** What the download costs: a mural is priced by its number of sheets; a split Letter page is one photo. */
   const product = isMural(printSize) ? printSize : "photo";
 
   return (
@@ -694,6 +701,35 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                   </button>
                 ))}
               </div>
+              {printSize === "letter" && (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">Sheets:</span>
+                  <div className="inline-flex rounded-full border border-zinc-200 p-0.5 dark:border-zinc-800" role="radiogroup" aria-label="Sheets">
+                    {([1, 2, 4] as const).map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        role="radio"
+                        aria-checked={split === n}
+                        onClick={() => {
+                          setSplit(n);
+                          setResult(null);
+                        }}
+                        className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                          split === n
+                            ? "bg-violet-600 text-white"
+                            : "text-zinc-600 hover:text-violet-700 dark:text-zinc-400 dark:hover:text-violet-300"
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-sm text-zinc-500">
+                    {split === 1 ? "One page" : `A bigger picture in ${split} pieces to tape together, same price`}
+                  </span>
+                </div>
+              )}
               <p className="mt-2 text-sm text-zinc-500">
                 Bigger paper fits more small shapes while keeping every number easy to read. 4 × 6 and 5 × 7 print on
                 regular paper with a dashed line to cut along; the picture fills the card.

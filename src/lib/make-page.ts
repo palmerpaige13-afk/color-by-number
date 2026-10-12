@@ -377,6 +377,18 @@ function toAspect(r: Rect, aspect: number, focus: Rect): Rect {
   };
 }
 
+/** `r` grown toward the shape `aspect` (width / height), centered, as far as the photo allows. */
+function widen(r: Rect, aspect: number, photo: { width: number; height: number }): Rect {
+  const width = r.width / r.height < aspect ? Math.min(photo.width, r.height * aspect) : r.width;
+  const height = r.width / r.height < aspect ? r.height : Math.min(photo.height, r.width / aspect);
+  return {
+    x: Math.min(photo.width - width, Math.max(0, r.x + (r.width - width) / 2)),
+    y: Math.min(photo.height - height, Math.max(0, r.y + (r.height - height) / 2)),
+    width,
+    height,
+  };
+}
+
 /** The overlap of two rectangles. */
 function intersect(a: Rect, b: Rect): Rect {
   const x = Math.max(a.x, b.x);
@@ -512,6 +524,11 @@ export interface PageChoices {
   zoomOut: boolean;
   /** A mural's plain areas in extra colors (see COLORFUL_HUE). */
   colorful?: boolean;
+  /**
+   * Sheets of someone's own photo (Letter split in 2 or 4): the photo's own colors and pieces,
+   * as on one page; no extra colors, no limit on colors, no big pieces broken up.
+   */
+  ownColors?: boolean;
 }
 
 export interface MadePage {
@@ -528,10 +545,11 @@ export interface MadePage {
 /** Makes a page. `onStep` hears each step as it starts, and `onNote` what was found. */
 export async function makePage(
   photo: Photo,
-  { printSize, difficulty, faces: withFaces, zoomOut, colorful: extraColors = false }: PageChoices,
+  { printSize, difficulty, faces: withFaces, zoomOut, colorful: askedColorful, ownColors = false }: PageChoices,
   { onStep, onNote }: { onStep?: (step: string) => void; onNote?: (note: string) => void } = {},
 ): Promise<MadePage> {
   const { full } = photo;
+  const extraColors = !!askedColorful && !ownColors;
   // Expert pages (ready-made animal art) are one detailed scene: no people or pets are looked
   // for, so nothing is cut out and simplified the way people are.
   const plain = difficulty === "expert";
@@ -552,11 +570,11 @@ export async function makePage(
         }
       : base;
   // A mural's colors are shared by everyone coloring it: few enough for one box of markers.
-  const maxColors = sheets > 1 ? MURAL_MAX_COLORS : Infinity;
+  const maxColors = sheets > 1 && !ownColors ? MURAL_MAX_COLORS : Infinity;
   // Every sheet should have something to color: a mural keeps detail everywhere (the sky's
   // shades of blue as shapes of their own), not just on the people.
   const even = (importance: Float32Array) => (sheets > 1 ? importance.map((v) => Math.max(v, MURAL_MIN_IMPORTANCE)) : importance);
-  const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 ? Math.min(MURAL_MAX_WORKING, Math.max(MURAL_MIN_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets)))) : WORKING_SIZE;
+  const workingSize = plain ? EXPERT_WORKING_SIZE : sheets > 1 && !ownColors ? Math.min(MURAL_MAX_WORKING, Math.max(MURAL_MIN_WORKING, Math.round(WORKING_SIZE * Math.sqrt(sheets)))) : WORKING_SIZE;
 
   // A card (4 × 6, 5 × 7) is filled edge to edge, so the picture is trimmed to its shape,
   // around the people.
@@ -564,7 +582,9 @@ export async function makePage(
   if (frame) {
     const shape = pictureShape(printSize, frame.scene.width / frame.scene.height);
     if (shape) {
-      const scene = toAspect(frame.scene, shape, frame.subjects);
+      // Sheets of someone's photo take in more of the photo around the people before trimming
+      // any of it, so no one at the edge is cut off.
+      const scene = toAspect(ownColors ? widen(frame.scene, shape, full) : frame.scene, shape, frame.subjects);
       const subjects = intersect(frame.subjects, scene);
       const moved = { x: frame.subjects.x - subjects.x, y: frame.subjects.y - subjects.y };
       const animals = frame.animals.map((a) => ({ ...a, x: a.x + moved.x, y: a.y + moved.y }));
@@ -663,7 +683,7 @@ export async function makePage(
     );
   };
   /** A mural's biggest piece (page px²): a share of a sheet. */
-  const maxPiece = sheets > 1 ? (pageWidth * pageWidth * (fit.h / fit.w)) / sheets / MURAL_PIECES : undefined;
+  const maxPiece = sheets > 1 && !ownColors ? (pageWidth * pageWidth * (fit.h / fit.w)) / sheets / MURAL_PIECES : undefined;
   const budget = (share: number) => ({
     ...params,
     maxShapes: params.maxShapes && Math.round(params.maxShapes * share),
