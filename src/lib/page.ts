@@ -344,6 +344,37 @@ export function buildPage(
   return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac };
 }
 
+/**
+ * Hairline gaps where one layer ends and the one under it doesn't quite start (white specks
+ * along a person's edge) take the color around them. A pixel is a gap when three of its four
+ * neighbors are painted, or there's color on both sides of it (within two pixels), so the edge
+ * of a big blank area is left alone. In place.
+ */
+function fillGaps(data: Uint8ClampedArray, painted: Uint8Array, W: number, H: number) {
+  for (let pass = 0; pass < 3; pass++) {
+    const fill: [number, number][] = [];
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const p = y * W + x;
+        if (painted[p]) continue;
+        const n = painted[p - 1] + painted[p + 1] + painted[p - W] + painted[p + W];
+        // Color on both opposite sides (up to two pixels away) is a gap, not the edge of a blank area.
+        const across =
+          (painted[p - W] && (painted[p + W] || (y < H - 2 && painted[p + 2 * W]))) ||
+          (painted[p - 1] && (painted[p + 1] || (x < W - 2 && painted[p + 2])));
+        if (n >= 3 || across) fill.push([p, painted[p - W] ? p - W : painted[p - 1] ? p - 1 : painted[p + 1] ? p + 1 : p + W]);
+      }
+    }
+    if (!fill.length) return;
+    for (const [p, q] of fill) {
+      data[p * 4] = data[q * 4];
+      data[p * 4 + 1] = data[q * 4 + 1];
+      data[p * 4 + 2] = data[q * 4 + 2];
+      painted[p] = 1;
+    }
+  }
+}
+
 /** A shape broken up by breakUpBig takes patches of the nearest other key colors at least this far (ΔE)... */
 const BREAKUP_MIN = 6;
 /** ...and at most this far, so it still reads as the same thing (a robe's creams and golds). */
@@ -450,6 +481,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
   const ctx = canvas.getContext("2d")!;
   const img = ctx.createImageData(W, H);
   img.data.fill(255);
+  /** Pixels some layer painted (the rest is the blank paper). */
+  const painted = new Uint8Array(W * H);
 
   // Numbers follow the whole page's width (a share of it), so a mural's sheets match each other.
   const MIN_FONT = minFont(fullW, page.fontFrac);
@@ -478,6 +511,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
         const l = labels[at(X, Y)];
         if (blank(l)) continue; // leave whatever is underneath
         const rgb: RGB = view === "colored" ? color(regionColor[l]) : [255, 255, 255];
+        painted[Y * W + X] = 1;
         const q = (Y * W + X) * 4;
         img.data[q] = rgb[0];
         img.data[q + 1] = rgb[1];
@@ -485,6 +519,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       }
     }
   });
+  if (view === "colored") fillGaps(img.data, painted, W, H);
   ctx.putImageData(img, 0, 0);
 
   // Outlines: smooth lines along every border between shapes (and around a cut-out).
