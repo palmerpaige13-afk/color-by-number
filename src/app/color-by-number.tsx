@@ -96,6 +96,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   /** Picture choices by Fix it: faces with eyes, nose and mouth; the whole photo, not framed closer. */
   const [showFaces, setShowFaces] = useState(false);
   const [zoomOut, setZoomOut] = useState(false);
+  /** Whether zooming changes anything: the photo has people framed closer than the whole photo. */
+  const [canZoom, setCanZoom] = useState(false);
   /** The photo, and the people and faces found in it, kept while it's the same photo (see generate). */
   const photoCache = useRef<Photo | null>(null);
   /** The part of the photo the page shows, and whether the photo is shown in its place. */
@@ -506,6 +508,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);
+    setCanZoom(!!photo.frame);
     pageShows.current = shows;
     setPeek(false);
     made.current = { people, faces, shapes: page.shapes, colors: page.key.length };
@@ -769,20 +772,22 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
             >
               {showFaces ? "Face" : "No face"}
             </button>
-            <button
-              type="button"
-              aria-pressed={zoomOut}
-              disabled={!!busy}
-              title={zoomOut ? "The whole photo, with more background. Click to focus on the people." : "Focused on the people. Click for the whole photo."}
-              onClick={() => {
-                if (fixLog.length && !window.confirm("Zooming remakes the page, so the fixes you made will be lost. Zoom anyway?")) return;
-                setZoomOut(!zoomOut);
-                generate({ zoomOut: !zoomOut });
-              }}
-              className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
-            >
-              {zoomOut ? "Zoom out" : "Zoom in"}
-            </button>
+            {canZoom && (
+              <button
+                type="button"
+                aria-pressed={zoomOut}
+                disabled={!!busy}
+                title={zoomOut ? "The whole photo, with more background. Click to focus on the people." : "Focused on the people. Click for the whole photo."}
+                onClick={() => {
+                  if (fixLog.length && !window.confirm("Zooming remakes the page, so the fixes you made will be lost. Zoom anyway?")) return;
+                  setZoomOut(!zoomOut);
+                  generate({ zoomOut: !zoomOut });
+                }}
+                className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-violet-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+              >
+                {zoomOut ? "Zoom in on the people" : "Show the whole photo"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
