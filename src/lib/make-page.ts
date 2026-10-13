@@ -30,10 +30,6 @@ const SKIN_WARM_BELOW = 10;
 const SKIN_MAX_WARM = 3;
 /** Skin darker than this (Lab L) isn't warmed; up to twice it, partly. */
 const SKIN_DARK = 35;
-/** A face in shade (typical lightness below this, Lab L) is lifted toward it... */
-const FACE_LIT_L = 62;
-/** ...by at most this much. */
-const FACE_MAX_LIFT = 12;
 
 
 /** Faces smaller than this share of the picture keep the photo's shared colors (too small for colors of their own). */
@@ -329,37 +325,6 @@ async function framing(
  * shifted toward red by however much the face's typical color is short of it. Other things keep
  * their colors. Returns a copy of the pixels.
  */
-/**
- * A face in shade, shown in the photo's own colors, lifted toward normal light so it reads as
- * skin and its smile shows: only its skin (eyes, brows and the inside of a mouth, being dark,
- * are lifted less, so they stand out more). Faces in good light are left as they are.
- */
-function liftShadedFaces(data: Uint8ClampedArray, width: number, faces: SubjectBox[]): Uint8ClampedArray {
-  const out = Uint8ClampedArray.from(data);
-  const lab = new Float32Array(3);
-  for (const f of faces) {
-    const m = f.skin;
-    if (!m) continue;
-    const px: number[] = [];
-    for (let y = 0; y < m.height; y++) {
-      for (let x = 0; x < m.width; x++) {
-        const wx = m.x + x, wy = m.y + y;
-        if (m.data[y * m.width + x] && wx >= 0 && wx < width && wy >= 0 && wy * width + wx < data.length / 4) px.push(wy * width + wx);
-      }
-    }
-    if (px.length < 20) continue;
-    const L = px.map((p) => (rgbToLab(out[p * 4], out[p * 4 + 1], out[p * 4 + 2], lab, 0), lab[0])).sort((a, b) => a - b);
-    const up = Math.min(FACE_MAX_LIFT, Math.max(0, FACE_LIT_L - L[L.length >> 1]));
-    if (!up) continue;
-    for (const p of px) {
-      rgbToLab(out[p * 4], out[p * 4 + 1], out[p * 4 + 2], lab, 0);
-      const rgb = labToRgb(Math.min(100, lab[0] + up * Math.min(1, Math.max(0, (lab[0] - 25) / 30))), lab[1], lab[2]);
-      for (let c = 0; c < 3; c++) out[p * 4 + c] = Math.max(0, Math.min(255, Math.round(rgb[c])));
-    }
-  }
-  return out;
-}
-
 function warmSkin(data: Uint8ClampedArray, width: number, faces: SubjectBox[], bodySkin?: RegionMask): Uint8ClampedArray {
   const out = Uint8ClampedArray.from(data);
   const lab = new Float32Array(3);
@@ -742,7 +707,7 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: liftShadedFaces(warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), main.width, faces), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined, colors: f.width * f.height < main.width * main.height * OWN_FACE_MIN_SHARE ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin: ownColors ? bodySkin : undefined, faceStyle: "own" as const, cutout }
+      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined, colors: f.width * f.height < main.width * main.height * OWN_FACE_MIN_SHARE ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin: ownColors ? bodySkin : undefined, faceStyle: "own" as const, cutout }
       : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
