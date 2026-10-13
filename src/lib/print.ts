@@ -36,8 +36,12 @@ export interface MuralLayout {
   cellH: number;
 }
 
-/** The grid of sheets whose shape is closest to `aspect` (width / height). */
-export function muralLayout(id: MuralId, aspect: number): MuralLayout {
+/**
+ * The grid of sheets whose shape is closest to `aspect` (width / height). With `whole`, the
+ * picture on each sheet is made a little narrower or shorter so the grid is exactly the
+ * picture's shape: the whole picture fits, with wider margins, and none of it is trimmed.
+ */
+export function muralLayout(id: MuralId, aspect: number, whole = false): MuralLayout {
   const n = MURALS.find((m) => m.id === id)!.sheets;
   const k = Math.round(Math.sqrt(n));
   const grids = k * k === n ? [[k, k]] : [[n, 1], [1, n]];
@@ -50,6 +54,11 @@ export function muralLayout(id: MuralId, aspect: number): MuralLayout {
       const miss = (l: MuralLayout) => Math.abs(Math.log((l.cols * l.cellW) / (l.rows * l.cellH) / aspect));
       if (!best || miss(layout) < miss(best)) best = layout;
     }
+  }
+  if (whole) {
+    const b = best!;
+    if ((b.cols * b.cellW) / (b.rows * b.cellH) > aspect) b.cellW = (aspect * b.rows * b.cellH) / b.cols;
+    else b.cellH = (b.cols * b.cellW) / (aspect * b.rows);
   }
   return best!;
 }
@@ -111,9 +120,9 @@ export interface Fit {
  * picture (already trimmed to the card's shape) fills it edge to edge; its edge is the line
  * to cut along.
  */
-export function fitOnPaper(aspect: number, id: PrintSizeId): Fit {
+export function fitOnPaper(aspect: number, id: PrintSizeId, whole = false): Fit {
   if (isMural(id)) {
-    const mural = muralLayout(id, aspect);
+    const mural = muralLayout(id, aspect, whole);
     const w = mural.cols * mural.cellW;
     const h = mural.rows * mural.cellH;
     return { paperW: w, paperH: h, x: 0, y: 0, w, h, mural };

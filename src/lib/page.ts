@@ -20,6 +20,8 @@ export interface Layer {
   outlineBlank: boolean;
   /** Keep this layer's colors as they are (people): no cooling nudge for backgrounds. */
   natural?: boolean;
+  /** The people layer: never broken up in `gentle` mode (see buildPage). */
+  people?: boolean;
 }
 
 export interface Page {
@@ -141,6 +143,11 @@ export function buildPage(
   maxColors = Infinity,
   /** Biggest shape (page px²): bigger ones are broken into patches of the nearest other colors (murals). */
   maxArea?: number,
+  /**
+   * Someone's own photo on sheets: only the background is broken up (people, their clothes and
+   * pets stay whole), and only into its own nearby shades (up to BREAKUP_GENTLE_MAX apart).
+   */
+  gentle = false,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
@@ -306,14 +313,14 @@ export function buildPage(
       byNumber[p] = c === result.background ? 0 : numbers[li][c];
       owner[p] = ownerOf(c);
     }
-    if (maxArea) {
+    if (maxArea && !(gentle && layer.people)) {
       // Faces, skin and hair are never broken up: a face in patches of random colors isn't a face.
       const keep = new Uint8Array(w * h);
       for (let p = 0; p < keep.length; p++) {
         const kind = result.partKind?.[result.regionColor[labels[p]]];
-        keep[p] = kind === FACE || kind === HAIR ? 1 : 0;
+        keep[p] = kind === FACE || kind === HAIR || (gentle && (kind === CLOTHES || kind === PET)) ? 1 : 0;
       }
-      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab, keep);
+      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX);
     }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
@@ -379,6 +386,8 @@ function fillGaps(data: Uint8ClampedArray, painted: Uint8Array, W: number, H: nu
 const BREAKUP_MIN = 6;
 /** ...and at most this far, so it still reads as the same thing (a robe's creams and golds). */
 const BREAKUP_MAX = 45;
+/** ...or this, for someone's own photo: the sky in its own shades of blue, nothing else. */
+const BREAKUP_GENTLE_MAX = 13;
 
 /** Smooth random values (-1..1) over a w × h grid, varying over about `cell` cells. */
 function blobs(w: number, h: number, cell: number, seed: number): Float32Array {
@@ -413,6 +422,7 @@ function breakUpBig(
   maxArea: number,
   keyLab: Float32Array,
   keep: Uint8Array,
+  maxDelta = BREAKUP_MAX,
 ) {
   const colors = keyLab.length / 3;
   const near = new Map<number, number[]>();
@@ -423,7 +433,7 @@ function breakUpBig(
     for (let o = 1; o <= colors; o++) {
       if (o === n) continue;
       const d = Math.sqrt(labDist2(keyLab, (n - 1) * 3, keyLab, (o - 1) * 3));
-      if (d >= BREAKUP_MIN && d <= BREAKUP_MAX) list.push([o, d]);
+      if (d >= BREAKUP_MIN && d <= maxDelta) list.push([o, d]);
     }
     list.sort((a, b) => a[1] - b[1]);
     found = list.slice(0, 3).map(([o]) => o);

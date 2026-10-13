@@ -81,6 +81,8 @@ const MURAL_SHAPE_SIZE = 0.8;
  * With the shape budget above, a sheet has about 150-200 shapes: 30-40 minutes to color.
  */
 const MURAL_PIECES = 14;
+/** On sheets of someone's own photo, no piece is bigger than this share of a sheet (1/7). */
+const OWN_SHEET_PIECES = 7;
 /** A mural's working raster grows with its size, up to this (long side, px). */
 const MURAL_MAX_WORKING = 2600;
 /** ...and is at least this, so small murals' sheets are as full as big ones'. */
@@ -377,18 +379,6 @@ function toAspect(r: Rect, aspect: number, focus: Rect): Rect {
   };
 }
 
-/** `r` grown toward the shape `aspect` (width / height), centered, as far as the photo allows. */
-function widen(r: Rect, aspect: number, photo: { width: number; height: number }): Rect {
-  const width = r.width / r.height < aspect ? Math.min(photo.width, r.height * aspect) : r.width;
-  const height = r.width / r.height < aspect ? r.height : Math.min(photo.height, r.width / aspect);
-  return {
-    x: Math.min(photo.width - width, Math.max(0, r.x + (r.width - width) / 2)),
-    y: Math.min(photo.height - height, Math.max(0, r.y + (r.height - height) / 2)),
-    width,
-    height,
-  };
-}
-
 /** The overlap of two rectangles. */
 function intersect(a: Rect, b: Rect): Rect {
   const x = Math.max(a.x, b.x);
@@ -580,18 +570,17 @@ export async function makePage(
   // around the people.
   let photoRect: Rect = { x: 0, y: 0, width: full.width, height: full.height };
   if (frame) {
-    const shape = pictureShape(printSize, frame.scene.width / frame.scene.height);
+    // Sheets of someone's photo show all of it (see muralLayout's `whole`): nothing is trimmed.
+    const shape = ownColors && isMural(printSize) ? null : pictureShape(printSize, frame.scene.width / frame.scene.height);
     if (shape) {
-      // Sheets of someone's photo take in more of the photo around the people before trimming
-      // any of it, so no one at the edge is cut off.
-      const scene = toAspect(ownColors ? widen(frame.scene, shape, full) : frame.scene, shape, frame.subjects);
+      const scene = toAspect(frame.scene, shape, frame.subjects);
       const subjects = intersect(frame.subjects, scene);
       const moved = { x: frame.subjects.x - subjects.x, y: frame.subjects.y - subjects.y };
       const animals = frame.animals.map((a) => ({ ...a, x: a.x + moved.x, y: a.y + moved.y }));
       frame = { scene, subjects, animals };
     }
   } else {
-    const shape = pictureShape(printSize, full.width / full.height);
+    const shape = ownColors && isMural(printSize) ? null : pictureShape(printSize, full.width / full.height);
     if (shape) photoRect = toAspect(photoRect, shape, photoRect);
   }
 
@@ -651,7 +640,7 @@ export async function makePage(
   // The print size decides how small numbers (and so shapes) can be: the smallest number is
   // a fixed share of the picture's width, from how wide it will be printed.
   const pageRect = twoLayers && frame ? frame.scene : { width: main.width, height: main.height };
-  const fit = fitOnPaper(pageRect.width / pageRect.height, printSize);
+  const fit = fitOnPaper(pageRect.width / pageRect.height, printSize, ownColors);
   const fontFrac = fontFraction(fit.w) * (difficulty === "expert" ? EXPERT_FONT : sheets > 1 ? MURAL_FONT : 1);
 
   // How big each layer is drawn decides how small its shapes can be and stay readable.
@@ -683,7 +672,7 @@ export async function makePage(
     );
   };
   /** A mural's biggest piece (page px²): a share of a sheet. */
-  const maxPiece = sheets > 1 && !ownColors ? (pageWidth * pageWidth * (fit.h / fit.w)) / sheets / MURAL_PIECES : undefined;
+  const maxPiece = sheets > 1 ? (pageWidth * pageWidth * (fit.h / fit.w)) / sheets / (ownColors ? OWN_SHEET_PIECES : MURAL_PIECES) : undefined;
   const budget = (share: number) => ({
     ...params,
     maxShapes: params.maxShapes && Math.round(params.maxShapes * share),
@@ -733,9 +722,10 @@ export async function makePage(
         scale: mainScale,
         outlineBlank: true,
         natural: photoColors,
+        people: true,
       },
     ];
-    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece);
+    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors);
   } else {
     page = buildPage(
       main.width * SCALE,
@@ -746,6 +736,7 @@ export async function makePage(
       COOL_BOOST[difficulty],
       maxColors,
       maxPiece,
+      ownColors,
     );
   }
   return { page, fit, shows: frame?.scene ?? photoRect, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };
