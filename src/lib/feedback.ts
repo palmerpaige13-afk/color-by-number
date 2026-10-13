@@ -138,3 +138,30 @@ export function countVisit() {
     keepalive: true,
   }).catch(() => {});
 }
+
+/** Photos already counted as tried in this browser tab (see countTry). */
+const TRIED_KEY = "counted-tries";
+
+/**
+ * Counts one try: someone made a page from a photo (`photo` says which, so making it again with
+ * Face, zoom or another size doesn't count twice). The kind of page, its size, the device and
+ * where the visit came from; nothing about the photo. Not counted while testing locally or on
+ * the owner's visits (see countVisit).
+ */
+export function countTry(photo: string, kind: string, printSize: string) {
+  if (["localhost", "127.0.0.1"].includes(window.location.hostname)) return;
+  try {
+    if (sessionStorage.getItem(VISIT_KEY) === "owner") return;
+    const tried: string[] = JSON.parse(sessionStorage.getItem(TRIED_KEY) ?? "[]");
+    if (tried.includes(photo)) return;
+    sessionStorage.setItem(TRIED_KEY, JSON.stringify([...tried, photo].slice(-50)));
+  } catch {
+    // Private browsing without storage: count it anyway.
+  }
+  fetch(`${SUPABASE_URL}/rest/v1/tries`, {
+    method: "POST",
+    headers: { ...headers, "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ device: device(), kind, print_size: printSize, source: visitSource(), app_version: APP_VERSION }),
+    keepalive: true,
+  }).catch(() => {});
+}

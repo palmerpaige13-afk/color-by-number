@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { addColor, cleanUp, cutPiece, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
-import { sendReport, type FixEntry } from "@/lib/feedback";
+import { countTry, sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { priceLabel } from "@/lib/price";
@@ -516,6 +516,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     );
     setFit(pageFit);
     setCanZoom(!!photo.frame);
+    countTry(`${file.name}:${file.size}:${file.lastModified}`, muralMode ? (galleryPick ? "mural-gallery" : "mural") : "photo", pageSize);
     pageShows.current = shows;
     setPeek(false);
     made.current = { people, faces, shapes: page.shapes, colors: page.key.length };

@@ -76,6 +76,13 @@ function Visits({ stats }: { stats: VisitStats }) {
       <p>
         <span className="text-2xl font-bold">{stats.total}</span> visits · <span className="font-semibold">{stats.today}</span> today
       </p>
+      <p>
+        <span className="text-2xl font-bold">{stats.tried}</span> tried a photo · <span className="font-semibold">{stats.triedToday}</span> today
+        {stats.total > 0 && <span className="text-zinc-500"> ({Math.round((stats.tried / stats.total) * 100)}% of visits)</span>}
+      </p>
+      {stats.triedByKind.length > 0 && (
+        <ul className="flex flex-col gap-0.5">{stats.triedByKind.map(([k, n]) => row(k, n))}</ul>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <h3 className="mb-1 font-semibold text-zinc-600 dark:text-zinc-400">Where they came from</h3>

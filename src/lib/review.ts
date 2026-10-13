@@ -105,6 +105,10 @@ export interface VisitStats {
   byPage: [string, number][];
   /** Counting started later than `days` ago (the counts were reset): when, else undefined. */
   since?: string;
+  /** People who made a page from a photo (see countTry): how many, today's, and of what. */
+  tried: number;
+  triedToday: number;
+  triedByKind: [string, number][];
 }
 
 /** Visits are counted from here on (the counts were reset then; older visits are kept, just not counted). */
@@ -131,7 +135,21 @@ export async function loadVisitStats(days = 7): Promise<VisitStats> {
     for (const r of rows) m.set(key(r), (m.get(key(r)) ?? 0) + 1);
     return [...m].sort((a, b) => b[1] - a[1]);
   };
+  // Tries: pages made from a photo, counted since the same time (none before tries were counted).
+  const triesRes = await fetch(`${SUPABASE_URL}/rest/v1/tries?select=kind,print_size,created_at&created_at=gte.${since}&limit=50000`, {
+    headers: headers(),
+    cache: "no-store",
+  });
+  const tries = triesRes.ok ? ((await triesRes.json()) as { kind: string | null; print_size: string | null; created_at: string }[]) : [];
+  const kinds = new Map<string, number>();
+  for (const t of tries) {
+    const k = t.kind === "photo" ? `Photo, ${t.print_size ?? "?"}` : t.kind === "mural-gallery" ? "Mural, a gallery picture" : `Mural, ${t.print_size ?? "?"}`;
+    kinds.set(k, (kinds.get(k) ?? 0) + 1);
+  }
   return {
+    tried: tries.length,
+    triedToday: tries.filter((t) => day(t.created_at) === today).length,
+    triedByKind: [...kinds].sort((a, b) => b[1] - a[1]),
     days,
     total: rows.length,
     today: rows.filter((r) => day(r.created_at) === today).length,
