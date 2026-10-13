@@ -568,6 +568,10 @@ function breakUpBig(
 }
 
 const EDGE: RGB = [70, 70, 70];
+/** On the colored picture, lines are this much wider than on the page to color... */
+const COLORED_EDGE = 1.8;
+/** ...with a light middle of this color. */
+const COLORED_EDGE_LIGHT = "rgba(255, 255, 255, 0.6)";
 
 /** A part of the page (in page units): one sheet of a mural. */
 export interface PageRegion {
@@ -640,6 +644,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
   ctx.lineWidth = Math.max(1, W / 1500);
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
+  const edgeWidth = ctx.lineWidth;
   placed.forEach((layer) => {
     ctx.beginPath();
     for (const line of layerOutlines(layer.result, layer.outlineBlank)) {
@@ -648,7 +653,17 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
         ctx.lineTo(layer.x + line[i] * layer.scale, layer.y + line[i + 1] * layer.scale);
       }
     }
-    ctx.stroke();
+    if (view === "colored") {
+      // On the colored picture a dark line disappears into dark colors (a black dog, navy
+      // jeans): a dark line with a light middle shows on dark and light colors alike.
+      ctx.lineWidth = edgeWidth * COLORED_EDGE;
+      ctx.stroke();
+      ctx.strokeStyle = COLORED_EDGE_LIGHT;
+      ctx.lineWidth = edgeWidth * COLORED_EDGE * 0.45;
+      ctx.stroke();
+      ctx.strokeStyle = `rgb(${EDGE.join(",")})`;
+      ctx.lineWidth = edgeWidth;
+    } else ctx.stroke();
   });
 
   // Frame a full scene; a cut-out stands on its own.

@@ -276,6 +276,7 @@ async function framing(
   const found = await findPeople(full).catch(() => ({ people: [], animals: [], peopleReach: [], animalReach: [] }));
   const area = (b: { width: number; height: number }) => b.width * b.height;
   const biggest = Math.max(0, ...found.people.map(area));
+  const biggestReach = Math.max(0, ...found.people.map((b, i) => area(found.peopleReach[i] ?? b)));
   // People small in a big view (a canyon, a beach): the view stays as it is, but they still
   // get their own detailed layer, so their arms and legs don't melt into the ground.
   const small = biggest < MAIN_PERSON_SHARE * full.width * full.height;
@@ -285,7 +286,12 @@ async function framing(
   // Who's a subject is judged by their boxes; the frame then takes in all of each (a bride the
   // detector boxed only half of, a dog's body across someone's lap).
   const keep = [
-    ...found.people.flatMap((b, i) => (area(b) >= SIDE_PERSON_SHARE * biggest && !sliver(b) ? [found.peopleReach[i] ?? b] : [])),
+    // By the detector's box or each person's whole outline (reach), whichever says they're
+    // big enough: someone bent over (hugging a dog) is boxed only at their back and shoulders.
+    ...found.people.flatMap((b, i) => {
+      const big = area(b) >= SIDE_PERSON_SHARE * biggest || area(found.peopleReach[i] ?? b) >= SIDE_PERSON_SHARE * biggestReach;
+      return big && !sliver(b) ? [found.peopleReach[i] ?? b] : [];
+    }),
     ...found.animals.flatMap((b, i) => (area(b) >= PET_SHARE * biggest ? [found.animalReach[i] ?? b] : [])),
   ];
   const x0 = Math.min(...keep.map((b) => b.x));
