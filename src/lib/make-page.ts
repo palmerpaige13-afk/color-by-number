@@ -619,11 +619,15 @@ export async function makePage(
   if (frame) {
     // Sheets of someone's photo show all of it (see muralLayout's `whole`): nothing is trimmed.
     let shape = ownColors && isMural(printSize) ? null : pictureShape(printSize, frame.scene.width / frame.scene.height);
-    // A card turned the other way round when only that way holds everyone (a wide group on 5 × 7).
+    // A card turned the other way round when that way keeps more of the people (a wide group
+    // on 5 × 7): all of them if it can, else the most of them.
     if (shape && cardShape(printSize, true)) {
       const f = frame;
-      const holds = (a: number) => contains(fitAround(f.scene, a, f.subjects, full), f.subjects);
-      if (!holds(shape) && holds(1 / shape)) shape = 1 / shape;
+      const kept = (a: number) => {
+        const r = intersect(fitAround(f.scene, a, f.subjects, full), f.subjects);
+        return (Math.max(0, r.width) * Math.max(0, r.height)) / (f.subjects.width * f.subjects.height);
+      };
+      if (kept(1 / shape) > kept(shape) + 0.001) shape = 1 / shape;
     }
     if (shape) {
       // Trimmed to the card's shape around everyone: it takes in more of the photo rather than
