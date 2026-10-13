@@ -388,6 +388,19 @@ const BREAKUP_MIN = 6;
 const BREAKUP_MAX = 45;
 /** ...or this, for someone's own photo: the sky in its own shades of blue, nothing else. */
 const BREAKUP_GENTLE_MAX = 13;
+/** Below this chroma a color counts as grey. */
+const GREY_CHROMA = 8;
+
+/** Whether key colors `i` and `j` are shades of the same color (hue within 30°, or both grey). */
+function sameHue(keyLab: Float32Array, i: number, j: number) {
+  const ci = Math.hypot(keyLab[i * 3 + 1], keyLab[i * 3 + 2]);
+  const cj = Math.hypot(keyLab[j * 3 + 1], keyLab[j * 3 + 2]);
+  let dh = Math.abs(Math.atan2(keyLab[i * 3 + 2], keyLab[i * 3 + 1]) - Math.atan2(keyLab[j * 3 + 2], keyLab[j * 3 + 1]));
+  if (dh > Math.PI) dh = 2 * Math.PI - dh;
+  // Greys: only other greys of the same tint (a blue-grey sky never takes a warm taupe).
+  if (ci < GREY_CHROMA || cj < GREY_CHROMA) return ci < GREY_CHROMA && cj < GREY_CHROMA && (Math.min(ci, cj) < 2 || dh <= Math.PI / 3);
+  return dh <= Math.PI / 6;
+}
 
 /** Smooth random values (-1..1) over a w × h grid, varying over about `cell` cells. */
 function blobs(w: number, h: number, cell: number, seed: number): Float32Array {
@@ -433,7 +446,11 @@ function breakUpBig(
     for (let o = 1; o <= colors; o++) {
       if (o === n) continue;
       const d = Math.sqrt(labDist2(keyLab, (n - 1) * 3, keyLab, (o - 1) * 3));
-      if (d >= BREAKUP_MIN && d <= maxDelta) list.push([o, d]);
+      if (d < BREAKUP_MIN || d > maxDelta) continue;
+      // Gentle (someone's own photo): only shades of the same color, so a grey sky never takes
+      // the sand's beige. A nearly grey color takes only other greys.
+      if (maxDelta === BREAKUP_GENTLE_MAX && !sameHue(keyLab, n - 1, o - 1)) continue;
+      list.push([o, d]);
     }
     list.sort((a, b) => a[1] - b[1]);
     found = list.slice(0, 3).map(([o]) => o);

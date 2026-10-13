@@ -20,6 +20,8 @@ export interface FaceShape extends Box {
   skin?: RegionMask;
   /** Hair mask from segmentation; hair is simplified like background. */
   hair?: RegionMask;
+  /** Hair the face never grows into, though it stays in the photo's own colors (not a part). */
+  hairBlock?: RegionMask;
 }
 
 /** A 0/1 mask covering a rectangle of working pixels. */
@@ -103,6 +105,8 @@ export interface PipelineInput {
   bodySkin?: RegionMask;
   /** What the people hold or wear besides clothes (a bouquet, a watch, shoes). */
   held?: RegionMask;
+  /** Pets in colors of their own fur. */
+  petColors?: boolean;
 }
 
 export interface PipelineResult {
