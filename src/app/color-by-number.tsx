@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, cutPiece, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
@@ -379,6 +379,9 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     // Where the line was drawn (its ends), as shares of the page.
     const ends = [line[0], line[line.length - 1]].flatMap(([x, y]) => [Math.round((x / result.width) * 1000) / 1000, Math.round((y / result.height) * 1000) / 1000]);
     apply(next, spot ? { tool: "line", ...describe(result, spot), line: ends } : undefined);
+    // The piece the line cut off is shown picked, so the cut can be seen even on a dark shape
+    // (whose new outline is dark on dark).
+    if (typeof next !== "string" && spot) setPicked(cutPiece(result, next, spot));
   }
 
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
