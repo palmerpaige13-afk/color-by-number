@@ -103,11 +103,17 @@ export interface VisitStats {
   today: number;
   bySource: [string, number][];
   byPage: [string, number][];
+  /** Counting started later than `days` ago (the counts were reset): when, else undefined. */
+  since?: string;
 }
+
+/** Visits are counted from here on (the counts were reset then; older visits are kept, just not counted). */
+const VISITS_COUNTED_FROM = "2026-10-13T03:35:00Z";
 
 /** How many people visited lately, and where from (Facebook, Instagram, a shared link…). */
 export async function loadVisitStats(days = 7): Promise<VisitStats> {
-  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const lastDays = new Date(Date.now() - days * 86_400_000).toISOString();
+  const since = lastDays > VISITS_COUNTED_FROM ? lastDays : VISITS_COUNTED_FROM;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/visits?select=source,page,created_at&created_at=gte.${since}&limit=50000`, {
     headers: headers(),
     cache: "no-store",
@@ -131,6 +137,7 @@ export async function loadVisitStats(days = 7): Promise<VisitStats> {
     today: rows.filter((r) => day(r.created_at) === today).length,
     bySource: count((r) => r.source ?? "not tracked yet"),
     byPage: count((r) => r.page ?? "?"),
+    since: since === VISITS_COUNTED_FROM ? since : undefined,
   };
 }
 

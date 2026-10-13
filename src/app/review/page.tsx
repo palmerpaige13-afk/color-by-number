@@ -66,7 +66,12 @@ function Visits({ stats }: { stats: VisitStats }) {
   return (
     <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800">
       <h2 className="text-lg font-bold">
-        Visits <span className="text-sm font-normal text-zinc-500">last {stats.days} days</span>
+        Visits{" "}
+        <span className="text-sm font-normal text-zinc-500">
+          {stats.since
+            ? `since ${new Date(stats.since).toLocaleString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+            : `last ${stats.days} days`}
+        </span>
       </h2>
       <p>
         <span className="text-2xl font-bold">{stats.total}</span> visits · <span className="font-semibold">{stats.today}</span> today
