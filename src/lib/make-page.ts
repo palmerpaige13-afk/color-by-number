@@ -33,6 +33,8 @@ const SKIN_DARK = 35;
 
 /** Faces smaller than this share of the picture keep the photo's shared colors (too small for colors of their own). */
 const OWN_FACE_MIN_SHARE = 0.006;
+/** How important a pet is on a page with faces shown (0-1, like a face). */
+const PET_IMPORTANCE = 1;
 
 /** Shapes inside faces (when shown) may be this share of a level's smallest shape. */
 const FACE_DETAIL: Record<Difficulty, number> = { easy: 0.6, medium: 0.4, hard: 0.3, expert: 0.3 };
@@ -380,6 +382,21 @@ function toAspect(r: Rect, aspect: number, focus: Rect): Rect {
   };
 }
 
+/** `importance` with pets as important as faces, so a dog's nose and tongue keep their own shapes. */
+function petsImportant(importance: Float32Array, animals: RegionMask[], w: number): Float32Array {
+  if (!animals.length) return importance;
+  const out = Float32Array.from(importance);
+  for (const a of animals) {
+    for (let y = 0; y < a.height; y++) {
+      for (let x = 0; x < a.width; x++) {
+        const p = (a.y + y) * w + a.x + x;
+        if (a.data[y * a.width + x] && a.x + x >= 0 && a.x + x < w && p >= 0 && p < out.length) out[p] = Math.max(out[p], PET_IMPORTANCE);
+      }
+    }
+  }
+  return out;
+}
+
 /** The overlap of two rectangles. */
 function intersect(a: Rect, b: Rect): Rect {
   const x = Math.max(a.x, b.x);
@@ -630,8 +647,9 @@ export async function makePage(
   // kit. Without, people are simplified: blank faces, one hair color, flat clothes.
   // On the small cards there's no room for that: people stay simplified, and faces just keep a
   // few colors of their own (eyes, smile).
-  // Sheets of someone's own photo (Letter in 2 or 4) with faces shown: real hair too, in its
-  // own colors (see hairOwn), including hair whose face wasn't found (a head bent down).
+  // Someone's own photo with faces shown: real hair too, in its own colors (see hairOwn),
+  // including hair whose face wasn't found (a head bent down). On one page, pets are parts of
+  // their own, so their small features (a nose, a tongue) keep the people's finer detail.
   const card = !!cardShape(printSize, true);
   const realPeople = ownColors && sheets > 1;
   const photoColors = withFaces && !card;
@@ -686,7 +704,7 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: realPeople ? f.hair : undefined })), looseHair: realPeople ? hair : undefined, faceStyle: "own" as const, cutout }
+      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, faceStyle: "own" as const, cutout }
       : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
@@ -715,7 +733,8 @@ export async function makePage(
     onStep?.("Building the background…");
     const sceneResult = await runPipelineAsync(
       { ...scene, data: colored(scene, []), importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
-      { ...params, ...colorParams, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
+      // The people's extra colors (faces shown) are theirs: the scene keeps its usual colors either way.
+      { ...params, ...(photoColors ? {} : colorParams), maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
     );
     const layers: Layer[] = [
       { result: sceneResult, x: 0, y: 0, scale: sceneScale, outlineBlank: false },
