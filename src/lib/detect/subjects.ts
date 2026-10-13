@@ -460,6 +460,8 @@ export interface Detection {
   bodySkin?: RegionMask;
   /** What the people hold or wear besides clothes (a bouquet, a watch, shoes), when cut out. */
   held?: RegionMask;
+  /** All the people's hair, when cut out (including hair of heads with no face found). */
+  hair?: RegionMask;
 }
 
 /**
@@ -815,6 +817,7 @@ export async function detectSubjects(
     clothes: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.clothes },
     bodySkin: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.bodySkin },
     held: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.held },
+    hair: peopleCut && { x: 0, y: 0, width: workW, height: workH, data: peopleCut.hair },
   };
 
   function paint(m: RegionMask, into: Uint8Array) {

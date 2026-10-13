@@ -713,6 +713,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                         aria-checked={split === n}
                         onClick={() => {
                           setSplit(n);
+                          // Sheets have room for real faces: shown from the photo (Face can still turn them off).
+                          setShowFaces(n > 1);
                           setResult(null);
                         }}
                         className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${

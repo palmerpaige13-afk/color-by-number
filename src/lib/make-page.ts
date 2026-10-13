@@ -255,6 +255,7 @@ type FoundSubjects = {
   clothes?: RegionMask;
   bodySkin?: RegionMask;
   held?: RegionMask;
+  hair?: RegionMask;
   note: string;
 };
 
@@ -612,7 +613,7 @@ export async function makePage(
     if (found.cutout) dropSpecks(found.cutout, image.width);
     photo.found.set(foundKey, found);
   }
-  const { main, subjects, cutout, animals, clothes, bodySkin, held } = found;
+  const { main, subjects, cutout, animals, clothes, bodySkin, held, hair } = found;
   const structure = structureMap(main.data, main.width, main.height);
   const map = importanceMap(structure, subjects, main.width, main.height);
   const list = [describeSubjects(subjects), map.buildings ? "buildings" : ""].filter(Boolean).join(", ");
@@ -629,11 +630,11 @@ export async function makePage(
   // kit. Without, people are simplified: blank faces, one hair color, flat clothes.
   // On the small cards there's no room for that: people stay simplified, and faces just keep a
   // few colors of their own (eyes, smile).
-  // Sheets of someone's own photo (Letter in 2 or 4) have room for more: people are drawn in
-  // the photo's own colors (real hair and clothes) even without faces, which stay blank.
+  // Sheets of someone's own photo (Letter in 2 or 4) with faces shown: real hair too, in its
+  // own colors (see hairOwn), including hair whose face wasn't found (a head bent down).
   const card = !!cardShape(printSize, true);
   const realPeople = ownColors && sheets > 1;
-  const photoColors = (withFaces || realPeople) && !card;
+  const photoColors = withFaces && !card;
   const colorParams = photoColors
     ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] }
     : sheets > 1 && extraColors
@@ -685,8 +686,8 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: even(map.importance), faces: withFaces ? faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined })) : faces.map((f) => ({ ...f, hair: undefined, hairBlock: f.hair })), faceStyle: withFaces ? ("own" as const) : ("faceless" as const), cutout }
-      : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held, petColors: !card },
+      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: even(map.importance), faces: faces.filter((f) => f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: realPeople ? f.hair : undefined })), looseHair: realPeople ? hair : undefined, faceStyle: "own" as const, cutout }
+      : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,

@@ -252,7 +252,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const q = quantize(smoothed, w, h, params.paletteSize, imp, exclude);
   const { indices } = q;
   const faces =
-    input.faces?.length || input.animals?.length || input.clothes
+    input.faces?.length || input.animals?.length || input.clothes || input.looseHair
       ? separateFaces(
           indices,
           smoothed,
@@ -269,7 +269,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
           1,
           params.flatClothes ? FLAT_CLOTHES_COLORS : 0,
           input.held,
-          input.petColors,
+          input.looseHair,
         )
       : null;
   let palette = faces?.palette ?? q.palette;

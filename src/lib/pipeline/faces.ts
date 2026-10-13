@@ -71,8 +71,10 @@ const SKY_HAIR_TINT = [4, 14] as const;
 const HELD_COLORS = 12;
 /** ...and for a small one (a shoe, a watch). */
 const HELD_SMALL_COLORS = 3;
-/** A pet's own fur colors (black, white, tan, shadows, a tongue). */
-const PET_COLORS = 7;
+/** Hair no face claims, in patches at least this share of the picture, is hair of its own. */
+const LOOSE_HAIR_MIN = 0.002;
+/** Real hair's own colors (light, middle and dark strands, shadow). */
+const OWN_HAIR_COLORS = 5;
 /** A held thing at least this share of the picture is big. */
 const HELD_BIG_SHARE = 0.004;
 /** Held bits smaller than this (pixels) are left to whatever is around them. */
@@ -324,8 +326,8 @@ export function separateFaces(
   clothesColors = 0,
   /** What people hold (a bouquet, a watch, shoes): its own part, in its own colors. */
   held?: RegionMask,
-  /** Pets in colors of their own fur (not on small cards, where there's no room for them). */
-  petColors = false,
+  /** All the people's hair: what no face claims becomes hair of its own, in its own colors. */
+  looseHair?: RegionMask,
 ): FaceRegions {
   const detected = faces.length;
   faces = faces.flatMap(splitDoubleFace);
@@ -359,9 +361,21 @@ export function separateFaces(
       paintSkin({ ...skin, data }, parts, k + 1, w, h);
     } else floodSkin(f, smoothed, parts, k + 1, w, h);
   });
+  // Real hair (people in the photo's own colors) is never face: a head bent down has its
+  // face's outline drawn over the top of the head.
+  for (const f of faces) {
+    const m = f.hairOwn;
+    if (!m) continue;
+    for (let y = 0; y < m.height; y++) {
+      for (let x = 0; x < m.width; x++) {
+        const px = m.x + x, py = m.y + y;
+        if (m.data[y * m.width + x] && px >= 0 && py >= 0 && px < w && py < h) parts[py * w + px] = 0;
+      }
+    }
+  }
   // Where anyone's hair is, so a face never grows into it (light blonde hair is close to skin).
   const hairAt = new Uint8Array(w * h);
-  for (const f of faces) for (const m of [f.hair, f.hairBlock]) if (m) paintSkin(m, hairAt, 1, w, h);
+  for (const f of faces) for (const m of [f.hair, f.hairOwn]) if (m) paintSkin(m, hairAt, 1, w, h);
   growFaces(parts, faces, smoothed, w, h, hairAt);
   const mask = Uint8Array.from(parts); // faces only
   let next = faces.length + 1;
@@ -415,11 +429,41 @@ export function separateFaces(
     }
   }
   const hairParts = new Map<number, number>(); // hair part -> its face's part
+  const ownHair = new Set<number>(); // hair parts in several of their own colors
   faces.forEach((f, i) => {
-    if (!f.hair || next >= 250) return;
+    const hair = f.hair ?? f.hairOwn;
+    if (!hair || next >= 250) return;
+    if (!f.hair) ownHair.add(next);
     hairParts.set(next, i + 1);
-    paintSkin(f.hair, parts, next++, w, h);
+    paintSkin(hair, parts, next++, w, h);
   });
+  if (looseHair && next < 250) {
+    // Each patch of hair no face took (a head turned down) is a part of its own.
+    const loose = new Uint8Array(w * h);
+    paintSkin(looseHair, loose, 1, w, h);
+    const seen = new Uint8Array(w * h);
+    for (let s = 0; s < w * h && next < 250; s++) {
+      if (!loose[s] || parts[s] || seen[s]) continue;
+      const piece: number[] = [];
+      const stack = [s];
+      seen[s] = 1;
+      while (stack.length) {
+        const p = stack.pop()!;
+        piece.push(p);
+        const x = p % w;
+        for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+          if (q >= 0 && q < w * h && loose[q] && !parts[q] && !seen[q]) {
+            seen[q] = 1;
+            stack.push(q);
+          }
+        }
+      }
+      if (piece.length < LOOSE_HAIR_MIN * w * h) continue;
+      for (const p of piece) parts[p] = next;
+      ownHair.add(next);
+      hairParts.set(next++, 0);
+    }
+  }
   // Bare skin: pieces of their own (so arms and legs that touch another person keep a line
   // between them), each colored like the face it belongs to.
   const lab = new Float32Array(w * h * 3);
@@ -462,8 +506,8 @@ export function separateFaces(
     paintSkin(a, parts, next++, w, h);
   }
 
-  // Own-color faces (people shown in the photo's colors), blank or not, take no more than their own skin.
-  if (person && style !== "own" && style !== "faceless") {
+  // Own-color faces (people shown in the photo's colors) take no more than their own skin.
+  if (person && style !== "own") {
     // Each face's typical color, for what its skin may take.
     if (!bodySkin) for (let p = 0; p < w * h; p++) if (mask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
     const faceLab = faces.map((_, i) => {
@@ -559,7 +603,18 @@ export function separateFaces(
         if (ids.every((id) => id >= 0)) faceTone.set(i + 1, { ids, tone: shading.tone });
       });
     } else faces.forEach((_, i) => shade(mask, i + 1, faceTones, true));
-    for (const k of hairParts.keys()) shade(parts, k, hairTones, false);
+    for (const k of hairParts.keys()) {
+      if (!ownHair.has(k)) {
+        shade(parts, k, hairTones, false);
+        continue;
+      }
+      // Real hair: its own browns, light and dark, rather than the photo's nearest shared
+      // colors (a hoodie's or a dog's black).
+      const own = clothesPalette(smoothed, parts, k, OWN_HAIR_COLORS);
+      if (!own) continue;
+      const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
+      if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
+    }
     for (const [piece, k] of skinPieces) {
       const tone = faceTone.get(k);
       if (!tone) continue;
@@ -583,16 +638,6 @@ export function separateFaces(
   // the nearest dress or hair color).
   for (const [k, n] of heldParts) {
     const own = clothesPalette(smoothed, parts, k, n);
-    if (!own) continue;
-    const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
-    if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
-  }
-
-  // Pets in a few colors of their own fur, so a white dog's face is its own warm white rather
-  // than the sky's blue-grey (which reads as a ghost).
-  for (const [k, kind] of kindOf) {
-    if (kind !== PartKind.pet || !petColors) continue;
-    const own = clothesPalette(smoothed, parts, k, PET_COLORS);
     if (!own) continue;
     const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
     if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
