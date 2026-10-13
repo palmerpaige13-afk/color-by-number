@@ -57,6 +57,8 @@ const MAX_ZOOM = 5;
 const FIX_BY_HAND_EMAIL = CONTACT_EMAIL;
 /** Shortest drawn line that counts as a line (not a tap), in screen pixels. */
 const MIN_LINE_PX = 8;
+/** How thick the line being drawn with Add a line is on the screen (CSS px). */
+const LINE_PX = 4;
 /** Width the photo is drawn at when shown in place of the page (pixels). */
 const PEEK_WIDTH = 1600;
 /** Most fixes kept for one report. */
@@ -359,7 +361,9 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     line.push(pt);
     const ctx = highlightRef.current.getContext("2d")!;
     ctx.strokeStyle = "#7c3aed";
-    ctx.lineWidth = Math.max(3, highlightRef.current.width / 250);
+    // About LINE_PX on the screen however small (a phone) or zoomed in the picture is.
+    const onScreen = highlightRef.current.getBoundingClientRect().width;
+    ctx.lineWidth = Math.max(3, highlightRef.current.width / 250, onScreen > 0 ? (LINE_PX * highlightRef.current.width) / onScreen : 0);
     ctx.lineCap = "round";
     ctx.beginPath();
     ctx.moveTo(...line[line.length - 2]);
