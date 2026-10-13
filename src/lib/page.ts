@@ -598,8 +598,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     for (let i = 0; i < result.regionCount; i++) {
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
-      // Thin hair may carry a slightly smaller number (see HAIR_NUMBER).
-      if (size < (result.regionKind?.[i] === HAIR ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
+      // Thin hair and a pet's nose may carry a slightly smaller number (see HAIR_NUMBER).
+      if (size < (result.regionKind?.[i] === HAIR || result.regionKind?.[i] === PET ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
         String(page.numbers[li][result.regionColor[i]]),
@@ -661,7 +661,7 @@ function drawRegionNumbers(
     const shape = pieceShape[i];
     if (regionColor[shape] === result.background) continue;
     const size = Math.min(maxFontPx, pts.radius[i] * scale * 1.1);
-    if (size < (regionKind?.[shape] === HAIR ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
+    if (size < (regionKind?.[shape] === HAIR || regionKind?.[shape] === PET ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
     ctx.font = `${Math.round(size)}px Arial, sans-serif`;
     ctx.fillText(String(numbers[regionColor[shape]]), x + (x0 + pts.x[i]) * scale, y + (y0 + pts.y[i]) * scale);
   }

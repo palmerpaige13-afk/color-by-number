@@ -304,8 +304,10 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const areaLimit = (k: number, color: number) =>
     (isPart(color) ? (params.partMinArea ?? params.minArea) : params.minArea) * (1 - 0.85 * k);
   const minPrint = params.minLabelRadius ?? MIN_PRINT_RADIUS;
+  // A pet's nose and tongue may carry a smaller number, like thin hair (see HAIR_NUMBER).
+  const isPet = (color: number) => faces?.kind[color] === PartKind.pet;
   const radiusLimit = (k: number, color: number) =>
-    Math.max(minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
+    Math.max(isPet(color) ? minPrint * HAIR_NUMBER : minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -435,7 +437,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const blankOnly = group && Uint8Array.from(group, (g) => (g === BACKGROUND_GROUP ? g : 0));
     // Hair may carry a smaller number (see HAIR_NUMBER): short hair hugging a head is thin,
     // and joining the face would leave a bald, skin-colored head.
-    const need = (id: number) => (faces?.kind[left.color[id]] === PartKind.hair ? minPrint * HAIR_NUMBER : minPrint);
+    const need = (id: number) => (faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) ? minPrint * HAIR_NUMBER : minPrint);
     const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background;
     if (pts.radius.some((_, id) => tooSmall(id))) {
       colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
