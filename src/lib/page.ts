@@ -114,6 +114,10 @@ const COOL_PALE_CHROMA = 14;
 const SAME_SKIN = 0.5;
 /** Different people's skin colors are kept at least this far apart (ΔE), nudging lightness. */
 const MIN_SKIN_GAP = 7;
+/** Something in front and what it meets (sharing at least this share of the page's width of edge)... */
+const MIN_APART_EDGE = 0.04;
+/** ...that came out closer than this (ΔE, exact copies) are nudged this far apart in lightness. */
+const MIN_APART_GAP = 5;
 
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
@@ -191,6 +195,71 @@ export function buildPage(
   });
   const touch = (a: Set<string>, b: Set<string>) => [...a].some((x) => [...b].some((y) => touching.has(`${x}|${y}`)));
 
+  // Colors that meet along a real stretch of edge where something in front (a person's skin,
+  // hair or clothes, a pet) meets what's behind it or someone else: a dog's tan legs on tan
+  // sand. Those never share a number, so the two can be colored apart. (Their colors stay the
+  // photo's own; only exact copies are nudged, see MIN_APART_GAP.) Counted in page px of edge.
+  const apartCount = new Map<string, number>();
+  const meet = (a: string, b: string, n: number) => {
+    if (a === b) return;
+    const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+    apartCount.set(k, (apartCount.get(k) ?? 0) + n);
+  };
+  const isFront = (kind: number | undefined) => kind === FACE || kind === HAIR || kind === CLOTHES || kind === PET;
+  layers.forEach(({ result, scale, x: lx, y: ly }, li) => {
+    const { width: w, height: h, labels, regionColor, partKind, partGroup, background } = result;
+    const colorAt = (p: number) => regionColor[labels[p]];
+    const owner = (c: number) => (isFront(partKind?.[c]) ? `${partKind![c]}:${partGroup?.[c] ?? 0}` : "");
+    // Within the layer: a front part against anything that isn't the same part.
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = y * w + x;
+        const a = colorAt(p);
+        for (const q of [x < w - 1 ? p + 1 : -1, y < h - 1 ? p + w : -1]) {
+          if (q < 0) continue;
+          const b = colorAt(q);
+          if (a === b || a === background || b === background) continue;
+          const oa = owner(a), ob = owner(b);
+          if ((oa || ob) && oa !== ob) meet(`${li}:${a}`, `${li}:${b}`, scale);
+        }
+      }
+    }
+    // A cut-out layer (the people) against the scene under it, along its edge.
+    if (li === 0 || background === undefined) return;
+    const under = layers[0];
+    const u = under.result;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const a = colorAt(y * w + x);
+        if (a === background || !isFront(partKind?.[a])) continue;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && ny >= 0 && nx < w && ny < h && colorAt(ny * w + nx) !== background) continue;
+          const sx = Math.floor((lx + (nx + 0.5) * scale - under.x) / under.scale);
+          const sy = Math.floor((ly + (ny + 0.5) * scale - under.y) / under.scale);
+          if (sx < 0 || sy < 0 || sx >= u.width || sy >= u.height) continue;
+          const c0 = u.regionColor[u.labels[sy * u.width + sx]];
+          if (c0 !== u.background) meet(`${li}:${a}`, `0:${c0}`, scale);
+        }
+      }
+    }
+  });
+  const apartOf = new Map<string, Set<string>>();
+  for (const [k, n] of apartCount) {
+    if (n < MIN_APART_EDGE * width) continue;
+    const [a, b] = k.split("|");
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!apartOf.has(x)) apartOf.set(x, new Set());
+      apartOf.get(x)!.add(y);
+    }
+  }
+  const keyOf = (e: Entry) => `${e.layer}:${e.index}`;
+  const keptApart = (a: Cluster, b: Cluster) => {
+    if (!apartOf.size) return false;
+    const inB = new Set(b.members.map(keyOf));
+    return a.members.some((m) => [...(apartOf.get(keyOf(m)) ?? [])].some((k) => inB.has(k)));
+  };
+
   // Merge the two closest colors (their color becomes the area-weighted mix) until every pair
   // is easy to tell apart and there are no more than `maxColors`. Shapes don't change; colors
   // that were barely different just share a number.
@@ -230,6 +299,7 @@ export function buildPage(
     // With people in the photo's own colors, faces' colors and everything else (hair right
     // next to them) keep apart, so giving faces colors of their own doesn't change the hair.
     if ((a.natural || b.natural) && a.faces !== b.faces) return false;
+    if (keptApart(a, b)) return false;
     if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;
     return true;
   };
@@ -279,6 +349,22 @@ export function buildPage(
           c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
           c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
         }
+      }
+    }
+  }
+
+  // What's in front and what it meets that are exact copies of one color (a twin of the
+  // sand's tan on a dog's legs) are nudged just enough that the key's two swatches differ.
+  for (const a of clusters) {
+    for (const b of clusters) {
+      if (a === b || !keptApart(a, b)) continue;
+      const d = Math.sqrt(labDist2(a.lab, 0, b.lab, 0));
+      if (d >= MIN_APART_GAP) continue;
+      const [light, dark] = a.lab[0] >= b.lab[0] ? [a, b] : [b, a];
+      const push = (MIN_APART_GAP - d) / 2;
+      for (const [c, dl] of [[light, push], [dark, -push]] as const) {
+        c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
+        c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
       }
     }
   }
