@@ -400,6 +400,32 @@ function petsImportant(importance: Float32Array, animals: RegionMask[], w: numbe
   return out;
 }
 
+/**
+ * A rectangle of shape `aspect` (width / height) cut from `r`, centered on `focus`, that
+ * still holds all of `focus`: when `r` trimmed to the shape would cut into it, the rectangle
+ * grows into the rest of the photo instead (as far as the photo allows).
+ */
+function fitAround(r: Rect, aspect: number, focus: Rect, photo: { width: number; height: number }): Rect {
+  const t = toAspect(r, aspect, focus);
+  if (contains(t, focus)) return t;
+  let width = Math.max(t.width, focus.width, focus.height * aspect);
+  let height = width / aspect;
+  if (height > photo.height) [height, width] = [photo.height, photo.height * aspect];
+  if (width > photo.width) [width, height] = [photo.width, photo.width / aspect];
+  const cx = focus.x + focus.width / 2, cy = focus.y + focus.height / 2;
+  return {
+    x: Math.min(photo.width - width, Math.max(0, cx - width / 2)),
+    y: Math.min(photo.height - height, Math.max(0, cy - height / 2)),
+    width,
+    height,
+  };
+}
+
+/** Whether `outer` holds all of `inner` (to within half a pixel). */
+function contains(outer: Rect, inner: Rect): boolean {
+  return outer.x <= inner.x + 0.5 && outer.y <= inner.y + 0.5 && outer.x + outer.width >= inner.x + inner.width - 0.5 && outer.y + outer.height >= inner.y + inner.height - 0.5;
+}
+
 /** The overlap of two rectangles. */
 function intersect(a: Rect, b: Rect): Rect {
   const x = Math.max(a.x, b.x);
@@ -592,9 +618,17 @@ export async function makePage(
   let photoRect: Rect = { x: 0, y: 0, width: full.width, height: full.height };
   if (frame) {
     // Sheets of someone's photo show all of it (see muralLayout's `whole`): nothing is trimmed.
-    const shape = ownColors && isMural(printSize) ? null : pictureShape(printSize, frame.scene.width / frame.scene.height);
+    let shape = ownColors && isMural(printSize) ? null : pictureShape(printSize, frame.scene.width / frame.scene.height);
+    // A card turned the other way round when only that way holds everyone (a wide group on 5 × 7).
+    if (shape && cardShape(printSize, true)) {
+      const f = frame;
+      const holds = (a: number) => contains(fitAround(f.scene, a, f.subjects, full), f.subjects);
+      if (!holds(shape) && holds(1 / shape)) shape = 1 / shape;
+    }
     if (shape) {
-      const scene = toAspect(frame.scene, shape, frame.subjects);
+      // Trimmed to the card's shape around everyone: it takes in more of the photo rather than
+      // cut anyone off (only background is ever trimmed, if the photo has room).
+      const scene = fitAround(frame.scene, shape, frame.subjects, full);
       const subjects = intersect(frame.subjects, scene);
       const moved = { x: frame.subjects.x - subjects.x, y: frame.subjects.y - subjects.y };
       const animals = frame.animals.map((a) => ({ ...a, x: a.x + moved.x, y: a.y + moved.y }));
