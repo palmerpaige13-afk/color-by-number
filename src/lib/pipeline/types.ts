@@ -22,6 +22,8 @@ export interface FaceShape extends Box {
   hair?: RegionMask;
   /** Hair kept as its own part in several of its own colors (people in the photo's own colors). */
   hairOwn?: RegionMask;
+  /** How many of its own colors the face gets (people in the photo's own colors); else by its size. */
+  colors?: number;
 }
 
 /** A 0/1 mask covering a rectangle of working pixels. */

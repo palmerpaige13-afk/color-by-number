@@ -398,7 +398,7 @@ function sameHue(keyLab: Float32Array, i: number, j: number) {
   let dh = Math.abs(Math.atan2(keyLab[i * 3 + 2], keyLab[i * 3 + 1]) - Math.atan2(keyLab[j * 3 + 2], keyLab[j * 3 + 1]));
   if (dh > Math.PI) dh = 2 * Math.PI - dh;
   // Greys: only other greys of the same tint (a blue-grey sky never takes a warm taupe).
-  if (ci < GREY_CHROMA || cj < GREY_CHROMA) return ci < GREY_CHROMA && cj < GREY_CHROMA && (Math.min(ci, cj) < 2 || dh <= Math.PI / 3);
+  if (ci < GREY_CHROMA || cj < GREY_CHROMA) return ci < GREY_CHROMA && cj < GREY_CHROMA && (Math.max(ci, cj) < 4 || dh <= Math.PI / 3);
   return dh <= Math.PI / 6;
 }
 

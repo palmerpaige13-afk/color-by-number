@@ -84,7 +84,7 @@ const HELD_MAX_TALL = 2;
 /** A held thing within this ΔE of the clothes around it is part of them. */
 const HELD_LIKE_CLOTHES = 15;
 /** Colors each face gets from its own pixels when people are shown in the photo's colors. */
-const OWN_FACE_COLORS = 6;
+const OWN_FACE_COLORS = 5;
 /** A face's color range runs from this share in from its darkest to as far from its lightest. */
 const FACE_RANGE_SKIP = 0.02;
 /** On the small cards (people otherwise simplified), a face keeps just this many of its own colors. */
@@ -94,7 +94,7 @@ const CARD_FACE_SHADED = 18;
 /** ...plus this many per whole picture of face (a face filling a tenth of it gets 6 more)... */
 const OWN_FACE_COLORS_PER_SHARE = 60;
 /** ...up to this many. */
-const OWN_FACE_MAX_COLORS = 12;
+const OWN_FACE_MAX_COLORS = 7;
 /** Dark photo colors (Lab L below this) are looked at for dark jeans... */
 const DARK_BLUE_MAX_L = 28;
 /** ...a near-black one (below this)... */
@@ -475,6 +475,16 @@ export function separateFaces(
       ? matchBodySkin(bodySkin, parts, mask, faces.length, lab, w, h, next, 250, clothesByFace, chins)
       : new Map<number, number>();
   for (const k of skinPieces.keys()) next = Math.max(next, k + 1);
+  // People in the photo's own colors keep their real neck and arm shading; only a small face
+  // in one color of its own (a big group) has its neck in that color too, so they match.
+  if (style === "own" && skinPieces.size) {
+    const drop = new Set<number>();
+    for (const [piece, k] of skinPieces) if (faces[k - 1]?.colors !== 1) drop.add(piece);
+    if (drop.size) {
+      for (let p = 0; p < w * h; p++) if (drop.has(parts[p])) parts[p] = 0;
+      for (const piece of drop) skinPieces.delete(piece);
+    }
+  }
   const kindOf = new Map<number, number>();
   for (const k of skinPieces.keys()) kindOf.set(k, PartKind.face);
   faces.forEach((_, i) => kindOf.set(i + 1, PartKind.face));
@@ -506,8 +516,16 @@ export function separateFaces(
     paintSkin(a, parts, next++, w, h);
   }
 
-  // Own-color faces (people shown in the photo's colors) take no more than their own skin.
-  if (person && style !== "own") {
+
+  // Own-color faces (people shown in the photo's colors) take no more than their own skin,
+  // except small ones in one color of their own (a big group): they take the skin-colored bits
+  // right beside them (an ear), so those aren't left in some other color.
+  const own = style === "own";
+  const smallFace = (k: number) => {
+    const f = k <= faces.length ? k : skinPieces.get(k);
+    return f !== undefined && faces[f - 1]?.colors === 1;
+  };
+  if (person && (!own || faces.some((f) => f.colors === 1))) {
     // Each face's typical color, for what its skin may take.
     if (!bodySkin) for (let p = 0; p < w * h; p++) if (mask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
     const faceLab = faces.map((_, i) => {
@@ -524,6 +542,7 @@ export function separateFaces(
     for (const k of hairParts.keys()) hairHue.set(k, usualHue(parts, k, smoothed));
     fillGaps(parts, person, w, h, Math.max(4, ...faces.map((f) => f.height * GAP_REACH)), (k, q) => {
       const kind = kindOf.get(k);
+      if (own && (kind !== PartKind.face || !smallFace(k))) return false;
       if (kind !== PartKind.face && kind !== PartKind.hair) return true;
       const usual = kind === PartKind.face ? skinOf(k) : hairHue.get(k);
       if (!usual) return true;
@@ -568,7 +587,7 @@ export function separateFaces(
         const colors =
           style === "card"
             ? CARD_FACE_COLORS
-            : Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE)));
+            : (faces[i].colors ?? Math.round(Math.min(OWN_FACE_MAX_COLORS, Math.max(OWN_FACE_COLORS, OWN_FACE_COLORS + (n / mask.length) * OWN_FACE_COLORS_PER_SHARE))));
         const own = facePalette(smoothed, mask, i + 1, colors);
         if (!own) return;
         if (style === "card") {
