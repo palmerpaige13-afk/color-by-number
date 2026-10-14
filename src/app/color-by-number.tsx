@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { addColor, cleanUp, cutPiece, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
+import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, lineShape, numberAt, recolor, sameColorNeighbors, shapeAt, splitAlong, type Spot } from "@/lib/edit";
 import { countTry, sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
@@ -59,6 +59,21 @@ const FIX_BY_HAND_EMAIL = CONTACT_EMAIL;
 const MIN_LINE_PX = 8;
 /** How thick the line being drawn with Add a line is on the screen (CSS px). */
 const LINE_PX = 4;
+
+/** Draws a line (page px) with Add a line's look: purple, about LINE_PX on screen however small or zoomed the picture is. */
+function strokeLine(canvas: HTMLCanvasElement, line: [number, number][]) {
+  if (line.length < 2) return;
+  const ctx = canvas.getContext("2d")!;
+  const onScreen = canvas.getBoundingClientRect().width;
+  ctx.strokeStyle = "#7c3aed";
+  ctx.lineWidth = Math.max(3, canvas.width / 250, onScreen > 0 ? (LINE_PX * canvas.width) / onScreen : 0);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(...line[0]);
+  for (const pt of line.slice(1)) ctx.lineTo(...pt);
+  ctx.stroke();
+}
 /** Width the photo is drawn at when shown in place of the page (pixels). */
 const PEEK_WIDTH = 1600;
 /** Most fixes kept for one report. */
@@ -111,6 +126,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [peek, setPeek] = useState(false);
   const peekRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>("color");
+  /** The last line drawn with Add a line, kept on the picture until the next fix. */
+  const [cutLine, setCutLine] = useState<[number, number][] | null>(null);
   const [picked, setPicked] = useState<Spot | null>(null);
   const [history, setHistory] = useState<Page[]>([]);
   const [hint, setHint] = useState<string | null>(null);
@@ -174,7 +191,9 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
 
   useEffect(() => {
     if (result && highlightRef.current) drawHighlight(highlightRef.current, result, fixing && picked ? [picked] : []);
-  }, [result, picked, fixing]);
+    // The last line drawn stays on the picture, so a cut shows even through a dark shape.
+    if (fixing && cutLine && highlightRef.current) strokeLine(highlightRef.current, cutLine);
+  }, [result, picked, fixing, cutLine]);
 
   /**
    * Makes a fix: the new page replaces the current one, which is kept for undo. `entry`
@@ -191,6 +210,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     }
     if (result) setHistory((h) => [...h.slice(-(MAX_UNDO - 1)), result]);
     setResult(next);
+    setCutLine(null);
     setPicked(null);
     setOffer(null);
     setHint(TOOLS.find((t) => t.id === tool)?.hint ?? null);
@@ -227,6 +247,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     setFixLog((log) => [...log, { tool: "undo" }]);
     setHistory((h) => h.slice(0, -1));
     setResult(last);
+    setCutLine(null);
     setPicked(null);
     setOffer(null);
   }
@@ -359,16 +380,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     const pt = pagePoint(e);
     if (!line || !pt || !highlightRef.current) return;
     line.push(pt);
-    const ctx = highlightRef.current.getContext("2d")!;
-    ctx.strokeStyle = "#7c3aed";
-    // About LINE_PX on the screen however small (a phone) or zoomed in the picture is.
-    const onScreen = highlightRef.current.getBoundingClientRect().width;
-    ctx.lineWidth = Math.max(3, highlightRef.current.width / 250, onScreen > 0 ? (LINE_PX * highlightRef.current.width) / onScreen : 0);
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(...line[line.length - 2]);
-    ctx.lineTo(...pt);
-    ctx.stroke();
+    strokeLine(highlightRef.current, line.slice(-2));
   }
   function lineEnd() {
     const line = drawn.current;
@@ -383,9 +395,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     // Where the line was drawn (its ends), as shares of the page.
     const ends = [line[0], line[line.length - 1]].flatMap(([x, y]) => [Math.round((x / result.width) * 1000) / 1000, Math.round((y / result.height) * 1000) / 1000]);
     apply(next, spot ? { tool: "line", ...describe(result, spot), line: ends } : undefined);
-    // The piece the line cut off is shown picked, so the cut can be seen even on a dark shape
-    // (whose new outline is dark on dark).
-    if (typeof next !== "string" && spot) setPicked(cutPiece(result, next, spot));
+    if (typeof next !== "string") setCutLine(line);
   }
 
   /** A tap on the picture while fixing: pick or change the shape under the finger. */
@@ -450,6 +460,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
 
   function chooseTool(t: Tool) {
     setTool(t);
+    setCutLine(null);
     setPicked(null);
     setOffer(null);
     setWheelOpen(false);

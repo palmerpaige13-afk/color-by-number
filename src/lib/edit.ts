@@ -391,22 +391,6 @@ export function splitAlong(page: Page, line: [number, number][], minLength = pag
  * The shape a drawn line is meant to cut: the one it runs across the most (the middle of the
  * line can land on a small shape or an edge, and a line often starts just outside the shape).
  */
-/**
- * After a cut: the piece that was cut off `spot` of `before` (the smaller piece in `after`),
- * to show which part the line made its own.
- */
-export function cutPiece(before: Page, after: Page, spot: Spot): Spot | null {
-  const old = before.layers[spot.layer]?.result.labels;
-  const now = after.layers[spot.layer]?.result.labels;
-  if (!old || !now || old.length !== now.length) return null;
-  const size = new Map<number, number>();
-  for (let p = 0; p < old.length; p++) if (old[p] === spot.region) size.set(now[p], (size.get(now[p]) ?? 0) + 1);
-  if (size.size < 2) return null;
-  let best = -1;
-  for (const [region, n] of size) if (best < 0 || n < size.get(best)!) best = region;
-  return { layer: spot.layer, region: best };
-}
-
 export function lineShape(page: Page, line: [number, number][]): Spot | null {
   const count = new Map<string, { spot: Spot; n: number }>();
   for (let i = 1; i < line.length; i++) {
