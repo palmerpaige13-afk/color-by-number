@@ -43,6 +43,10 @@ const ANIMAL_PAD = 2;
 const REACH_PAD = 1.1;
 /** Area searched around a person's box for the rest of them (see personReach), as a multiple of its long side. */
 const PERSON_REACH_PAD = 1.6;
+/** A person running along this share of an edge of the square they're cut out from goes on past it... */
+const SQUARE_EDGE_SHARE = 0.1;
+/** ...so a square this share of a side over that way is looked at too. */
+const SQUARE_SHIFT = 0.6;
 /** A face whose box is less than this share face skin (to the segmenter) isn't a person's face. */
 const MIN_FACE_SKIN = 0.1;
 /** The squares searched for more faces in a group are this many faces wide (see detectSubjects). */
@@ -1315,10 +1319,12 @@ export async function detectSubjects(
     const clothes = new Uint8Array(workW * workH);
     const bodySkin = new Uint8Array(workW * workH);
     const N = SEGMENT_SIZE;
-    mainPeople.forEach((p) => {
-      const side = Math.max(p.w, p.h) * 1.15;
-      const sx = p.x + p.w / 2 - side / 2;
-      const sy = p.y + p.h / 2 - side / 2;
+    /**
+     * Segments the square (sx, sy, side) of the detection canvas and marks the people, clothes,
+     * skin, hair and held things in it; with `skip`, not inside that square (already done).
+     * Returns the background confidence (null if the segmenter gave none).
+     */
+    const segmentSquare = (sx: number, sy: number, side: number, skip?: { sx: number; sy: number; side: number }) => {
       crop.width = crop.height = N;
       const ctx = crop.getContext("2d")!;
       ctx.fillStyle = "#000";
@@ -1331,7 +1337,12 @@ export async function detectSubjects(
       const hr = result.confidenceMasks?.[HAIR]?.getAsFloat32Array().slice();
       const ot = result.confidenceMasks?.[OTHERS]?.getAsFloat32Array().slice();
       result.close();
-      if (!bg) return;
+      if (!bg) return null;
+      const inSkip = (x: number, y: number) => {
+        if (!skip) return false;
+        const px = (x + 0.5) / toWork, py = (y + 0.5) / toWork;
+        return px >= skip.sx && py >= skip.sy && px < skip.sx + skip.side && py < skip.sy + skip.side;
+      };
       const clamp = (u: number, v: number) => Math.min(N - 1, Math.max(0, v)) * N + Math.min(N - 1, Math.max(0, u));
       const at = (u: number, v: number) => bg[clamp(u, v)];
       const clAt = (u: number, v: number) => (cl ? cl[clamp(u, v)] : 0);
@@ -1347,6 +1358,7 @@ export async function detectSubjects(
         const vi = Math.floor(v);
         const fv = v - vi;
         for (let x = x0; x <= x1; x++) {
+          if (inSkip(x, y)) continue;
           const u = (((x + 0.5) / toWork - sx) / side) * N - 0.5;
           const ui = Math.floor(u);
           const fu = u - ui;
@@ -1371,6 +1383,33 @@ export async function detectSubjects(
             (otAt(ui, vi + 1) * (1 - fu) + otAt(ui + 1, vi + 1) * fu) * fv;
           if (o >= HELD_SURE && c < HELD_NOT_CLOTHES) held[y * workW + x] = 1;
         }
+      }
+      return bg;
+    };
+    mainPeople.forEach((p) => {
+      const side = Math.max(p.w, p.h) * 1.15;
+      const sx = p.x + p.w / 2 - side / 2;
+      const sy = p.y + p.h / 2 - side / 2;
+      const bg = segmentSquare(sx, sy, side);
+      if (!bg) return;
+      // Someone the detector only partly boxed (bent over a dog, long hair hanging past) runs
+      // into the edge of the square: past it they'd be drawn as background, with a straight seam
+      // down them. The area just past that edge is looked at too, adding only what's out there
+      // (what was found inside the square stays as it is).
+      const along = (at: (i: number) => number) => {
+        let c = 0;
+        for (let i = 0; i < N; i++) if (bg[at(i)] < 0.5) c++;
+        return c / N;
+      };
+      const sides: [boolean, number, number][] = [
+        [sx > 0 && along((i) => i * N + 1) >= SQUARE_EDGE_SHARE, -1, 0],
+        [sx + side < canvas.width && along((i) => i * N + N - 2) >= SQUARE_EDGE_SHARE, 1, 0],
+        [sy > 0 && along((i) => N + i) >= SQUARE_EDGE_SHARE, 0, -1],
+        [sy + side < canvas.height && along((i) => (N - 2) * N + i) >= SQUARE_EDGE_SHARE, 0, 1],
+      ];
+      for (const [cut, dx, dy] of sides) {
+        if (!cut) continue;
+        segmentSquare(sx + dx * side * SQUARE_SHIFT, sy + dy * side * SQUARE_SHIFT, side, { sx, sy, side });
       }
     });
     // A child held in someone's arms is "held" in their crop but clothes in the child's own:
