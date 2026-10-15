@@ -591,9 +591,41 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
           <div>
             <h2 className="mb-2 font-semibold">1. Pick a picture</h2>
             <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">
-              These are chosen to give every sheet lots of color. Or upload your own photo below.
+              Use your own photo, or pick one of ours: they&apos;re chosen to give every sheet lots of color.
             </p>
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {/* Their own photo: opens the photo picker (a photo can be dropped on it too). */}
+              <li>
+                <label
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragging(false);
+                    pickFile(e.dataTransfer.files[0]);
+                  }}
+                  className={`flex w-full cursor-pointer flex-col overflow-hidden rounded-xl border-2 text-left transition-colors ${
+                    dragging || (photoUrl && !galleryPick)
+                      ? "border-violet-500"
+                      : "border-dashed border-zinc-300 hover:border-violet-400 dark:border-zinc-700"
+                  }`}
+                >
+                  {photoUrl && !galleryPick ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local blob preview
+                    <img src={photoUrl} alt="Your photo" className="aspect-[3/4] w-full object-cover" />
+                  ) : (
+                    <span className="flex aspect-[3/4] w-full items-center justify-center bg-violet-50 text-5xl text-violet-500 dark:bg-violet-950/30" aria-hidden>
+                      +
+                    </span>
+                  )}
+                  <span className="px-2 pt-1.5 text-sm font-semibold">Create your own</span>
+                  <span className="px-2 pb-1.5 text-xs text-zinc-500">{photoUrl && !galleryPick ? "Tap to choose a different photo" : "Use your own photo"}</span>
+                  <input type="file" accept="image/*" className="sr-only" onChange={(e) => pickFile(e.target.files?.[0])} />
+                </label>
+              </li>
               {MURAL_PICTURES.map((m) => (
                 <li key={m.id}>
                   <button
@@ -614,8 +646,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
             </ul>
           </div>
         )}
-        <div>
-          <h2 className="mb-2 font-semibold">{muralMode ? "Or upload your own photo" : "1. Upload a photo"}</h2>
+        {!muralMode && <div>
+          <h2 className="mb-2 font-semibold">1. Upload a photo</h2>
           <label
             onDragOver={(e) => {
               e.preventDefault();
@@ -651,7 +683,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
               onChange={(e) => pickFile(e.target.files?.[0])}
             />
           </label>
-        </div>
+        </div>}
 
         <div>
           <h2 className="mb-2 font-semibold">{muralMode ? "2. How many sheets" : "2. Print size"}</h2>
