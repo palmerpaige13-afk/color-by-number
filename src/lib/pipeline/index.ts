@@ -42,6 +42,10 @@ export const HAIR_NUMBER = 0.7;
 const CLOTHES_SHADE_CHROMA = 10;
 /** On pages with flat clothes, each person's clothes get this many colors of their own. */
 const FLAT_CLOTHES_COLORS = 4;
+/** Clothes this plain (Lab chroma below it)... */
+const CLOTHES_GRAY = 4;
+/** ...and clothes at least this tinted are never light and shadow of one piece. */
+const CLOTHES_TINTED = 6;
 /** Whether a dog's or cat's eyes and nose are printed as black spots. */
 const DRAW_PET_FACES = false;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
@@ -342,6 +346,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
         // under a black top) is a different piece of clothing.
         const chroma = (c: number) => Math.hypot(paletteLab[c * 3 + 1], paletteLab[c * 3 + 2]);
         if (Math.abs(chroma(ca) - chroma(cb)) >= CLOTHES_SHADE_CHROMA) return;
+        // A plain white or gray piece next to a tinted one (a white dress against a beige suit,
+        // a gray hoodie on blue jeans) is two pieces, not light and shadow on one.
+        if (Math.min(chroma(ca), chroma(cb)) < CLOTHES_GRAY && Math.max(chroma(ca), chroma(cb)) >= CLOTHES_TINTED) return;
         shade[a] = shade[b] = 1;
         any = true;
       };
