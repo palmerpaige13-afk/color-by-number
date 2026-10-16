@@ -133,6 +133,8 @@ export interface PipelineResult {
   regionKind?: Uint8Array;
   /** Per palette index: which part (a face, a head of hair, a pet) it colors; 0 for none. */
   partGroup?: Uint8Array;
+  /** Per palette entry: whose person it is (a face's part id; for bare skin, its face's), for telling people apart. */
+  partPerson?: Uint8Array;
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];

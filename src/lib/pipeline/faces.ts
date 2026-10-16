@@ -169,6 +169,10 @@ export interface FaceRegions {
   kind: Uint8Array;
   /** Shaded pages: each traced face's jaw, for smoothChins. */
   jaws?: Jaw[];
+  /** How many faces: parts 1…faceCount are faces; higher face-kind parts are bare skin (arms, necks). */
+  faceCount: number;
+  /** Per part: the face (part id) a piece of bare skin belongs to; absent for other parts. */
+  skinOfFace: Map<number, number>;
 }
 
 /** A traced face (its part id and rounded outline) and the bare-skin pieces that are its neck and arms. */
@@ -813,6 +817,8 @@ export function separateFaces(
     group: Uint8Array.from(group),
     mask,
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
+    faceCount: faces.length,
+    skinOfFace: new Map(skinPieces),
     jaws: chins
       ? faces.flatMap((f, i) =>
           traced(f) ? [{ face: i + 1, outline: roundOutline(f.outline!), skin: [...skinPieces].filter(([, k]) => k === i + 1).map(([piece]) => piece) }] : [],

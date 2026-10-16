@@ -312,8 +312,11 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const minPrint = params.minLabelRadius ?? MIN_PRINT_RADIUS;
   // A pet's nose and tongue may carry a smaller number, like thin hair (see HAIR_NUMBER).
   const isPet = (color: number) => faces?.kind[color] === PartKind.pet;
+  // So may an arm or leg (thin bare skin on a small card, not a face's shading), so it isn't
+  // swallowed by the hair beside it.
+  const isSkin = (color: number) => !!faces && faces.kind[color] === PartKind.face && (group?.[color] ?? 0) > faces.faceCount;
   const radiusLimit = (k: number, color: number) =>
-    Math.max(isPet(color) ? minPrint * HAIR_NUMBER : minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
+    Math.max(isPet(color) || isSkin(color) ? minPrint * HAIR_NUMBER : minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -453,7 +456,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const blankOnly = group && Uint8Array.from(group, (g) => (g === BACKGROUND_GROUP ? g : 0));
     // Hair may carry a smaller number (see HAIR_NUMBER): short hair hugging a head is thin,
     // and joining the face would leave a bald, skin-colored head.
-    const need = (id: number) => (faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) ? minPrint * HAIR_NUMBER : minPrint);
+    const need = (id: number) =>
+      faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) || isSkin(left.color[id]) ? minPrint * HAIR_NUMBER : minPrint;
     const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background;
     if (pts.radius.some((_, id) => tooSmall(id))) {
       colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
@@ -488,6 +492,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelRadius: pts.radius,
     background,
     partGroup: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.group[i] ?? 0) : undefined,
+    partPerson: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.skinOfFace.get(faces.group[i] ?? 0) ?? faces.group[i] ?? 0) : undefined,
     partKind: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.kind[i] ?? 0) : undefined,
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),

@@ -164,8 +164,9 @@ export function buildPage(
       if (area[index] <= 0) return;
       const kind = result.partKind?.[index] ?? 0;
       // Whose skin or clothes this is (a person's clothes are a part of their own).
+      // A person's arms and neck count as that person's face (not someone else's skin).
       const face =
-        kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${result.partGroup?.[index] ?? 0}` : undefined;
+        kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${(kind === FACE ? result.partPerson?.[index] : undefined) ?? result.partGroup?.[index] ?? 0}` : undefined;
       entries.push({ layer, index, rgb: kind || natural ? rgb : coolBoost(rgb, cool), area: area[index], kind, face, natural });
     });
   });
@@ -179,7 +180,7 @@ export function buildPage(
     const skinOf = (p: number) => {
       const c = regionColor[labels[p]];
       const kind = partKind?.[c];
-      return kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${partGroup?.[c] ?? 0}` : null;
+      return kind === FACE || kind === CLOTHES ? `${kind === CLOTHES ? "c" : "f"}${layer}:${(kind === FACE ? result.partPerson?.[c] : undefined) ?? partGroup?.[c] ?? 0}` : null;
     };
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -209,7 +210,9 @@ export function buildPage(
   layers.forEach(({ result, scale, x: lx, y: ly }, li) => {
     const { width: w, height: h, labels, regionColor, partKind, partGroup, background } = result;
     const colorAt = (p: number) => regionColor[labels[p]];
-    const owner = (c: number) => (isFront(partKind?.[c]) ? `${partKind![c]}:${partGroup?.[c] ?? 0}` : "");
+    // A person's own face, neck and arms are one owner (their skin), not things that meet.
+    const owner = (c: number) =>
+      isFront(partKind?.[c]) ? `${partKind![c]}:${(partKind![c] === FACE ? result.partPerson?.[c] : undefined) ?? partGroup?.[c] ?? 0}` : "";
     // Within the layer: a front part against anything that isn't the same part.
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -684,8 +687,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     for (let i = 0; i < result.regionCount; i++) {
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
-      // Thin hair and a pet's nose may carry a slightly smaller number (see HAIR_NUMBER).
-      if (size < (result.regionKind?.[i] === HAIR || result.regionKind?.[i] === PET ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
+      // Thin hair, a pet's nose and a thin arm may carry a slightly smaller number (see HAIR_NUMBER).
+      if (size < (result.regionKind?.[i] === HAIR || result.regionKind?.[i] === PET || result.regionKind?.[i] === FACE ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
         String(page.numbers[li][result.regionColor[i]]),
@@ -747,7 +750,7 @@ function drawRegionNumbers(
     const shape = pieceShape[i];
     if (regionColor[shape] === result.background) continue;
     const size = Math.min(maxFontPx, pts.radius[i] * scale * 1.1);
-    if (size < (regionKind?.[shape] === HAIR || regionKind?.[shape] === PET ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
+    if (size < (regionKind?.[shape] === HAIR || regionKind?.[shape] === PET || regionKind?.[shape] === FACE ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
     ctx.font = `${Math.round(size)}px Arial, sans-serif`;
     ctx.fillText(String(numbers[regionColor[shape]]), x + (x0 + pts.x[i]) * scale, y + (y0 + pts.y[i]) * scale);
   }
