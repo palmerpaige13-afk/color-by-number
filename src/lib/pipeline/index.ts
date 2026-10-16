@@ -4,7 +4,7 @@ import { boundaryDistance, labelPoints } from "./distance";
 import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
 import { PartKind, paintSkin, separateFaces, smoothChins } from "./faces";
-import { labDist2 } from "./color";
+import { labDist2, rgbToLab } from "./color";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
 import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult } from "./types";
@@ -54,6 +54,8 @@ const CLOTHES_TINTED = 6;
 const CLOTHES_HUE_APART = (50 * Math.PI) / 180;
 /** Whether a dog's or cat's eyes and nose are printed as black spots. */
 const DRAW_PET_FACES = false;
+/** A pet's nose is printed only where the photo is this dark there (Lab L). */
+const PET_NOSE_DARK = 30;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
 const PATTERN_SHARE = 0.5;
 /**
@@ -484,14 +486,37 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const final = labelComponents(colorMap, w, h);
   const labels = Uint16Array.from(final.labels);
   const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
-  // Printed pet eyes and nose are off for now: too often they land in the wrong spot (above a
-  // dog's head, on its fur), and the pet reads fine without them.
-  const petFaces = (DRAW_PET_FACES ? (input.animals ?? []) : [])
+  // Printed pet eyes are off: too often they land in the wrong spot (above a dog's head, on
+  // its fur). A pet's nose is printed (filled in black, a spot too small to color) only where
+  // it's sure: inside the pet, on a spot that really is dark in the photo.
+  const petFaces = (input.animals ?? [])
     .filter((a) => a.label === "dog" || a.label === "cat")
     .map((a) => {
-      if (a.face) return a.face;
-      const eyes = petEyes(input.data, a, w, h);
-      return { eyes, nose: petNose(input.data, eyes, w, h) };
+      const face = a.face ?? (() => {
+        const eyes = petEyes(input.data, a, w, h);
+        return { eyes, nose: petNose(input.data, eyes, w, h) };
+      })();
+      const nose = face.nose;
+      const sure = (() => {
+        if (!nose) return false;
+        const x = Math.round(nose.x), y = Math.round(nose.y);
+        const ax = x - a.x, ay = y - a.y;
+        if (ax < 0 || ay < 0 || ax >= a.width || ay >= a.height || !a.data[ay * a.width + ax]) return false;
+        // The nose spot's own darkness (a small patch around its center).
+        const r = Math.max(1, Math.round(Math.min(nose.rx, nose.ry) * 0.6));
+        const lab = new Float32Array(3);
+        let sum = 0, n = 0;
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const p = (yy * w + xx) * 4;
+          rgbToLab(input.data[p], input.data[p + 1], input.data[p + 2], lab, 0);
+          sum += lab[0];
+          n++;
+        }
+        return n > 0 && sum / n < PET_NOSE_DARK;
+      })();
+      return { eyes: DRAW_PET_FACES ? face.eyes : [], nose: sure ? nose : undefined };
     });
   lap("labels");
 
