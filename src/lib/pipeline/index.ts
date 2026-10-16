@@ -46,6 +46,8 @@ const FLAT_CLOTHES_COLORS = 4;
 const CLOTHES_GRAY = 4;
 /** ...and clothes at least this tinted are never light and shadow of one piece. */
 const CLOTHES_TINTED = 6;
+/** Tinted clothes colors whose hues are this far apart (radians, 50°) are never one piece. */
+const CLOTHES_HUE_APART = (50 * Math.PI) / 180;
 /** Whether a dog's or cat's eyes and nose are printed as black spots. */
 const DRAW_PET_FACES = false;
 /** A pattern patch is at most this share of the piece of clothing it's on. */
@@ -349,6 +351,13 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
         // A plain white or gray piece next to a tinted one (a white dress against a beige suit,
         // a gray hoodie on blue jeans) is two pieces, not light and shadow on one.
         if (Math.min(chroma(ca), chroma(cb)) < CLOTHES_GRAY && Math.max(chroma(ca), chroma(cb)) >= CLOTHES_TINTED) return;
+        // Two tinted pieces of clearly different hues (a sage green baby outfit held against a
+        // beige dress) are two pieces too.
+        if (Math.min(chroma(ca), chroma(cb)) >= CLOTHES_TINTED) {
+          let dh = Math.abs(Math.atan2(paletteLab[ca * 3 + 2], paletteLab[ca * 3 + 1]) - Math.atan2(paletteLab[cb * 3 + 2], paletteLab[cb * 3 + 1]));
+          if (dh > Math.PI) dh = 2 * Math.PI - dh;
+          if (dh > CLOTHES_HUE_APART) return;
+        }
         shade[a] = shade[b] = 1;
         any = true;
       };
