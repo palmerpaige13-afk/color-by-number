@@ -38,6 +38,10 @@ const BUDGET_PART_DIST = 20;
 const CLOTHES_SHADE = 22;
 /** Hair's numbers may be this much smaller than the smallest number elsewhere. */
 export const HAIR_NUMBER = 0.7;
+/** A band of hair at least this share of the picture... */
+const HAIR_BAND_SHARE = 0.0015;
+/** ...stays even this thin (share of the smallest number's radius); see HAIR_BAND in page.ts. */
+export const HAIR_BAND = 0.45;
 /** ...and differ in colorfulness (Lab chroma) by less than this. */
 const CLOTHES_SHADE_CHROMA = 10;
 /** On pages with flat clothes, each person's clothes get this many colors of their own. */
@@ -315,8 +319,13 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // So may an arm or leg (thin bare skin on a small card, not a face's shading), so it isn't
   // swallowed by the hair beside it.
   const isSkin = (color: number) => !!faces && faces.kind[color] === PartKind.face && (group?.[color] ?? 0) > faces.faceCount;
+  // Hair (a cap, short hair hugging a head) is held only to the hair's number size, so a thin
+  // band of it isn't merged into the face and leave a bald, skin-colored head.
+  const isHair = (color: number) => faces?.kind[color] === PartKind.hair;
   const radiusLimit = (k: number, color: number) =>
-    Math.max(isPet(color) || isSkin(color) ? minPrint * HAIR_NUMBER : minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
+    isHair(color)
+      ? minPrint * HAIR_NUMBER
+      : Math.max(isPet(color) || isSkin(color) ? minPrint * HAIR_NUMBER : minPrint, (isPart(color) ? (params.partMinRadius ?? params.minRadius) : params.minRadius) * (1 - 0.5 * k));
 
   // Pass 1: merge regions that are too small to color.
   const raw = labelComponents(colorMap, w, h);
@@ -332,6 +341,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   );
 
   if (faces) colorMap = removeHeadShadows(colorMap, w, h, paletteLab, faces.kind, group);
+
+
 
   // On easier pages clothes are one color per piece of clothing: shadow and light on a shirt
   // (shades close to their neighbor in the same person's clothes) merge whatever their size,
@@ -447,6 +458,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
 
   if (faces) colorMap = smoothChins(colorMap, w, h, faces);
 
+
   // Last resort: anything still too small for a readable number (a sliver of face, hair or
   // pet that had nothing of its own kind to join) merges into any neighbor, so every shape on
   // the page can carry a number. Only the blank background stays apart.
@@ -458,7 +470,11 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     // and joining the face would leave a bald, skin-colored head.
     const need = (id: number) =>
       faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) || isSkin(left.color[id]) ? minPrint * HAIR_NUMBER : minPrint;
-    const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background;
+    // A thin band of hair that's big overall (a cap brim, a hairline under a hat) stays: merged
+    // into the face it would leave a bald head. It carries the smallest number (see HAIR_BAND).
+    const band = (id: number) =>
+      faces?.kind[left.color[id]] === PartKind.hair && left.area[id] >= w * h * HAIR_BAND_SHARE && pts.radius[id] >= minPrint * HAIR_BAND;
+    const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background && !band(id);
     if (pts.radius.some((_, id) => tooSmall(id))) {
       colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
     }

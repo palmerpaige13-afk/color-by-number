@@ -7,7 +7,7 @@ import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
-import { HAIR_NUMBER, type PipelineResult, type RGB } from "@/lib/pipeline";
+import { HAIR_BAND, HAIR_NUMBER, type PipelineResult, type RGB } from "@/lib/pipeline";
 
 export interface Layer {
   result: PipelineResult;
@@ -688,7 +688,7 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
       // Thin hair, a pet's nose and a thin arm may carry a slightly smaller number (see HAIR_NUMBER).
-      if (size < (result.regionKind?.[i] === HAIR || result.regionKind?.[i] === PET || result.regionKind?.[i] === FACE ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
+      if (size < (result.regionKind?.[i] === HAIR ? MIN_FONT * HAIR_BAND : result.regionKind?.[i] === PET || result.regionKind?.[i] === FACE ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
         String(page.numbers[li][result.regionColor[i]]),
@@ -750,7 +750,7 @@ function drawRegionNumbers(
     const shape = pieceShape[i];
     if (regionColor[shape] === result.background) continue;
     const size = Math.min(maxFontPx, pts.radius[i] * scale * 1.1);
-    if (size < (regionKind?.[shape] === HAIR || regionKind?.[shape] === PET || regionKind?.[shape] === FACE ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
+    if (size < (regionKind?.[shape] === HAIR ? minFontPx * HAIR_BAND : regionKind?.[shape] === PET || regionKind?.[shape] === FACE ? minFontPx * HAIR_NUMBER : minFontPx)) continue;
     ctx.font = `${Math.round(size)}px Arial, sans-serif`;
     ctx.fillText(String(numbers[regionColor[shape]]), x + (x0 + pts.x[i]) * scale, y + (y0 + pts.y[i]) * scale);
   }
