@@ -97,7 +97,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
-  const [extraColors, setExtraColors] = useState(true);
+  const [extraColors, setExtraColors] = useState(false);
   const [printSize, setPrintSize] = useState<PrintSizeId>(muralMode ? "mural-4" : "letter");
   /** Letter on the photo page can be split across 2 or 4 sheets (same price as one page). */
   const [split, setSplit] = useState<1 | 2 | 4>(1);
