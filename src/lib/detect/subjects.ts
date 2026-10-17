@@ -39,6 +39,13 @@ const ANIMAL_SIZE = 257;
  * joins on as long as it's connected.
  */
 const ANIMAL_PAD = 2;
+/** An animal traced by color (see colorAnimal): pixels this close (ΔE, lightness counting half) to its middle's color... */
+const COLOR_ANIMAL_DE = 16;
+/** ...kept only if they fill between these shares of its box. */
+const COLOR_ANIMAL_MIN = 0.2;
+const COLOR_ANIMAL_MAX = 0.85;
+/** ...and covering no more than this share of the box's edge. */
+const COLOR_ANIMAL_EDGE = 0.4;
 /** An animal's light fur: lighter than this (Lab L)... */
 const FUR_LIGHT_L = 55;
 /** ...and about this gray (Lab chroma). */
@@ -878,6 +885,61 @@ export async function detectSubjects(
   }
 
   /** The animal's shape inside its box, from DeepLab's animal classes, cleaned to one blob. */
+  /**
+   * An animal traced by its color, for when the segmenter misses it: the usual color of the
+   * middle of its box (the fur), then every pixel within the box that close to it and joined
+   * to the middle. Only kept if it fills a believable share of the box.
+   */
+  function colorAnimal(data: Uint8Array, size: number, x0: number, y0: number, p: { x: number; y: number; w: number; h: number }): boolean {
+    const lab = workLab();
+    const bx0 = Math.max(0, Math.floor(p.x * toWork)), by0 = Math.max(0, Math.floor(p.y * toWork));
+    const bx1 = Math.min(workW - 1, Math.ceil((p.x + p.w) * toWork)), by1 = Math.min(workH - 1, Math.ceil((p.y + p.h) * toWork));
+    if (bx1 <= bx0 || by1 <= by0) return false;
+    // The middle's color: the median of the middle fifth of the box.
+    const mx0 = Math.round(bx0 + (bx1 - bx0) * 0.4), mx1 = Math.round(bx0 + (bx1 - bx0) * 0.6);
+    const my0 = Math.round(by0 + (by1 - by0) * 0.4), my1 = Math.round(by0 + (by1 - by0) * 0.6);
+    const L: number[] = [], A: number[] = [], B: number[] = [];
+    for (let y = my0; y <= my1; y++) for (let x = mx0; x <= mx1; x++) { const q = (y * workW + x) * 3; L.push(lab[q]); A.push(lab[q + 1]); B.push(lab[q + 2]); }
+    const med = (v: number[]) => v.sort((a, b) => a - b)[v.length >> 1];
+    const mL = med(L), mA = med(A), mB = med(B);
+    const near = (wx: number, wy: number) => {
+      const q = (wy * workW + wx) * 3;
+      const dL = (lab[q] - mL) * 0.5, dA = lab[q + 1] - mA, dB = lab[q + 2] - mB;
+      return dL * dL + dA * dA + dB * dB < COLOR_ANIMAL_DE * COLOR_ANIMAL_DE;
+    };
+    const w = bx1 - bx0 + 1, h = by1 - by0 + 1;
+    const got = new Uint8Array(w * h);
+    const stack: number[] = [];
+    for (let y = my0; y <= my1; y++) for (let x = mx0; x <= mx1; x++) if (near(x, y)) { const i = (y - by0) * w + (x - bx0); if (!got[i]) { got[i] = 1; stack.push(i); } }
+    let n = stack.length;
+    while (stack.length) {
+      const i = stack.pop()!;
+      const x = i % w, y = Math.floor(i / w);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx;
+        if (got[j] || !near(bx0 + nx, by0 + ny)) continue;
+        got[j] = 1;
+        stack.push(j);
+        n++;
+      }
+    }
+    if (n < w * h * COLOR_ANIMAL_MIN || n > w * h * COLOR_ANIMAL_MAX) return false;
+    // An animal sits inside its box; what runs on along most of the box's edge (a fluffy rug
+    // taken for a sheep) is the floor, not an animal.
+    let edge = 0;
+    for (let x = 0; x < w; x++) edge += got[x] + got[(h - 1) * w + x];
+    for (let y = 1; y < h - 1; y++) edge += got[y * w] + got[y * w + w - 1];
+    if (edge > 2 * (w + h) * COLOR_ANIMAL_EDGE) return false;
+    for (let i = 0; i < w * h; i++) {
+      if (!got[i]) continue;
+      const dx = bx0 + (i % w) - x0, dy = by0 + Math.floor(i / w) - y0;
+      if (dx >= 0 && dy >= 0 && dx < size && dy < size) data[dy * size + dx] = 1;
+    }
+    return true;
+  }
+
   function traceAnimal(
     model: ImageSegmenter,
     p: { x: number; y: number; w: number; h: number; label: string },
@@ -914,7 +976,11 @@ export async function detectSubjects(
     }
     const cx = (p.x + p.w / 2) * toWork - x0;
     const cy = (p.y + p.h / 2) * toWork - y0;
-    const found = cleanBlob(data, size, cx, cy);
+    let found = cleanBlob(data, size, cx, cy);
+    // The detector saw an animal but the segmenter found none in it (a dog seen through a
+    // window, behind reflections): the animal is what has the color of its middle, grown from
+    // there within its box, if that makes an animal-sized shape.
+    if (!found) found = colorAnimal(data, size, x0, y0, p);
     // A pet in someone's lap: DeepLab often calls its body part of the person, while the
     // people cut-out says it isn't a person. What's neither background nor person, and joins
     // the pet, is the rest of the pet.
