@@ -66,6 +66,18 @@ const DARK_KEY_L = 40;
 const LIVELY = 1.3;
 const LIVELY_SKIN = 1.12;
 const WARM_YELLOW = 1.12;
+/** A color in the range of skin tones: warm (Lab hue between orange and yellow), not gray, not too dark. */
+function skinLike(lab: Float32Array): boolean {
+  const [L, a, b] = lab;
+  const chroma = Math.hypot(a, b);
+  const hue = (Math.atan2(b, a) * 180) / Math.PI;
+  return L >= SKIN_LIKE_L[0] && L <= SKIN_LIKE_L[1] && chroma >= SKIN_LIKE_CHROMA[0] && chroma <= SKIN_LIKE_CHROMA[1] && hue >= SKIN_LIKE_HUE[0] && hue <= SKIN_LIKE_HUE[1];
+}
+/** Skin tones' ranges, in Lab: lightness, colorfulness (chroma) and hue (degrees). */
+const SKIN_LIKE_L = [35, 90];
+const SKIN_LIKE_CHROMA = [10, 60];
+const SKIN_LIKE_HUE = [25, 75];
+
 function lively(c: { lab: Float32Array; faces: boolean; hair: boolean }): RGB {
   const [L, a, b] = c.lab;
   const k = c.faces ? LIVELY_SKIN : LIVELY;
@@ -398,10 +410,14 @@ export function buildPage(
 
   // Numbered dark to light.
   clusters.sort((a, b) => a.lab[0] - b.lab[0]);
+  const noFaces = !clusters.some((c) => c.faces);
   const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
   const key = clusters.map((c, i) => {
     for (const m of c.members) numbers[m.layer][m.index] = i + 1;
-    return { n: i + 1, rgb: lively(c) };
+    // When no one's face is in the picture (cropped at the shoulders), skin-colored colors on
+    // the people (arms, shoulders) keep the photo's own color: livelier, they turn orange.
+    const bareSkin = noFaces && !c.hair && c.members.some((m) => layers[m.layer].people) && skinLike(c.lab);
+    return { n: i + 1, rgb: bareSkin ? c.rgb : lively(c) };
   });
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,
