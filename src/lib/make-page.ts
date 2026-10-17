@@ -763,6 +763,7 @@ export async function makePage(
       // the small cards.
       ...(photoColors ? { partMinArea: params.minArea * FACE_DETAIL[difficulty], partMinRadius: params.minRadius * Math.sqrt(FACE_DETAIL[difficulty]) } : {}),
       minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac),
+      card,
     },
   );
 
@@ -781,7 +782,7 @@ export async function makePage(
     const sceneResult = await runPipelineAsync(
       { ...scene, data: colored(scene, []), importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
       // The people's extra colors (faces shown) are theirs: the scene keeps its usual colors either way.
-      { ...params, ...(photoColors ? {} : colorParams), maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac) },
+      { ...params, ...(photoColors ? {} : colorParams), maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac), card },
     );
     const layers: Layer[] = [
       { result: sceneResult, x: 0, y: 0, scale: sceneScale, outlineBlank: false },

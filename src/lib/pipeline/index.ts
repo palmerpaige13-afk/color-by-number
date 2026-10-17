@@ -497,18 +497,23 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     }
   }
   // On a small page a bouquet's flowers are too small for a number and join what's around
-  // them, mostly its dark leaves and shadow: a pink bouquet comes out a black band. Each color
-  // of a held thing becomes the photo's average over what it now covers (where that's clearly
-  // different), so the bouquet keeps the flowers' color.
+  // them, mostly its dark leaves and shadow: a pink bouquet comes out a black band. A dark
+  // color of a held thing that swallowed its flowers (what it now covers is clearly different
+  // on average) takes the photo's average over what it covers (on a card, the flowers' own).
   if (faces?.held.size) {
     const sums = new Map<number, number[]>();
+    const covers = new Map<number, number[]>(); // color -> its pixels
     for (let p = 0; p < w * h; p++) {
       const c = colorMap[p];
       if (!faces.held.has(faces.group[c] ?? 0)) continue;
       let sum = sums.get(c);
-      if (!sum) sums.set(c, (sum = [0, 0, 0, 0]));
+      if (!sum) {
+        sums.set(c, (sum = [0, 0, 0, 0]));
+        covers.set(c, []);
+      }
       for (let j = 0; j < 3; j++) sum[j] += smoothed[p * 4 + j];
       sum[3]++;
+      covers.get(c)!.push(p);
     }
     palette = [...palette];
     paletteLab = Float32Array.from(paletteLab);
@@ -522,6 +527,14 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       if (labDist2(lab, 0, paletteLab, c * 3) < HELD_OWN_MISMATCH * HELD_OWN_MISMATCH) continue;
       // Flowers make it more colorful; a green stem turning gray isn't the flowers coming back.
       if (Math.hypot(lab[1], lab[2]) < Math.hypot(paletteLab[c * 3 + 1], paletteLab[c * 3 + 2])) continue;
+      // On a card, the flowers' own color: the lighter half of it (the leaves and shadow are the
+      // darker). A Letter page keeps the average of all of it.
+      if (params.card) {
+        const bright = (p: number) => smoothed[p * 4] + smoothed[p * 4 + 1] + smoothed[p * 4 + 2];
+        const px = covers.get(c)!.sort((a, b) => bright(b) - bright(a)).slice(0, Math.ceil(sum[3] / 2));
+        rgb.splice(0, 3, ...([0, 1, 2].map((j) => Math.round(px.reduce((t, p) => t + smoothed[p * 4 + j], 0) / px.length)) as RGB));
+        rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+      }
       palette[c] = rgb;
       paletteLab.set(lab, c * 3);
     }

@@ -78,6 +78,8 @@ export interface PipelineParams {
   partMinRadius?: number;
   /** Each piece of clothing is one color (light and shadow merged). */
   flatClothes?: boolean;
+  /** A small card (4×6, 5×7): runs the card-only steps (see card.ts); Letter pages never do. */
+  card?: boolean;
 }
 
 export interface PipelineInput {
