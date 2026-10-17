@@ -91,8 +91,6 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** A mystery mural: the PDF doesn't show the picture until its last page. */
-  const [mystery, setMystery] = useState(false);
   /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
   const [extraColors, setExtraColors] = useState(true);
   const [printSize, setPrintSize] = useState<PrintSizeId>(muralMode ? "mural-4" : "letter");
@@ -556,7 +554,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(fit.mural ? await muralPdf(result, fit, { mystery }) : await pagePdf(result, fit), `color-by-number-${pageSize}.pdf`);
+      saveFile(fit.mural ? await muralPdf(result, fit) : await pagePdf(result, fit), `color-by-number-${pageSize}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF. Try a smaller print size.");
     } finally {
@@ -716,10 +714,6 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                   className="h-4 w-4 accent-violet-600"
                 />
                 Extra colorful: add fun colors to plain areas like sky, so every sheet has lots to color
-              </label>
-              <label className="flex w-full items-center gap-2 text-sm">
-                <input type="checkbox" checked={mystery} onChange={(e) => setMystery(e.target.checked)} className="h-4 w-4 accent-violet-600" />
-                Mystery mural: keep the picture a surprise until it&apos;s put together
               </label>
               <span className="w-full text-sm text-zinc-500">
                 Tip: colorful pictures with color all the way to the edges make the best murals. After making it, tap Face to
@@ -1179,9 +1173,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
               Download PDF ({sizeLabel}){paymentsOn && !paid ? `: ${priceLabel(product)}` : ""}
             </button>
             <span className="text-sm text-zinc-500">
-              {fit?.mural && mystery
-                ? "A map of where each sheet goes, the color key, every sheet to color, and the big reveal on the last page."
-                : fit?.mural
+              {fit?.mural
                 ? "A map of how the sheets go together, the color key, and every sheet to color."
                 : "The page to color, the color key, and the finished picture."}
             </span>
