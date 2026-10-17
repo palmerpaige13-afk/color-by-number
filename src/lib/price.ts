@@ -1,7 +1,19 @@
 // What a PDF download costs. The checkout server reads the price from here by product, so
 // the browser can say which kind of page it's buying but never set the amount.
 
-export type Product = "photo" | "halloween" | "halloween-all" | "mural-2" | "mural-4" | "mural-9" | "mural-16" | "mural-36";
+export type Product =
+  | "photo"
+  | "halloween"
+  | "halloween-all"
+  | "thanksgiving"
+  | "thanksgiving-all"
+  | "christmas"
+  | "christmas-all"
+  | "mural-2"
+  | "mural-4"
+  | "mural-9"
+  | "mural-16"
+  | "mural-36";
 
 export const PRODUCTS: Record<Product, { cents: number; name: string; description: string }> = {
   photo: {
@@ -23,6 +35,26 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     cents: 700,
     name: "All 15 Halloween color-by-number pages",
     description: "Every Halloween page in one PDF, each with its color key, Letter size",
+  },
+  thanksgiving: {
+    cents: 300,
+    name: "Thanksgiving color-by-number PDF",
+    description: "A Letter-size Thanksgiving color-by-number page and its color key",
+  },
+  "thanksgiving-all": {
+    cents: 700,
+    name: "All 15 Thanksgiving color-by-number pages",
+    description: "Every Thanksgiving page in one PDF, each with its color key, Letter size",
+  },
+  christmas: {
+    cents: 300,
+    name: "Christmas color-by-number PDF",
+    description: "A Letter-size Christmas color-by-number page and its color key",
+  },
+  "christmas-all": {
+    cents: 700,
+    name: "All 15 Christmas color-by-number pages",
+    description: "Every Christmas page in one PDF, each with its color key, Letter size",
   },
 };
 

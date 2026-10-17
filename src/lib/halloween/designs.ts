@@ -49,7 +49,7 @@ export const C = {
 export const INK = "#222222";
 
 /** A five-pointed star centered at (cx, cy). */
-function star(cx: number, cy: number, r: number, fill: string) {
+export function star(cx: number, cy: number, r: number, fill: string) {
   const pts = Array.from({ length: 10 }, (_, i) => {
     const a = -Math.PI / 2 + (i * Math.PI) / 5;
     const rr = i % 2 ? r * 0.48 : r;
@@ -59,13 +59,13 @@ function star(cx: number, cy: number, r: number, fill: string) {
 }
 
 /** A cute eye: an ink oval with a white shine. */
-function eye(cx: number, cy: number, rx: number, ry = rx) {
+export function eye(cx: number, cy: number, rx: number, ry = rx) {
   const s = Math.max(2.5, rx * 0.38);
   return `<ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="${INK}"/><circle cx="${cx + rx * 0.3}" cy="${cy - ry * 0.35}" r="${s}" fill="#fff"/>`;
 }
 
 /** Flower: five petals around a center. */
-function flower(cx: number, cy: number, r: number, petal: string, center: string) {
+export function flower(cx: number, cy: number, r: number, petal: string, center: string) {
   const petals = Array.from({ length: 5 }, (_, i) => {
     const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
     return `<circle cx="${(cx + r * Math.cos(a)).toFixed(1)}" cy="${(cy + r * Math.sin(a)).toFixed(1)}" r="${r * 0.85}" fill="${petal}"/>`;
@@ -74,7 +74,7 @@ function flower(cx: number, cy: number, r: number, petal: string, center: string
 }
 
 /** A wrapped candy: a round middle with a twist of wrapper either side. */
-function wrapped(cx: number, cy: number, r: number, candy: string, wrapper: string) {
+export function wrapped(cx: number, cy: number, r: number, candy: string, wrapper: string) {
   return (
     `<path d="M${cx} ${cy} L${cx - 2.4 * r} ${cy - r} L${cx - 2.4 * r} ${cy + r} Z M${cx} ${cy} L${cx + 2.4 * r} ${cy - r} L${cx + 2.4 * r} ${cy + r} Z" fill="${wrapper}"/>` +
     `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${candy}"/>`
@@ -82,7 +82,7 @@ function wrapped(cx: number, cy: number, r: number, candy: string, wrapper: stri
 }
 
 /** An ink line. */
-function line(d: string, w = 5) {
+export function line(d: string, w = 5) {
   return `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
 }
 

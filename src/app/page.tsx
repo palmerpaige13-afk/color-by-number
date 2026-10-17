@@ -27,6 +27,22 @@ const CHOICES = [
     price: priceLabel("halloween"),
     tint: "bg-orange-100 text-orange-950 hover:bg-orange-200 dark:bg-orange-950 dark:text-orange-100 dark:hover:bg-orange-900",
   },
+  {
+    href: "/thanksgiving",
+    emoji: "🦃",
+    title: "Thanksgiving pages",
+    blurb: "Fifteen cozy, ready-made Thanksgiving pictures to print and color.",
+    price: priceLabel("thanksgiving"),
+    tint: "bg-amber-100 text-amber-950 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900",
+  },
+  {
+    href: "/christmas",
+    emoji: "🎄",
+    title: "Christmas pages",
+    blurb: "Fifteen merry, ready-made Christmas pictures to print and color.",
+    price: priceLabel("christmas"),
+    tint: "bg-emerald-100 text-emerald-950 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900",
+  },
 ];
 
 export default function Home() {

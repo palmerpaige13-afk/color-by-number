@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { HalloweenGallery } from "./gallery";
+import { HolidayGallery } from "@/app/holiday-gallery";
+import { HOLIDAYS } from "@/lib/holidays";
 
 export const metadata: Metadata = {
   title: "Halloween Pages · Color by Number",
@@ -7,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function HalloweenPage() {
-  return <HalloweenGallery />;
+  return <HolidayGallery holiday={HOLIDAYS.halloween} />;
 }

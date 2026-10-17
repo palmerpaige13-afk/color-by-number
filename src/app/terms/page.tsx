@@ -51,6 +51,8 @@ export default function Terms() {
         <ul className="list-disc space-y-1 pl-6">
           <li>A page made from your own photo: {priceLabel("photo")}</li>
           <li>A Halloween page: {priceLabel("halloween")}</li>
+          <li>A Thanksgiving page: {priceLabel("thanksgiving")}</li>
+          <li>A Christmas page: {priceLabel("christmas")}</li>
         </ul>
         <p>
           Prices are in US dollars. It&apos;s a digital download: nothing is shipped. The PDF downloads right after
@@ -99,7 +101,7 @@ export default function Terms() {
       <Section title="Personal use">
         <p>
           Pages you buy are for personal use: print them, color them, give them as gifts. Please don&apos;t resell
-          the PDFs, or the Halloween designs, which belong to Color by Number.
+          the PDFs, or the Halloween, Thanksgiving and Christmas designs, which belong to Color by Number.
         </p>
       </Section>
 

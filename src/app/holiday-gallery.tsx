@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { DESIGNS, type HalloweenDesign } from "@/lib/halloween/designs";
+import type { HalloweenDesign } from "@/lib/halloween/designs";
+import type { Holiday } from "@/lib/holidays";
 import { drawHalloweenPage, makeHalloweenPage, previewSvg, withMath, type HalloweenPage } from "@/lib/halloween/make";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { pagePdf, pagesPdf, saveFile } from "@/lib/page-pdf";
@@ -41,7 +42,9 @@ function mathFor(hp: HalloweenPage): HalloweenPage {
   return m;
 }
 
-export function HalloweenGallery() {
+/** A holiday's gallery of ready-made pages (see lib/holidays). */
+export function HolidayGallery({ holiday }: { holiday: Holiday }) {
+  const { designs: DESIGNS, theme: th } = holiday;
   /** Shapes show math problems (addition and subtraction) instead of their numbers. */
   const [math, setMath] = useState(false);
   /** The page as shown and downloaded: with math problems when chosen. */
@@ -132,7 +135,7 @@ export function HalloweenGallery() {
     await new Promise((r) => setTimeout(r, 30));
     try {
       const page = shown(hp);
-      saveFile(await pagePdf(page.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, page, view, s)), `halloween-${hp.design.id}${math ? "-math" : ""}.pdf`);
+      saveFile(await pagePdf(page.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, page, view, s)), `${holiday.id}-${hp.design.id}${math ? "-math" : ""}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
@@ -149,7 +152,7 @@ export function HalloweenGallery() {
       const all = [];
       for (const d of DESIGNS) all.push(shown(await pageFor(d)));
       const pdf = await pagesPdf(all.map((hp) => ({ page: hp.page, fit: FIT, draw: (c, _page, view, s) => drawHalloweenPage(c, hp, view, s) })));
-      saveFile(pdf, `halloween-all-pages${math ? "-math" : ""}.pdf`);
+      saveFile(pdf, `${holiday.id}-all-pages${math ? "-math" : ""}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
@@ -158,7 +161,7 @@ export function HalloweenGallery() {
   }
   const allPaid = DESIGNS.every((d) => paid.has(d.id));
   /** What all the pages would cost one at a time, as people see it. */
-  const separately = `$${(DESIGNS.length * PRODUCTS.halloween.cents) / 100}`;
+  const separately = `$${(DESIGNS.length * PRODUCTS[holiday.product].cents) / 100}`;
 
   /** This page has to be paid for before it downloads. */
   const mustPay = paymentsOn && !!chosen && !paid.has(chosen.id);
@@ -169,16 +172,16 @@ export function HalloweenGallery() {
         <Link href="/" className="text-sm font-semibold text-violet-700 hover:underline dark:text-violet-300">
           ← All pages
         </Link>
-        <h1 className="mt-3 text-3xl font-bold tracking-tight">Halloween Color by Number 🎃</h1>
-        <p className="mt-1 text-zinc-600 dark:text-zinc-400">
-          Fifteen cute Halloween pages full of colors and shapes. Pick one to see it, then download it to print on Letter paper.
-        </p>
+        <h1 className="mt-3 text-3xl font-bold tracking-tight">
+          {holiday.title} {holiday.emoji}
+        </h1>
+        <p className="mt-1 text-zinc-600 dark:text-zinc-400">{holiday.intro}</p>
       </header>
 
-      <section className="flex flex-col gap-3 rounded-2xl bg-orange-100 p-4 sm:flex-row sm:items-center dark:bg-orange-950">
+      <section className={`flex flex-col gap-3 rounded-2xl p-4 sm:flex-row sm:items-center ${th.banner}`}>
         <div className="flex-1">
-          <p className="font-bold text-orange-950 dark:text-orange-100">🎃 Get all {DESIGNS.length} pages for {priceLabel("halloween-all")}</p>
-          <p className="text-sm text-orange-900 dark:text-orange-200">
+          <p className={`font-bold ${th.bannerTitle}`}>{holiday.emoji} Get all {DESIGNS.length} pages for {priceLabel(holiday.bundle)}</p>
+          <p className={`text-sm ${th.bannerText}`}>
             Every design in one PDF, each with its color key: {separately} if bought one by one.
           </p>
         </div>
@@ -186,14 +189,14 @@ export function HalloweenGallery() {
           type="button"
           disabled={busyAll}
           onClick={() => (paymentsOn && !allPaid ? setPayingAll(true) : downloadAll())}
-          className="shrink-0 rounded-full bg-orange-500 px-5 py-2 font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-60"
+          className={`shrink-0 rounded-full px-5 py-2 font-semibold text-white transition-colors disabled:opacity-60 ${th.button}`}
         >
-          {busyAll ? "Preparing all the pages…" : paymentsOn && !allPaid ? `Buy all ${DESIGNS.length}: ${priceLabel("halloween-all")}` : `Download all ${DESIGNS.length}`}
+          {busyAll ? "Preparing all the pages…" : paymentsOn && !allPaid ? `Buy all ${DESIGNS.length}: ${priceLabel(holiday.bundle)}` : `Download all ${DESIGNS.length}`}
         </button>
       </section>
       {payingAll && (
         <Checkout
-          product="halloween-all"
+          product={holiday.bundle}
           onClose={() => setPayingAll(false)}
           onPaid={() => {
             setPaid(new Set(DESIGNS.map((d) => d.id)));
@@ -219,7 +222,7 @@ export function HalloweenGallery() {
               aria-checked={math === on}
               onClick={() => math !== on && chooseMath(on)}
               className={`rounded-full px-3 py-1 text-sm font-semibold transition-colors ${
-                math === on ? "bg-orange-500 text-white" : "text-zinc-600 hover:text-orange-600 dark:text-zinc-400"
+                math === on ? th.on : `text-zinc-600 dark:text-zinc-400 ${th.hoverText}`
               }`}
             >
               {on ? "Math problems" : "Numbers"}
@@ -239,7 +242,7 @@ export function HalloweenGallery() {
               aria-checked={allNumbered === on}
               onClick={() => allNumbered !== on && showAll(on)}
               className={`rounded-full px-3 py-1 text-sm font-semibold transition-colors ${
-                allNumbered === on ? "bg-orange-500 text-white" : "text-zinc-600 hover:text-orange-600 dark:text-zinc-400"
+                allNumbered === on ? th.on : `text-zinc-600 dark:text-zinc-400 ${th.hoverText}`
               }`}
             >
               {on ? (math ? "With math" : "With numbers") : "Colored"}
@@ -256,7 +259,7 @@ export function HalloweenGallery() {
             <li
               key={d.id}
               className={`flex flex-col gap-2 rounded-2xl border-2 bg-white p-2 transition-colors dark:bg-zinc-900 ${
-                chosen?.id === d.id ? "border-orange-500" : "border-zinc-200 hover:border-orange-300 dark:border-zinc-800"
+                chosen?.id === d.id ? th.chosen : `border-zinc-200 dark:border-zinc-800 ${th.hoverBorder}`
               }`}
             >
               <button
@@ -275,7 +278,7 @@ export function HalloweenGallery() {
                 )}
                 {showNumbers && !thumb && (
                   <span className="absolute inset-0 grid place-items-center">
-                    <span className="h-7 w-7 animate-spin rounded-full border-4 border-orange-200 border-t-orange-500" aria-hidden />
+                    <span className={`h-7 w-7 animate-spin rounded-full border-4 ${th.spinner}`} aria-hidden />
                   </span>
                 )}
               </button>
@@ -285,7 +288,7 @@ export function HalloweenGallery() {
                   type="button"
                   aria-pressed={showNumbers}
                   onClick={() => toggleNumbers(d)}
-                  className="shrink-0 rounded-full border-2 border-zinc-300 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-orange-400 dark:border-zinc-700 dark:text-zinc-300"
+                  className={`shrink-0 rounded-full border-2 border-zinc-300 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 ${th.hoverBorderStrong}`}
                 >
                   {showNumbers ? "Colored" : math ? "Math" : "Numbers"}
                 </button>
@@ -310,7 +313,7 @@ export function HalloweenGallery() {
                 aria-pressed={colored}
                 disabled={!made}
                 onClick={() => setColored(!colored)}
-                className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-orange-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
+                className={`rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 ${th.hoverBorderStrong}`}
               >
                 {colored ? (math ? "Show math" : "Show numbers") : "Show finished"}
               </button>
@@ -318,16 +321,16 @@ export function HalloweenGallery() {
                 type="button"
                 disabled={!made || !!busy}
                 onClick={() => (mustPay ? setPaying(true) : download())}
-                className="rounded-full bg-orange-500 px-5 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-40"
+                className={`rounded-full px-5 py-1.5 text-sm font-semibold text-white transition-colors disabled:opacity-40 ${th.button}`}
               >
-                {busy ?? `Download PDF (Letter)${mustPay ? `: ${priceLabel("halloween")}` : ""}`}
+                {busy ?? `Download PDF (Letter)${mustPay ? `: ${priceLabel(holiday.product)}` : ""}`}
               </button>
             </div>
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           {paying && made && (
             <Checkout
-              product="halloween"
+              product={holiday.product}
               onClose={() => setPaying(false)}
               onPaid={() => {
                 setPaid((p) => new Set(p).add(made.design.id));
@@ -341,7 +344,7 @@ export function HalloweenGallery() {
               <canvas ref={canvasRef} className="h-full w-full rounded-xl" aria-label={`${chosen.title} color-by-number page`} />
             ) : (
               <div className="absolute inset-0 grid place-items-center">
-                <span className="h-8 w-8 animate-spin rounded-full border-4 border-orange-200 border-t-orange-500" aria-hidden />
+                <span className={`h-8 w-8 animate-spin rounded-full border-4 ${th.spinner}`} aria-hidden />
               </div>
             )}
           </div>
