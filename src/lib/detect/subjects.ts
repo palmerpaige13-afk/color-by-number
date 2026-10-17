@@ -39,6 +39,10 @@ const ANIMAL_SIZE = 257;
  * joins on as long as it's connected.
  */
 const ANIMAL_PAD = 2;
+/** Skin found by the segmenter with this many times its own area of hair just above it is a neck under the back of a head, not a face. */
+const BACK_OF_HEAD_HAIR = 1;
+/** ...unless it's within this many face sizes of a found face (a kiss, a hug). */
+const BESIDE_FACE = 2.5;
 /** An animal traced by color (see colorAnimal): pixels this close (ΔE, lightness counting half) to its middle's color... */
 const COLOR_ANIMAL_DE = 16;
 /** ...kept only if they fill between these shares of its box. */
@@ -1196,6 +1200,24 @@ export async function detectSubjects(
       }
       const bw = bx1 - bx0 + 1;
       const bh = by1 - by0 + 1;
+      // The back of a head: a neck or an ear under a whole head of hair. A face seen from the
+      // front is mostly skin, with its hair around it; this is mostly hair, above the skin.
+      let hairAbove = 0;
+      const ax0 = Math.max(0, Math.floor(bx0 - bw * 0.5)), ax1 = Math.min(workW - 1, Math.ceil(bx1 + bw * 0.5));
+      const ay0 = Math.max(0, Math.floor(by0 - Math.max(bw, bh) * 1.5));
+      for (let y = ay0; y < by0; y++) for (let x = ax0; x <= ax1; x++) hairAbove += hair[y * workW + x];
+      // A face turned away in a kiss or hug (cheek to a found face, hair above it) is still a face.
+      const byFace = known.some((f) => Math.hypot(f.x + f.width / 2 - (bx0 + bw / 2), f.y + f.height / 2 - (by0 + bh / 2)) < Math.max(f.width, f.height) * BESIDE_FACE);
+      if (!byFace && hairAbove > pix.length * BACK_OF_HEAD_HAIR) {
+        // Its skin (the neck, an ear) isn't any face's either: left to the photo's own colors,
+        // not given someone else's face color.
+        if (peopleCut) {
+          for (let y = Math.max(0, Math.floor(by0 - bh * 0.5)); y <= Math.min(workH - 1, by1 + bh * 0.5); y++) {
+            for (let x = Math.max(0, Math.floor(bx0 - bw * 0.5)); x <= Math.min(workW - 1, bx1 + bw * 0.5); x++) peopleCut.bodySkin[y * workW + x] = 0;
+          }
+        }
+        continue;
+      }
       const data = new Uint8Array(bw * bh);
       for (const q of pix) data[(Math.floor(q / workW) - by0) * bw + (q % workW) - bx0] = 1;
       cleanBlob(data, bw, bw / 2, bh / 2);
