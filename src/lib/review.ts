@@ -112,7 +112,7 @@ export interface VisitStats {
 }
 
 /** Visits are counted from here on (the counts were reset then; older visits are kept, just not counted). */
-const VISITS_COUNTED_FROM = "2026-10-13T03:35:00Z";
+const VISITS_COUNTED_FROM = "2026-10-17T16:48:00Z";
 
 /** How many people visited lately, and where from (Facebook, Instagram, a shared link…). */
 export async function loadVisitStats(days = 7): Promise<VisitStats> {
