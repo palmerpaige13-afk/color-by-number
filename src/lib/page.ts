@@ -53,6 +53,10 @@ export interface Page {
  * 10 is the smallest difference that's easy to see on paper); closer colors share one number.
  */
 const DISTINCT = 10;
+/** Two very dark key colors must differ by at least this (ΔE)... */
+const DARK_DISTINCT = 14;
+/** ...easing back to the usual difference as the lighter of the two gets this light (Lab L). */
+const DARK_KEY_L = 40;
 /**
  * Photos lose some color on the way to a handful of paints (averaging, smoothing), so the
  * paint colors are made livelier: more saturated, by LIVELY (skin a little less, so faces
@@ -316,6 +320,15 @@ export function buildPage(
     if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;
     return true;
   };
+  // Dark colors are harder to tell apart on paper than light ones (a near-black and a dark
+  // navy both print nearly black), so two dark colors must differ by more to keep their own
+  // numbers: up to DARK_DISTINCT when both are very dark. Pairs are compared by their distance
+  // over what they need.
+  const need2 = (a: Cluster, b: Cluster) => {
+    const t = Math.min(1, Math.max(a.lab[0], b.lab[0]) / DARK_KEY_L);
+    const need = Math.max(distinct, distinct + (DARK_DISTINCT - distinct) * (1 - t));
+    return need * need;
+  };
   for (;;) {
     let bi = -1;
     let bj = -1;
@@ -323,14 +336,15 @@ export function buildPage(
     for (let i = 0; i < clusters.length; i++) {
       for (let j = i + 1; j < clusters.length; j++) {
         const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
-        if (d < bd && canMerge(clusters[i], clusters[j], d)) {
-          bd = d;
+        const nd = d / need2(clusters[i], clusters[j]);
+        if (nd < bd && canMerge(clusters[i], clusters[j], d)) {
+          bd = nd;
           bi = i;
           bj = j;
         }
       }
     }
-    if (bi < 0 || (bd >= distinct * distinct && clusters.length <= maxColors)) break;
+    if (bi < 0 || (bd >= 1 && clusters.length <= maxColors)) break;
     const [a, b] = [clusters[bi], clusters[bj]];
     const area = a.area + b.area;
     const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
