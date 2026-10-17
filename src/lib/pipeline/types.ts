@@ -80,6 +80,8 @@ export interface PipelineParams {
   flatClothes?: boolean;
   /** A small card (4×6, 5×7): runs the card-only steps (see card.ts); Letter pages never do. */
   card?: boolean;
+  /** A card's scene (not cut-out people): its shapes are simplified (see card.ts). */
+  cardScene?: boolean;
 }
 
 export interface PipelineInput {

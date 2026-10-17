@@ -7,6 +7,7 @@ import { PartKind, paintSkin, separateFaces, smoothChins } from "./faces";
 import { labDist2, rgbToLab } from "./color";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
+import { smoothCardShapes } from "./card";
 import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult, type RGB } from "./types";
 
 export * from "./types";
@@ -309,6 +310,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   lap("quantize");
 
   let colorMap = majorityFilter(indices, w, h, palette.length, params.boundaryPasses);
+  if (params.cardScene) colorMap = smoothCardShapes(colorMap, w, h, palette.length, group, params.minLabelRadius ?? MIN_PRINT_RADIUS);
   /** Pixels of each color before shapes are merged (see the held things' colors below). */
   const startArea = new Uint32Array(palette.length);
   for (let p = 0; p < w * h; p++) startArea[colorMap[p]]++;
@@ -351,6 +353,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     paletteLab,
     (id, area) => area < areaLimit(keepFactor(rawImp[id], rawContrast[id]), raw.color[id]),
     group,
+    0,
+    Infinity,
+    params.cardScene,
   );
 
   if (faces) colorMap = removeHeadShadows(colorMap, w, h, paletteLab, faces.kind, group);
@@ -467,6 +472,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       paletteLab,
       (id, area) => area === sized.area[id] && tooThin(id),
       group,
+      0,
+      Infinity,
+      params.cardScene,
     );
   }
 
@@ -493,7 +501,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
       faces?.kind[left.color[id]] === PartKind.hair && left.area[id] >= w * h * HAIR_BAND_SHARE && pts.radius[id] >= minPrint * HAIR_BAND;
     const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background && !band(id);
     if (pts.radius.some((_, id) => tooSmall(id))) {
-      colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
+      colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly, 0, Infinity, params.cardScene);
     }
   }
   // On a small page a bouquet's flowers are too small for a number and join what's around

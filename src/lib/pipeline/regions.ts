@@ -125,6 +125,9 @@ class Heap {
  * `maxPartDist`: a region of a part (face, hair, clothes) never merges into a neighbor whose
  * color is further than this (ΔE), so a white shirt doesn't swallow blue jeans.
  */
+/** Cards: colors this close (ΔE) count as alike when choosing what a small piece joins. */
+const SURROUND_DE = 8;
+
 export function mergeRegions(
   comps: Components,
   w: number,
@@ -134,6 +137,12 @@ export function mergeRegions(
   group?: Uint8Array,
   budget = 0,
   maxPartDist = Infinity,
+  /**
+   * Cards: a small piece of the scene joins the neighbor that surrounds it most, not just the
+   * closest color it touches at a corner (see card.ts): the color distance counts less the more
+   * of the piece's edge it shares.
+   */
+  surround = false,
 ): Uint8Array {
   const { labels, count } = comps;
   let live = count;
@@ -184,22 +193,30 @@ export function mergeRegions(
 
     let target = -1;
     let bestD = Infinity;
+    let bestD2 = Infinity;
     let bestBorder = -1;
     const g = groupOf(r);
     const hasSameGroup = [...adj[r].keys()].some((nb) => groupOf(nb) === g);
     if (!hasSameGroup && g !== 0) continue;
+    let edge = 0;
+    // Only the scene: people's parts keep joining their closest color (a shadow strip in a dress
+    // would otherwise take over the dress).
+    const around = surround && g === 0;
+    if (around) for (const border of adj[r].values()) edge += border;
     for (const [nb, border] of adj[r]) {
       if (hasSameGroup && groupOf(nb) !== g) continue;
       if (groupOf(nb) === BLANK_GROUP && g !== BLANK_GROUP) continue;
-      const d = labDist2(paletteLab, color[r] * 3, paletteLab, color[nb] * 3);
+      const d2 = labDist2(paletteLab, color[r] * 3, paletteLab, color[nb] * 3);
+      const d = around ? (Math.sqrt(d2) + SURROUND_DE) * (edge / border) : d2;
       if (d < bestD || (d === bestD && border > bestBorder)) {
         bestD = d;
+        bestD2 = d2;
         bestBorder = border;
         target = nb;
       }
     }
 
-    if (target < 0 || (g !== 0 && bestD > maxPartDist * maxPartDist)) continue;
+    if (target < 0 || (g !== 0 && bestD2 > maxPartDist * maxPartDist)) continue;
 
     // Absorb r into target.
     parent[r] = target;
