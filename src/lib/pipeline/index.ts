@@ -42,6 +42,8 @@ export const HAIR_NUMBER = 0.7;
 const HAIR_BAND_SHARE = 0.0015;
 /** ...stays even this thin (share of the smallest number's radius); see HAIR_BAND in page.ts. */
 export const HAIR_BAND = 0.45;
+/** Part groups from here up (below the blank background's) are patches of another hue in someone's clothes (see partGroup). */
+export const PATCH_GROUP = 192;
 /** ...and differ in colorfulness (Lab chroma) by less than this. */
 const CLOTHES_SHADE_CHROMA = 10;
 /** On pages with flat clothes, each person's clothes get this many colors of their own. */
@@ -359,6 +361,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
         const ca = comps.color[a];
         const cb = comps.color[b];
         if (kind[ca] !== PartKind.clothes || group?.[ca] !== group?.[cb]) return;
+        if (faces.patches.has(ca) || faces.patches.has(cb)) return;
         if (labDist2(paletteLab, ca * 3, paletteLab, cb * 3) >= CLOTHES_SHADE * CLOTHES_SHADE) return;
         // Shadow only darkens a color; a colorful patch next to a gray one (denim shorts
         // under a black top) is a different piece of clothing.
@@ -470,8 +473,11 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const blankOnly = group && Uint8Array.from(group, (g) => (g === BACKGROUND_GROUP ? g : 0));
     // Hair may carry a smaller number (see HAIR_NUMBER): short hair hugging a head is thin,
     // and joining the face would leave a bald, skin-colored head.
+    // So may a baby's outfit held against a dress (its legs a thin strip under a hand).
     const need = (id: number) =>
-      faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) || isSkin(left.color[id]) ? minPrint * HAIR_NUMBER : minPrint;
+      faces?.kind[left.color[id]] === PartKind.hair || isPet(left.color[id]) || isSkin(left.color[id]) || faces?.patches.has(left.color[id])
+        ? minPrint * HAIR_NUMBER
+        : minPrint;
     // A thin band of hair that's big overall (a cap brim, a hairline under a hat) stays: merged
     // into the face it would leave a bald head. It carries the smallest number (see HAIR_BAND).
     const band = (id: number) =>
@@ -532,7 +538,11 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     labelY: pts.y,
     labelRadius: pts.radius,
     background,
-    partGroup: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.group[i] ?? 0) : undefined,
+    // A patch of another hue in someone's clothes (a baby's outfit against the dress holding
+    // it) is a piece of its own on the page, so it never shares the dress's number.
+    partGroup: faces
+      ? Uint8Array.from({ length: palette.length }, (_, i) => (faces.patches.has(i) ? Math.min(BLANK_GROUP - 1, PATCH_GROUP + (faces.group[i] ?? 0)) : (faces.group[i] ?? 0)))
+      : undefined,
     partPerson: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.skinOfFace.get(faces.group[i] ?? 0) ?? faces.group[i] ?? 0) : undefined,
     partKind: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.kind[i] ?? 0) : undefined,
     eyes: petFaces.flatMap((f) => f.eyes),

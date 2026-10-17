@@ -71,6 +71,17 @@ const SKY_HAIR_TINT = [4, 14] as const;
 const HELD_COLORS = 12;
 /** ...and for a small one (a shoe, a watch). */
 const HELD_SMALL_COLORS = 3;
+/** Cards: clothes pixels at least this colorful (Lab chroma)... */
+const PATCH_MIN_CHROMA = 6;
+/** ...whose hue is this far (degrees) from the clothes' own hue are another thing's color... */
+const PATCH_HUE_APART = 30;
+/** ...and, covering at least this share of the clothes (but no more than the next), get a color of their own. */
+const PATCH_MIN_SHARE = 0.02;
+const PATCH_MAX_SHARE = 0.12;
+/** Each solid piece of such a patch is at least this share of the clothes (scattered shadow tints aren't). */
+const PATCH_PIECE_SHARE = 0.01;
+/** Only clothes at least this colorful on average (Lab chroma; a beige dress, not a white one) are looked at. */
+const PATCH_CLOTHES_CHROMA = 12;
 /** Hair no face claims, in patches at least this share of the picture, is hair of its own. */
 const LOOSE_HAIR_MIN = 0.002;
 /** Real hair's own colors (light, middle and dark strands, shadow). */
@@ -173,6 +184,8 @@ export interface FaceRegions {
   faceCount: number;
   /** Per part: the face (part id) a piece of bare skin belongs to; absent for other parts. */
   skinOfFace: Map<number, number>;
+  /** Cards: palette colors of a patch clearly another hue than the clothes it's in (see clothesPalette). */
+  patches: Set<number>;
 }
 
 /** A traced face (its part id and rounded outline) and the bare-skin pieces that are its neck and arms. */
@@ -676,13 +689,16 @@ export function separateFaces(
     const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
     if (ids.every((id) => id >= 0)) whiteTone.set(k, { ids, tone: own.tone });
   }
+  const patches = new Set<number>();
   if (clothesColors > 0) {
     for (const [k, kind] of kindOf) {
       if (kind !== PartKind.clothes || heldParts.has(k)) continue;
-      const own = clothesPalette(smoothed, parts, k, clothesColors);
+      const own = clothesPalette(smoothed, parts, k, clothesColors, w);
       if (!own) continue;
       const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
-      if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
+      if (!ids.every((id) => id >= 0)) continue;
+      faceTone.set(k, { ids, tone: own.tone });
+      if (own.rgb.length > clothesColors) patches.add(ids[clothesColors]);
     }
   }
 
@@ -819,6 +835,7 @@ export function separateFaces(
     kind: Uint8Array.from(group, (g) => kindOf.get(g) ?? PartKind.none),
     faceCount: faces.length,
     skinOfFace: new Map(skinPieces),
+    patches,
     jaws: chins
       ? faces.flatMap((f, i) =>
           traced(f) ? [{ face: i + 1, outline: roundOutline(f.outline!), skin: [...skinPieces].filter(([, k]) => k === i + 1).map(([piece]) => piece) }] : [],
@@ -1027,6 +1044,8 @@ function clothesPalette(
   parts: Uint8Array,
   k: number,
   n: number,
+  /** Image width, to find a patch of another hue in the clothes (see below); 0 for none. */
+  patchW = 0,
 ): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
   const px: number[] = [];
   for (let p = 0; p < parts.length; p++) if (parts[p] === k) px.push(p);
@@ -1069,8 +1088,55 @@ function clothesPalette(
     for (let a = 0; a < 3; a++) rgbSum[group[i] * 4 + a] += smoothed[p * 4 + a];
     rgbSum[group[i] * 4 + 3]++;
   });
-  const rgb = Array.from({ length: n }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))) as RGB);
-  const out = new Float32Array(n * 3);
+  let rgb = Array.from({ length: n }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))) as RGB);
+  // A patch clearly another hue than the clothes around it (a sage baby outfit held against a
+  // beige dress) is shared out among the clothes' shades, so it gets a color of its own.
+  if (patchW) {
+    let sa = 0;
+    let sb = 0;
+    for (let i = 0; i < px.length; i++) { sa += lab[i * 3 + 1]; sb += lab[i * 3 + 2]; }
+    const hue = Math.atan2(sb, sa);
+    const odd: number[] = [];
+    for (let i = 0; i < px.length; i++) {
+      const a = lab[i * 3 + 1];
+      const b = lab[i * 3 + 2];
+      if (Math.hypot(a, b) < PATCH_MIN_CHROMA) continue;
+      let d = Math.abs(Math.atan2(b, a) - hue);
+      if (d > Math.PI) d = 2 * Math.PI - d;
+      if (d > (PATCH_HUE_APART * Math.PI) / 180) odd.push(i);
+    }
+    // Only solid pieces of it count: shadow in a fold tints scattered pixels, not a blob.
+    const at = new Int32Array(parts.length).fill(-1);
+    for (const i of odd) at[px[i]] = i;
+    const piece: number[] = [];
+    for (const start of odd) {
+      if (at[px[start]] < 0) continue;
+      const found: number[] = [];
+      const stack = [px[start]];
+      at[px[start]] = -1;
+      while (stack.length) {
+        const p = stack.pop()!;
+        found.push(p);
+        const x = p % patchW;
+        for (const q of [x > 0 ? p - 1 : -1, x < patchW - 1 ? p + 1 : -1, p - patchW, p + patchW]) {
+          if (q < 0 || q >= parts.length || at[q] < 0) continue;
+          stack.push(q);
+          at[q] = -1;
+        }
+      }
+      if (found.length >= px.length * PATCH_PIECE_SHARE) for (const p of found) piece.push(p);
+    }
+    if (Math.hypot(sa, sb) >= px.length * PATCH_CLOTHES_CHROMA && piece.length >= px.length * PATCH_MIN_SHARE && odd.length <= px.length * PATCH_MAX_SHARE) {
+      const index = new Map(px.map((p, i) => [p, i]));
+      const sum = [0, 0, 0];
+      for (const p of piece) {
+        group[index.get(p)!] = n;
+        for (let a = 0; a < 3; a++) sum[a] += smoothed[p * 4 + a];
+      }
+      rgb = [...rgb, sum.map((v) => Math.round(v / piece.length)) as RGB];
+    }
+  }
+  const out = new Float32Array(rgb.length * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
   const tone = new Map<number, number>();
   px.forEach((p, i) => tone.set(p, group[i]));

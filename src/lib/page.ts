@@ -7,7 +7,7 @@ import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
 import { traceOutlines, type Outline } from "@/lib/outlines";
-import { HAIR_BAND, HAIR_NUMBER, type PipelineResult, type RGB } from "@/lib/pipeline";
+import { HAIR_BAND, HAIR_NUMBER, PATCH_GROUP, type PipelineResult, type RGB } from "@/lib/pipeline";
 
 export interface Layer {
   result: PipelineResult;
@@ -687,8 +687,11 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
     for (let i = 0; i < result.regionCount; i++) {
       if (result.regionColor[i] === result.background) continue;
       const size = Math.min(MAX_FONT, result.labelRadius[i] * scale * 1.1);
-      // Thin hair, a pet's nose and a thin arm may carry a slightly smaller number (see HAIR_NUMBER).
-      if (size < (result.regionKind?.[i] === HAIR ? MIN_FONT * HAIR_BAND : result.regionKind?.[i] === PET || result.regionKind?.[i] === FACE ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
+      // Thin hair, a pet's nose, a thin arm and a baby's outfit against a dress may carry a
+      // slightly smaller number (see HAIR_NUMBER).
+      const kind = result.regionKind?.[i];
+      const patch = kind === CLOTHES && (result.partGroup?.[result.regionColor[i]] ?? 0) >= PATCH_GROUP;
+      if (size < (kind === HAIR ? MIN_FONT * HAIR_BAND : kind === PET || kind === FACE || patch ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
       ctx.font = `${Math.round(size)}px Arial, sans-serif`;
       ctx.fillText(
         String(page.numbers[li][result.regionColor[i]]),
