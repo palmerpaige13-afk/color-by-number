@@ -36,6 +36,11 @@ export interface Page {
   shapes: number;
   /** Smallest readable number as a share of the page width, set by the print size. */
   fontFrac: number;
+  /**
+   * Per layer, per shape: text printed instead of the shape's number (a math problem whose
+   * answer is the number). A shape too small for its text keeps the plain number.
+   */
+  labels?: (string | undefined)[][];
 }
 
 /**
@@ -571,6 +576,10 @@ function breakUpBig(
 }
 
 const EDGE: RGB = [70, 70, 70];
+/** A shape's text (a math problem) spans at most this share of its widest circle. */
+const LABEL_FILL = 0.9;
+/** A math problem prints no smaller than this share of the smallest number size. */
+const LABEL_MIN_FONT = 0.8;
 
 /** A part of the page (in page units): one sheet of a mural. */
 export interface PageRegion {
@@ -692,12 +701,25 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       const kind = result.regionKind?.[i];
       const patch = kind === CLOTHES && (result.partGroup?.[result.regionColor[i]] ?? 0) >= PATCH_GROUP;
       if (size < (kind === HAIR ? MIN_FONT * HAIR_BAND : kind === PET || kind === FACE || patch ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
-      ctx.font = `${Math.round(size)}px Arial, sans-serif`;
-      ctx.fillText(
-        String(page.numbers[li][result.regionColor[i]]),
-        layer.x + result.labelX[i] * scale,
-        layer.y + result.labelY[i] * scale,
-      );
+      let text = String(page.numbers[li][result.regionColor[i]]);
+      let px = size;
+      const label = page.labels?.[li]?.[i];
+      if (label) {
+        // A problem is wider than a number: smaller to fit across the shape (never below the
+        // smallest size problems print at), then without its spaces; a shape too small for
+        // either keeps its number.
+        ctx.font = `${Math.round(size)}px Arial, sans-serif`;
+        for (const t of [label, label.replace(/ /g, "")]) {
+          const fit = Math.min(size, (size * 2 * result.labelRadius[i] * scale * LABEL_FILL) / ctx.measureText(t).width);
+          if (fit >= MIN_FONT * LABEL_MIN_FONT) {
+            text = t;
+            px = fit;
+            break;
+          }
+        }
+      }
+      ctx.font = `${Math.round(px)}px Arial, sans-serif`;
+      ctx.fillText(text, layer.x + result.labelX[i] * scale, layer.y + result.labelY[i] * scale);
     }
   });
 }

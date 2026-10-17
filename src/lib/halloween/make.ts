@@ -223,3 +223,64 @@ export async function drawHalloweenPage(canvas: HTMLCanvasElement, hp: Halloween
 /** The drawing in full color, as an SVG (for the gallery). */
 export const previewSvg = (design: HalloweenDesign) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}">${design.shapes}${design.ink}</svg>`;
+
+/** Biggest number in a math problem (addition and subtraction within 20). */
+const MATH_MAX = 20;
+
+/** A small repeatable random number generator, so a page's problems are the same every time. */
+function seeded(seed: string) {
+  let h = 2166136261;
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * An addition or subtraction problem whose answer is `n` (all numbers 1 to MATH_MAX). A
+ * `short` one (for a small shape) keeps to single digits where it can, so it fits.
+ */
+function problem(n: number, rand: () => number, short = false): string {
+  const between = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
+  if (short) {
+    if (n === 1) {
+      const a = between(2, 9);
+      return `${a} − ${a - 1}`;
+    }
+    if (n <= 10) {
+      const a = between(Math.max(1, n - 9), Math.min(9, n - 1));
+      return `${a} + ${n - a}`;
+    }
+    const b = between(n - 9, 9);
+    return `${n - b} + ${b}`;
+  }
+  // Addition needs two parts of at least 1, so 1 is always a subtraction.
+  if (n >= 2 && rand() < 0.5) {
+    const a = between(1, n - 1);
+    return `${a} + ${n - a}`;
+  }
+  const b = between(1, Math.max(1, MATH_MAX - n));
+  return `${n + b} − ${b}`;
+}
+
+/** Shapes narrower than this many of the smallest number's radius get a short problem. */
+const SHORT_PROBLEM_RADIUS = 1.8;
+
+/**
+ * The page with a math problem on every shape instead of its number (addition and
+ * subtraction; the answer is the color number). The same design always gets the same problems.
+ */
+export function withMath(hp: HalloweenPage): HalloweenPage {
+  const rand = seeded(hp.design.id);
+  const small = minLabelRadius(hp.page.width, 1, hp.page.fontFrac) * SHORT_PROBLEM_RADIUS;
+  const labels = hp.page.layers.map(({ result }, li) =>
+    Array.from({ length: result.regionCount }, (_, i) => {
+      const n = hp.page.numbers[li][result.regionColor[i]];
+      return n ? problem(n, rand, result.labelRadius[i] < small) : undefined;
+    }),
+  );
+  return { ...hp, page: { ...hp.page, labels } };
+}

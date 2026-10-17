@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { DESIGNS, type HalloweenDesign } from "@/lib/halloween/designs";
-import { drawHalloweenPage, makeHalloweenPage, previewSvg, type HalloweenPage } from "@/lib/halloween/make";
+import { drawHalloweenPage, makeHalloweenPage, previewSvg, withMath, type HalloweenPage } from "@/lib/halloween/make";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { pagePdf, pagesPdf, saveFile } from "@/lib/page-pdf";
 import { PRODUCTS, priceLabel } from "@/lib/price";
@@ -13,6 +13,9 @@ import { fitOnPaper, fontFraction } from "@/lib/print";
 const FIT = fitOnPaper(1, "letter");
 /** Numbers a quarter bigger than the usual smallest size, for younger colorers. */
 const FONT_FRAC = fontFraction(FIT.w) * 1.25;
+
+/** A gallery picture's drawing, with numbers or with math problems. */
+const thumbKey = (d: HalloweenDesign, math: boolean) => (math ? `${d.id}:math` : d.id);
 
 const previewUrl = (d: HalloweenDesign) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(previewSvg(d))}`;
 /** Gallery pictures are drawn at this share of the page's full size. */
@@ -30,7 +33,19 @@ function pageFor(d: HalloweenDesign): Promise<HalloweenPage> {
   return p;
 }
 
+/** Each design's page with math problems instead of numbers, made once. */
+const mathPages = new Map<string, HalloweenPage>();
+function mathFor(hp: HalloweenPage): HalloweenPage {
+  let m = mathPages.get(hp.design.id);
+  if (!m) mathPages.set(hp.design.id, (m = withMath(hp)));
+  return m;
+}
+
 export function HalloweenGallery() {
+  /** Shapes show math problems (addition and subtraction) instead of their numbers. */
+  const [math, setMath] = useState(false);
+  /** The page as shown and downloaded: with math problems when chosen. */
+  const shown = (hp: HalloweenPage) => (math ? mathFor(hp) : hp);
   const [chosen, setChosen] = useState<HalloweenDesign | null>(null);
   const [made, setMade] = useState<HalloweenPage | null>(null);
   const [colored, setColored] = useState(false);
@@ -51,18 +66,26 @@ export function HalloweenGallery() {
   const allNumbered = DESIGNS.every((d) => numbered[d.id]) ? true : DESIGNS.some((d) => numbered[d.id]) ? null : false;
 
   /** Draws the numbered gallery picture of `d`, if it isn't drawn yet. */
-  async function drawThumb(d: HalloweenDesign) {
-    if (thumbs[d.id]) return;
+  async function drawThumb(d: HalloweenDesign, withProblems = math) {
+    const key = thumbKey(d, withProblems);
+    if (thumbs[key]) return;
     // Let the spinner show before the page is made (it holds the main thread briefly).
     await new Promise((r) => setTimeout(r, 30));
     try {
       const canvas = document.createElement("canvas");
-      await drawHalloweenPage(canvas, await pageFor(d), "outline", THUMB_SCALE);
+      const hp = await pageFor(d);
+      await drawHalloweenPage(canvas, withProblems ? mathFor(hp) : hp, "outline", THUMB_SCALE);
       const url = canvas.toDataURL("image/png");
-      setThumbs((t) => ({ ...t, [d.id]: url }));
+      setThumbs((t) => ({ ...t, [key]: url }));
     } catch {
       setNumbered((n) => ({ ...n, [d.id]: false }));
     }
+  }
+
+  /** Switches between numbers and math problems; the numbered gallery pictures are redrawn. */
+  async function chooseMath(on: boolean) {
+    setMath(on);
+    for (const d of DESIGNS) if (numbered[d.id]) await drawThumb(d, on);
   }
 
   function toggleNumbers(d: HalloweenDesign) {
@@ -78,8 +101,8 @@ export function HalloweenGallery() {
   }
 
   useEffect(() => {
-    if (made && canvasRef.current) drawHalloweenPage(canvasRef.current, made, colored ? "colored" : "outline");
-  }, [made, colored]);
+    if (made && canvasRef.current) drawHalloweenPage(canvasRef.current, math ? mathFor(made) : made, colored ? "colored" : "outline");
+  }, [made, colored, math]);
 
   /** The design last picked: a page finished for an earlier pick is dropped. */
   const latest = useRef<HalloweenDesign | null>(null);
@@ -108,7 +131,8 @@ export function HalloweenGallery() {
     setBusy("Preparing your PDF…");
     await new Promise((r) => setTimeout(r, 30));
     try {
-      saveFile(await pagePdf(hp.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, hp, view, s)), `halloween-${hp.design.id}.pdf`);
+      const page = shown(hp);
+      saveFile(await pagePdf(page.page, FIT, (c, _page, view, s) => drawHalloweenPage(c, page, view, s)), `halloween-${hp.design.id}${math ? "-math" : ""}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
@@ -123,9 +147,9 @@ export function HalloweenGallery() {
     await new Promise((r) => setTimeout(r, 30));
     try {
       const all = [];
-      for (const d of DESIGNS) all.push(await pageFor(d));
+      for (const d of DESIGNS) all.push(shown(await pageFor(d)));
       const pdf = await pagesPdf(all.map((hp) => ({ page: hp.page, fit: FIT, draw: (c, _page, view, s) => drawHalloweenPage(c, hp, view, s) })));
-      saveFile(pdf, "halloween-all-pages.pdf");
+      saveFile(pdf, `halloween-all-pages${math ? "-math" : ""}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
@@ -179,6 +203,31 @@ export function HalloweenGallery() {
         />
       )}
 
+      <div className="flex flex-col gap-2 rounded-2xl border-2 border-zinc-200 p-4 sm:flex-row sm:items-center dark:border-zinc-800">
+        <div className="flex-1">
+          <p className="font-bold">Numbers or math?</p>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            With math problems, every shape has an adding or take-away problem (up to 20). Its answer is the color&apos;s number.
+          </p>
+        </div>
+        <div role="radiogroup" aria-label="Numbers or math problems" className="flex shrink-0 rounded-full border-2 border-zinc-200 p-0.5 dark:border-zinc-800">
+          {[false, true].map((on) => (
+            <button
+              key={String(on)}
+              type="button"
+              role="radio"
+              aria-checked={math === on}
+              onClick={() => math !== on && chooseMath(on)}
+              className={`rounded-full px-3 py-1 text-sm font-semibold transition-colors ${
+                math === on ? "bg-orange-500 text-white" : "text-zinc-600 hover:text-orange-600 dark:text-zinc-400"
+              }`}
+            >
+              {on ? "Math problems" : "Numbers"}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="-mb-4 flex items-center justify-end gap-2">
         <span className="text-sm text-zinc-500">Show all:</span>
         <div role="radiogroup" aria-label="Show all pictures" className="flex rounded-full border-2 border-zinc-200 p-0.5 dark:border-zinc-800">
@@ -193,7 +242,7 @@ export function HalloweenGallery() {
                 allNumbered === on ? "bg-orange-500 text-white" : "text-zinc-600 hover:text-orange-600 dark:text-zinc-400"
               }`}
             >
-              {on ? "With numbers" : "Colored"}
+              {on ? (math ? "With math" : "With numbers") : "Colored"}
             </button>
           ))}
         </div>
@@ -202,6 +251,7 @@ export function HalloweenGallery() {
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {DESIGNS.map((d) => {
           const showNumbers = !!numbered[d.id];
+          const thumb = thumbs[thumbKey(d, math)];
           return (
             <li
               key={d.id}
@@ -216,14 +266,14 @@ export function HalloweenGallery() {
                 aria-label={`Open ${d.title}`}
                 className="relative aspect-square w-full overflow-hidden rounded-xl bg-white"
               >
-                {showNumbers && thumbs[d.id] ? (
+                {showNumbers && thumb ? (
                   // eslint-disable-next-line @next/next/no-img-element -- drawn on the page
-                  <img src={thumbs[d.id]} alt="" className="h-full w-full" />
+                  <img src={thumb} alt="" className="h-full w-full" />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element -- a small inline drawing
                   <img src={previewUrl(d)} alt="" className={`h-full w-full ${showNumbers ? "opacity-30" : ""}`} />
                 )}
-                {showNumbers && !thumbs[d.id] && (
+                {showNumbers && !thumb && (
                   <span className="absolute inset-0 grid place-items-center">
                     <span className="h-7 w-7 animate-spin rounded-full border-4 border-orange-200 border-t-orange-500" aria-hidden />
                   </span>
@@ -237,7 +287,7 @@ export function HalloweenGallery() {
                   onClick={() => toggleNumbers(d)}
                   className="shrink-0 rounded-full border-2 border-zinc-300 px-2.5 py-0.5 text-xs font-semibold text-zinc-700 transition-colors hover:border-orange-400 dark:border-zinc-700 dark:text-zinc-300"
                 >
-                  {showNumbers ? "Colored" : "Numbers"}
+                  {showNumbers ? "Colored" : math ? "Math" : "Numbers"}
                 </button>
               </div>
             </li>
@@ -262,7 +312,7 @@ export function HalloweenGallery() {
                 onClick={() => setColored(!colored)}
                 className="rounded-full border-2 border-zinc-300 px-4 py-1.5 text-sm font-semibold text-zinc-700 transition-colors hover:border-orange-400 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300"
               >
-                {colored ? "Show numbers" : "Show finished"}
+                {colored ? (math ? "Show math" : "Show numbers") : "Show finished"}
               </button>
               <button
                 type="button"
@@ -295,6 +345,7 @@ export function HalloweenGallery() {
               </div>
             )}
           </div>
+          {made && math && <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">Solve each problem: its answer is the number of the color to use.</p>}
           {made && (
             <ul className="flex flex-wrap justify-center gap-3" aria-label="Color key">
               {made.page.key.map(({ n, rgb }) => (
