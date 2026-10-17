@@ -39,6 +39,18 @@ const ANIMAL_SIZE = 257;
  * joins on as long as it's connected.
  */
 const ANIMAL_PAD = 2;
+/** An animal's light fur: lighter than this (Lab L)... */
+const FUR_LIGHT_L = 55;
+/** ...and about this gray (Lab chroma). */
+const FUR_GRAY = 12;
+/** White fur in shade (a leg under the dog) is at least this light (Lab L); a black top is darker. */
+const FUR_SHADED_L = 35;
+/** A patch of such fur is at least this share of the animal's box (not a few stray pixels). */
+const FUR_MIN_PIECE = 0.01;
+/** ...added only to an animal the segmenter found filling at least this share of its box. */
+const FUR_ANIMAL_SHARE = 0.25;
+/** ...and only a piece mostly below the animal (this share of it has the animal above). */
+const FUR_UNDER_SHARE = 0.5;
 /** Margin around an animal's full reach (see animalReach) when tracing it. */
 const REACH_PAD = 1.1;
 /** Area searched around a person's box for the rest of them (see personReach), as a multiple of its long side. */
@@ -678,7 +690,10 @@ export async function detectSubjects(
   await breathe();
   const animalSeg = pets.length ? await loadAnimalSegmenter().catch(() => null) : null;
   const reach = animalSeg ? animalReach(animalSeg, canvas, pets) : [];
+  const furAdded: number[] = []; // work pixels of fur added to an animal (see traceAnimal)
   const animals = animalSeg ? pets.flatMap((p, i) => traceAnimal(animalSeg, p, reach[i]) ?? []) : [];
+  // That fur is the animal's, not someone's clothes (a dog's white leg against a black top).
+  if (peopleCut) for (const q of furAdded) peopleCut.clothes[q] = peopleCut.held[q] = peopleCut.hair[q] = 0;
   pets.forEach((p) => {
     const a = animals.find((m) => m.label === p.label && m.box && Math.abs(m.box.x - p.x * toWork) < 1);
     if (a && (p.label === "dog" || p.label === "cat")) a.face = petFace(p);
@@ -920,6 +935,82 @@ export async function detectSubjects(
           }
         }
         queue = next;
+      }
+    }
+    // White legs and paws against someone's dark clothes: the segmenter can miss them (or call
+    // them part of the person). Within the animal's own box, a piece of light gray fur hanging
+    // below it is the animal too.
+    if (found) {
+      const lab = workLab();
+      const at = (i: number) => {
+        const wx = x0 + (i % size);
+        const wy = y0 + Math.floor(i / size);
+        return wx < 0 || wy < 0 || wx >= workW || wy >= workH ? -1 : wy * workW + wx;
+      };
+      let fur = 0; // light fur the segmenter did find: without any, there's none to add
+      for (let i = 0; i < data.length; i++) {
+        const q = at(i);
+        if (!data[i] || q < 0) continue;
+        const L = lab[q * 3], a = lab[q * 3 + 1], b = lab[q * 3 + 2];
+        if (L < FUR_LIGHT_L || Math.hypot(a, b) > FUR_GRAY) continue;
+        fur++;
+      }
+      const bx0 = p.x * toWork - x0, bx1 = (p.x + p.w) * toWork - x0;
+      const by0 = p.y * toWork - y0, by1 = (p.y + p.h) * toWork - y0;
+      let inBox = 0;
+      for (let i = 0; i < data.length; i++) {
+        const x = i % size, y = Math.floor(i / size);
+        if (data[i] && x >= bx0 && x <= bx1 && y >= by0 && y <= by1) inBox++;
+      }
+      // Only a real animal (one the segmenter mostly found): not a "dog" seen in someone's hair.
+      if (fur && inBox >= (bx1 - bx0) * (by1 - by0) * FUR_ANIMAL_SHARE) {
+        // Fur-colored pixels in the lower half of the box (legs, paws) that the people cut-out
+        // claims (a white leg against someone's dark top); the sand around the paws isn't in it.
+        const isFur = (j: number) => {
+          const jx = j % size, jy = Math.floor(j / size);
+          if (jx < bx0 || jx > bx1 || jy < (by0 + by1) / 2 || jy > by1) return false;
+          const q = at(j);
+          if (q < 0 || !(data[j] || cutout?.[q])) return false;
+          return lab[q * 3] >= FUR_SHADED_L && Math.hypot(lab[q * 3 + 1], lab[q * 3 + 2]) <= FUR_GRAY;
+        };
+        const seen = new Uint8Array(data.length);
+        const minPiece = (bx1 - bx0) * (by1 - by0) * FUR_MIN_PIECE;
+        for (let start = 0; start < data.length; start++) {
+          if (seen[start] || data[start] || !isFur(start)) continue;
+          const piece = [start];
+          seen[start] = 1;
+          let touches = false;
+          for (let k = 0; k < piece.length; k++) {
+            const i = piece[k];
+            const x = i % size;
+            for (const j of [x > 0 ? i - 1 : -1, x < size - 1 ? i + 1 : -1, i - size, i + size]) {
+              if (j < 0 || j >= data.length || seen[j]) continue;
+              if (data[j]) touches = true;
+              if (data[j] || !isFur(j)) continue;
+              seen[j] = 1;
+              piece.push(j);
+            }
+          }
+          // Only a piece cut off from the animal (a leg behind its dark chest fur); fur right
+          // against what was found (a white chest under a dog's chin) is left as it was.
+          if (touches || piece.length < minPiece) continue;
+          // A leg hangs below the animal: most of the piece has the animal above it (not a light
+          // shirt beside a dog's head).
+          let under = 0;
+          for (const j of piece) {
+            for (let k = j - size; k >= 0; k -= size) {
+              if (data[k]) {
+                under++;
+                break;
+              }
+            }
+          }
+          if (under < piece.length * FUR_UNDER_SHARE) continue;
+          for (const j of piece) {
+            data[j] = 1;
+            furAdded.push(at(j));
+          }
+        }
       }
     }
     return found
