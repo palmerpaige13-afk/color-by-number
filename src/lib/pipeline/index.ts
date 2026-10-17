@@ -7,7 +7,7 @@ import { PartKind, paintSkin, separateFaces, smoothChins } from "./faces";
 import { labDist2, rgbToLab } from "./color";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
-import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult } from "./types";
+import { DEFAULT_PARAMS, type PipelineInput, type PipelineParams, type PipelineResult, type RGB } from "./types";
 
 export * from "./types";
 
@@ -42,6 +42,12 @@ export const HAIR_NUMBER = 0.7;
 const HAIR_BAND_SHARE = 0.0015;
 /** ...stays even this thin (share of the smallest number's radius); see HAIR_BAND in page.ts. */
 export const HAIR_BAND = 0.45;
+/** A held thing's color is reset to the photo's average over what it covers when that's this far (ΔE). */
+const HELD_OWN_MISMATCH = 10;
+/** ...and only when it now covers at least this many times the pixels it started with. */
+const HELD_GREW = 2;
+/** ...and only for a dark color (Lab L below this). */
+const HELD_DARK_L = 30;
 /** Part groups from here up (below the blank background's) are patches of another hue in someone's clothes (see partGroup). */
 export const PATCH_GROUP = 192;
 /** ...and differ in colorfulness (Lab chroma) by less than this. */
@@ -303,6 +309,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   lap("quantize");
 
   let colorMap = majorityFilter(indices, w, h, palette.length, params.boundaryPasses);
+  /** Pixels of each color before shapes are merged (see the held things' colors below). */
+  const startArea = new Uint32Array(palette.length);
+  for (let p = 0; p < w * h; p++) startArea[colorMap[p]]++;
   lap("majority");
 
   // In important areas, small shapes survive only if they stand out from their surroundings:
@@ -485,6 +494,36 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     const tooSmall = (id: number) => pts.radius[id] < need(id) && left.color[id] !== background && !band(id);
     if (pts.radius.some((_, id) => tooSmall(id))) {
       colorMap = mergeRegions(left, w, h, paletteLab, (id, area) => area === left.area[id] && tooSmall(id), blankOnly);
+    }
+  }
+  // On a small page a bouquet's flowers are too small for a number and join what's around
+  // them, mostly its dark leaves and shadow: a pink bouquet comes out a black band. Each color
+  // of a held thing becomes the photo's average over what it now covers (where that's clearly
+  // different), so the bouquet keeps the flowers' color.
+  if (faces?.held.size) {
+    const sums = new Map<number, number[]>();
+    for (let p = 0; p < w * h; p++) {
+      const c = colorMap[p];
+      if (!faces.held.has(faces.group[c] ?? 0)) continue;
+      let sum = sums.get(c);
+      if (!sum) sums.set(c, (sum = [0, 0, 0, 0]));
+      for (let j = 0; j < 3; j++) sum[j] += smoothed[p * 4 + j];
+      sum[3]++;
+    }
+    palette = [...palette];
+    paletteLab = Float32Array.from(paletteLab);
+    const lab = new Float32Array(3);
+    for (const [c, sum] of sums) {
+      const rgb = [0, 1, 2].map((j) => Math.round(sum[j] / sum[3])) as RGB;
+      rgbToLab(rgb[0], rgb[1], rgb[2], lab, 0);
+      // Only a dark color (shadow, leaves) that swallowed much more than it had, not a big
+      // bouquet's own shapes.
+      if (paletteLab[c * 3] >= HELD_DARK_L || sum[3] < startArea[c] * HELD_GREW) continue;
+      if (labDist2(lab, 0, paletteLab, c * 3) < HELD_OWN_MISMATCH * HELD_OWN_MISMATCH) continue;
+      // Flowers make it more colorful; a green stem turning gray isn't the flowers coming back.
+      if (Math.hypot(lab[1], lab[2]) < Math.hypot(paletteLab[c * 3 + 1], paletteLab[c * 3 + 2])) continue;
+      palette[c] = rgb;
+      paletteLab.set(lab, c * 3);
     }
   }
   lap("merge");

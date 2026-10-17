@@ -186,6 +186,8 @@ export interface FaceRegions {
   skinOfFace: Map<number, number>;
   /** Cards: palette colors of a patch clearly another hue than the clothes it's in (see clothesPalette). */
   patches: Set<number>;
+  /** Big things people hold (a bouquet, not a shoe or a bouquet's stems). */
+  held: Set<number>;
 }
 
 /** A traced face (its part id and rounded outline) and the bare-skin pieces that are its neck and arms. */
@@ -836,6 +838,7 @@ export function separateFaces(
     faceCount: faces.length,
     skinOfFace: new Map(skinPieces),
     patches,
+    held: new Set([...heldParts].filter(([, n]) => n === HELD_COLORS).map(([k]) => k)),
     jaws: chins
       ? faces.flatMap((f, i) =>
           traced(f) ? [{ face: i + 1, outline: roundOutline(f.outline!), skin: [...skinPieces].filter(([, k]) => k === i + 1).map(([piece]) => piece) }] : [],
