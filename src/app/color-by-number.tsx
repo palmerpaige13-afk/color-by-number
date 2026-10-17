@@ -82,6 +82,11 @@ const MAX_LOG = 300;
 const MAX_UNDO = 30;
 
 
+/** A mural sheet shown big is drawn this many pixels wide (sharp on big screens). */
+const BIG_SHEET_PX = 1600;
+/** A press that moves less than this (px) is a tap, not a drag of the brush. */
+const TAP_SLOP = 8;
+
 /** "mural": the Group mural page (only mural sizes); else the photo page (only regular sizes). */
 export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mural" }) {
   const muralMode = mode === "mural";
@@ -105,6 +110,12 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [fit, setFit] = useState<Fit | null>(null);
   /** How far the brush has painted across the page, 0–100 (%). */
   const [reveal, setReveal] = useState(50);
+  /** A mural sheet shown big (its index, row by row), and whether it's shown colored in. */
+  const [bigSheet, setBigSheet] = useState<number | null>(null);
+  const [bigColored, setBigColored] = useState(false);
+  const bigRef = useRef<HTMLCanvasElement>(null);
+  /** Where a press on the picture started (and the brush then), to tell a tap from a drag. */
+  const tapStart = useRef<{ x: number; y: number; reveal: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const outlineRef = useRef<HTMLCanvasElement>(null);
   const paintedRef = useRef<HTMLCanvasElement>(null);
@@ -569,6 +580,27 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
       : (PRINT_SIZES.find((p) => p.id === printSize)?.label ?? `mural, ${MURALS.find((m) => m.id === printSize)?.label}`);
   /** What the download costs: a mural is priced by its number of sheets; a split Letter page is one photo. */
   const product = isMural(printSize) ? printSize : "photo";
+
+  // The sheet shown big: drawn sharp from the page itself, like its printed sheet.
+  useEffect(() => {
+    const m = fit?.mural;
+    if (bigSheet === null || !result || !m || !bigRef.current) return;
+    const u = result.width / fit.w;
+    const row = Math.floor(bigSheet / m.cols), col = bigSheet % m.cols;
+    drawPage(bigRef.current, result, bigColored ? "colored" : "outline", BIG_SHEET_PX / (m.cellW * u), { x: col * m.cellW * u, y: row * m.cellH * u, w: m.cellW * u, h: m.cellH * u });
+  }, [bigSheet, bigColored, result, fit]);
+  // Arrow keys step through the sheets; Escape closes.
+  useEffect(() => {
+    const m = fit?.mural;
+    if (bigSheet === null || !m) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setBigSheet(null);
+      else if (e.key === "ArrowRight") setBigSheet((i) => (i === null ? i : (i + 1) % (m.cols * m.rows)));
+      else if (e.key === "ArrowLeft") setBigSheet((i) => (i === null ? i : (i - 1 + m.cols * m.rows) % (m.cols * m.rows)));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bigSheet, fit]);
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-8">
@@ -1073,10 +1105,76 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
               step={0.5}
               value={reveal}
               onChange={(e) => setReveal(Number(e.target.value))}
+              onPointerDown={(e) => (tapStart.current = { x: e.clientX, y: e.clientY, reveal })}
+              onClick={(e) => {
+                // On a mural, a tap (not a drag of the brush) shows that sheet big.
+                const m = fit?.mural, start = tapStart.current;
+                if (!m || !start || Math.hypot(e.clientX - start.x, e.clientY - start.y) > TAP_SLOP) return;
+                const box = e.currentTarget.getBoundingClientRect();
+                const col = Math.min(m.cols - 1, Math.floor(((e.clientX - box.left) / box.width) * m.cols));
+                const row = Math.min(m.rows - 1, Math.floor(((e.clientY - box.top) / box.height) * m.rows));
+                setReveal(start.reveal);
+                setBigColored(false);
+                setBigSheet(row * m.cols + col);
+              }}
               aria-label="Drag the brush to compare the finished picture with the numbered page"
               className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0 print:hidden"
             />
           </div>
+
+          {fit?.mural && !fixing && <p className="-mt-2 text-sm text-zinc-500 print:hidden">Tap a sheet to see it bigger.</p>}
+          {fit?.mural && bigSheet !== null && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Sheet ${sheetName(Math.floor(bigSheet / fit.mural.cols), bigSheet % fit.mural.cols)}`}
+              onClick={(e) => e.target === e.currentTarget && setBigSheet(null)}
+              className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-3 print:hidden"
+            >
+              <div className="flex w-full max-w-3xl flex-wrap items-center gap-2 text-white">
+                <span className="whitespace-nowrap text-lg font-bold">Sheet {sheetName(Math.floor(bigSheet / fit.mural.cols), bigSheet % fit.mural.cols)}</span>
+                <span className="whitespace-nowrap text-sm text-white/70">
+                  {bigSheet + 1} of {fit.mural.cols * fit.mural.rows}
+                </span>
+                <div role="radiogroup" aria-label="Show" className="ml-auto flex rounded-full bg-white/15 p-0.5">
+                  {[false, true].map((on) => (
+                    <button
+                      key={String(on)}
+                      type="button"
+                      role="radio"
+                      aria-checked={bigColored === on}
+                      onClick={() => setBigColored(on)}
+                      className={`rounded-full px-3 py-1 text-sm font-semibold ${bigColored === on ? "bg-white text-zinc-900" : "text-white"}`}
+                    >
+                      {on ? "Colored" : "Numbers"}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={() => setBigSheet(null)} aria-label="Close" className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-lg font-bold">
+                  ×
+                </button>
+              </div>
+              <div className="flex w-full max-w-3xl min-h-0 items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Previous sheet"
+                  onClick={() => setBigSheet((bigSheet - 1 + fit.mural!.cols * fit.mural!.rows) % (fit.mural!.cols * fit.mural!.rows))}
+                  className="shrink-0 rounded-full bg-white/15 px-3 py-2 text-xl font-bold text-white"
+                >
+                  ‹
+                </button>
+                <canvas ref={bigRef} className="block max-h-[78vh] min-w-0 flex-1 rounded bg-white object-contain" />
+                <button
+                  type="button"
+                  aria-label="Next sheet"
+                  onClick={() => setBigSheet((bigSheet + 1) % (fit.mural!.cols * fit.mural!.rows))}
+                  className="shrink-0 rounded-full bg-white/15 px-3 py-2 text-xl font-bold text-white"
+                >
+                  ›
+                </button>
+              </div>
+            </div>
+          )}
 
           <div>
             <h2 className="mb-2 font-semibold">Color key</h2>
