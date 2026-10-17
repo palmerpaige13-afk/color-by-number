@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { HalloweenDesign } from "@/lib/halloween/designs";
 import type { Holiday } from "@/lib/holidays";
-import { drawHalloweenPage, makeHalloweenPage, previewSvg, withMath, type HalloweenPage } from "@/lib/halloween/make";
+import { drawHalloweenPage, makeHalloweenPage, previewSvg, withMath, withTimes, type HalloweenPage } from "@/lib/halloween/make";
 import { Checkout, paymentsOn } from "@/app/checkout";
 import { pagePdf, pagesPdf, saveFile } from "@/lib/page-pdf";
 import { PRODUCTS, priceLabel } from "@/lib/price";
@@ -14,6 +14,8 @@ import { fitOnPaper, fontFraction } from "@/lib/print";
 const FIT = fitOnPaper(1, "letter");
 /** Numbers a quarter bigger than the usual smallest size, for younger colorers. */
 const FONT_FRAC = fontFraction(FIT.w) * 1.25;
+/** Older kids' pages: the usual smallest size, so their pictures can have smaller shapes. */
+const OLDER_FONT_FRAC = fontFraction(FIT.w);
 
 /** A gallery picture's drawing, with numbers or with math problems. */
 const thumbKey = (d: HalloweenDesign, math: boolean) => (math ? `${d.id}:math` : d.id);
@@ -24,31 +26,37 @@ const THUMB_SCALE = 0.5;
 
 /** Each design's page, made once and shared by its gallery picture and the big view. */
 const pages = new Map<string, Promise<HalloweenPage>>();
-function pageFor(d: HalloweenDesign): Promise<HalloweenPage> {
+function pageFor(d: HalloweenDesign, fontFrac: number): Promise<HalloweenPage> {
   let p = pages.get(d.id);
   if (!p) {
-    p = makeHalloweenPage(d, FONT_FRAC);
+    p = makeHalloweenPage(d, fontFrac);
     p.catch(() => pages.delete(d.id));
     pages.set(d.id, p);
   }
   return p;
 }
 
-/** Each design's page with math problems instead of numbers, made once. */
+/** Each design's page with math problems instead of numbers, made once (multiplication for older kids). */
 const mathPages = new Map<string, HalloweenPage>();
-function mathFor(hp: HalloweenPage): HalloweenPage {
+function mathFor(hp: HalloweenPage, times: boolean): HalloweenPage {
   let m = mathPages.get(hp.design.id);
-  if (!m) mathPages.set(hp.design.id, (m = withMath(hp)));
+  if (!m) mathPages.set(hp.design.id, (m = times ? withTimes(hp) : withMath(hp)));
   return m;
 }
 
 /** A holiday's gallery of ready-made pages (see lib/holidays). */
 export function HolidayGallery({ holiday }: { holiday: Holiday }) {
-  const { designs: DESIGNS, theme: th } = holiday;
-  /** Shapes show math problems (addition and subtraction) instead of their numbers. */
+  const th = holiday.theme;
+  /** The harder pages for ages 7–9 (multiplication) instead of the ones for ages 5–6. */
+  const [older, setOlder] = useState(false);
+  const set = older ? holiday.older : holiday;
+  const DESIGNS = set.designs;
+  const fontFrac = older ? OLDER_FONT_FRAC : FONT_FRAC;
+  const pageOf = (d: HalloweenDesign) => pageFor(d, fontFrac);
+  /** Shapes show math problems (addition and subtraction; multiplication for older kids) instead of their numbers. */
   const [math, setMath] = useState(false);
   /** The page as shown and downloaded: with math problems when chosen. */
-  const shown = (hp: HalloweenPage) => (math ? mathFor(hp) : hp);
+  const shown = (hp: HalloweenPage) => (math ? mathFor(hp, older) : hp);
   const [chosen, setChosen] = useState<HalloweenDesign | null>(null);
   const [made, setMade] = useState<HalloweenPage | null>(null);
   const [colored, setColored] = useState(false);
@@ -76,13 +84,23 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
     await new Promise((r) => setTimeout(r, 30));
     try {
       const canvas = document.createElement("canvas");
-      const hp = await pageFor(d);
-      await drawHalloweenPage(canvas, withProblems ? mathFor(hp) : hp, "outline", THUMB_SCALE);
+      const hp = await pageOf(d);
+      await drawHalloweenPage(canvas, withProblems ? mathFor(hp, older) : hp, "outline", THUMB_SCALE);
       const url = canvas.toDataURL("image/png");
       setThumbs((t) => ({ ...t, [key]: url }));
     } catch {
       setNumbered((n) => ({ ...n, [d.id]: false }));
     }
+  }
+
+  /** Switches between the pages for ages 5–6 and the harder ones for 7–9. */
+  function chooseAge(on: boolean) {
+    setOlder(on);
+    setChosen(null);
+    setMade(null);
+    setColored(false);
+    setNumbered({});
+    latest.current = null;
   }
 
   /** Switches between numbers and math problems; the numbered gallery pictures are redrawn. */
@@ -104,8 +122,8 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
   }
 
   useEffect(() => {
-    if (made && canvasRef.current) drawHalloweenPage(canvasRef.current, math ? mathFor(made) : made, colored ? "colored" : "outline");
-  }, [made, colored, math]);
+    if (made && canvasRef.current) drawHalloweenPage(canvasRef.current, math ? mathFor(made, older) : made, colored ? "colored" : "outline");
+  }, [made, colored, math, older]);
 
   /** The design last picked: a page finished for an earlier pick is dropped. */
   const latest = useRef<HalloweenDesign | null>(null);
@@ -116,7 +134,7 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
     setMade(null);
     setError(null);
     setColored(false);
-    pageFor(d)
+    pageOf(d)
       .then((hp) => {
         if (latest.current !== d) return;
         if (hp.unnumbered) console.warn(`${d.id}: ${hp.unnumbered} shapes too small for a number`);
@@ -150,9 +168,9 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
     await new Promise((r) => setTimeout(r, 30));
     try {
       const all = [];
-      for (const d of DESIGNS) all.push(shown(await pageFor(d)));
+      for (const d of DESIGNS) all.push(shown(await pageOf(d)));
       const pdf = await pagesPdf(all.map((hp) => ({ page: hp.page, fit: FIT, draw: (c, _page, view, s) => drawHalloweenPage(c, hp, view, s) })));
-      saveFile(pdf, `${holiday.id}-all-pages${math ? "-math" : ""}.pdf`);
+      saveFile(pdf, `${holiday.id}-all-pages${older ? "-ages-7-9" : ""}${math ? "-math" : ""}.pdf`);
     } catch {
       setError("Sorry, something went wrong making the PDF.");
     } finally {
@@ -161,7 +179,7 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
   }
   const allPaid = DESIGNS.every((d) => paid.has(d.id));
   /** What all the pages would cost one at a time, as people see it. */
-  const separately = `$${(DESIGNS.length * PRODUCTS[holiday.product].cents) / 100}`;
+  const separately = `$${(DESIGNS.length * PRODUCTS[set.product].cents) / 100}`;
 
   /** This page has to be paid for before it downloads. */
   const mustPay = paymentsOn && !!chosen && !paid.has(chosen.id);
@@ -178,9 +196,24 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
         <p className="mt-1 text-zinc-600 dark:text-zinc-400">{holiday.intro}</p>
       </header>
 
+      <div role="radiogroup" aria-label="Age" className="flex self-start rounded-full border-2 border-zinc-200 p-1 dark:border-zinc-800">
+        {[false, true].map((on) => (
+          <button
+            key={String(on)}
+            type="button"
+            role="radio"
+            aria-checked={older === on}
+            onClick={() => older !== on && chooseAge(on)}
+            className={`rounded-full px-4 py-1.5 font-semibold transition-colors ${older === on ? th.on : `text-zinc-600 dark:text-zinc-400 ${th.hoverText}`}`}
+          >
+            {on ? `Ages 7–9 · ${holiday.older.designs.length} harder pages` : `Ages 5–6 · ${holiday.designs.length} pages`}
+          </button>
+        ))}
+      </div>
+
       <section className={`flex flex-col gap-3 rounded-2xl p-4 sm:flex-row sm:items-center ${th.banner}`}>
         <div className="flex-1">
-          <p className={`font-bold ${th.bannerTitle}`}>{holiday.emoji} Get all {DESIGNS.length} pages for {priceLabel(holiday.bundle)}</p>
+          <p className={`font-bold ${th.bannerTitle}`}>{holiday.emoji} Get all {DESIGNS.length} pages for {priceLabel(set.bundle)}</p>
           <p className={`text-sm ${th.bannerText}`}>
             Every design in one PDF, each with its color key: {separately} if bought one by one.
           </p>
@@ -191,12 +224,12 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
           onClick={() => (paymentsOn && !allPaid ? setPayingAll(true) : downloadAll())}
           className={`shrink-0 rounded-full px-5 py-2 font-semibold text-white transition-colors disabled:opacity-60 ${th.button}`}
         >
-          {busyAll ? "Preparing all the pages…" : paymentsOn && !allPaid ? `Buy all ${DESIGNS.length}: ${priceLabel(holiday.bundle)}` : `Download all ${DESIGNS.length}`}
+          {busyAll ? "Preparing all the pages…" : paymentsOn && !allPaid ? `Buy all ${DESIGNS.length}: ${priceLabel(set.bundle)}` : `Download all ${DESIGNS.length}`}
         </button>
       </section>
       {payingAll && (
         <Checkout
-          product={holiday.bundle}
+          product={set.bundle}
           onClose={() => setPayingAll(false)}
           onPaid={() => {
             setPaid(new Set(DESIGNS.map((d) => d.id)));
@@ -208,9 +241,11 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
 
       <div className="flex flex-col gap-2 rounded-2xl border-2 border-zinc-200 p-4 sm:flex-row sm:items-center dark:border-zinc-800">
         <div className="flex-1">
-          <p className="font-bold">Numbers or math?</p>
+          <p className="font-bold">{older ? "Numbers or multiplication?" : "Numbers or math?"}</p>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            With math problems, every shape has an adding or take-away problem (up to 20). Its answer is the color&apos;s number.
+            {older
+              ? "With math problems, every shape has a multiplication problem (times tables up to 10 × 10). Its answer is in the color key."
+              : "With math problems, every shape has an adding or take-away problem (up to 20). Its answer is the color's number."}
           </p>
         </div>
         <div role="radiogroup" aria-label="Numbers or math problems" className="flex shrink-0 rounded-full border-2 border-zinc-200 p-0.5 dark:border-zinc-800">
@@ -225,7 +260,7 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
                 math === on ? th.on : `text-zinc-600 dark:text-zinc-400 ${th.hoverText}`
               }`}
             >
-              {on ? "Math problems" : "Numbers"}
+              {on ? (older ? "Multiplication" : "Math problems") : "Numbers"}
             </button>
           ))}
         </div>
@@ -323,14 +358,14 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
                 onClick={() => (mustPay ? setPaying(true) : download())}
                 className={`rounded-full px-5 py-1.5 text-sm font-semibold text-white transition-colors disabled:opacity-40 ${th.button}`}
               >
-                {busy ?? `Download PDF (Letter)${mustPay ? `: ${priceLabel(holiday.product)}` : ""}`}
+                {busy ?? `Download PDF (Letter)${mustPay ? `: ${priceLabel(set.product)}` : ""}`}
               </button>
             </div>
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           {paying && made && (
             <Checkout
-              product={holiday.product}
+              product={set.product}
               onClose={() => setPaying(false)}
               onPaid={() => {
                 setPaid((p) => new Set(p).add(made.design.id));
@@ -348,13 +383,17 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
               </div>
             )}
           </div>
-          {made && math && <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">Solve each problem: its answer is the number of the color to use.</p>}
+          {made && math && (
+            <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
+              {older ? "Solve each problem, then find its answer in the key: that's the color to use." : "Solve each problem: its answer is the number of the color to use."}
+            </p>
+          )}
           {made && (
             <ul className="flex flex-wrap justify-center gap-3" aria-label="Color key">
-              {made.page.key.map(({ n, rgb }) => (
+              {shown(made).page.key.map(({ n, rgb }) => (
                 <li key={n} className="flex items-center gap-1.5">
                   <span className="h-7 w-7 rounded-md border border-zinc-300" style={{ background: `rgb(${rgb.join(",")})` }} />
-                  <span className="font-semibold">{n}</span>
+                  <span className="font-semibold">{shown(made).page.answers?.[n - 1] ?? n}</span>
                 </li>
               ))}
             </ul>

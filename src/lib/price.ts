@@ -9,6 +9,12 @@ export type Product =
   | "thanksgiving-all"
   | "christmas"
   | "christmas-all"
+  | "halloween-older"
+  | "halloween-older-all"
+  | "thanksgiving-older"
+  | "thanksgiving-older-all"
+  | "christmas-older"
+  | "christmas-older-all"
   | "mural-2"
   | "mural-4"
   | "mural-9"
@@ -55,6 +61,36 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     cents: 700,
     name: "All 15 Christmas color-by-number pages",
     description: "Every Christmas page in one PDF, each with its color key, Letter size",
+  },
+  "halloween-older": {
+    cents: 300,
+    name: "Halloween color-by-number PDF (ages 7–9)",
+    description: "A harder Letter-size Halloween color-by-number page, with multiplication, and its color key",
+  },
+  "halloween-older-all": {
+    cents: 700,
+    name: "All 10 harder Halloween color-by-number pages (ages 7–9)",
+    description: "Every harder Halloween page in one PDF, each with its color key, Letter size",
+  },
+  "thanksgiving-older": {
+    cents: 300,
+    name: "Thanksgiving color-by-number PDF (ages 7–9)",
+    description: "A harder Letter-size Thanksgiving color-by-number page, with multiplication, and its color key",
+  },
+  "thanksgiving-older-all": {
+    cents: 700,
+    name: "All 10 harder Thanksgiving color-by-number pages (ages 7–9)",
+    description: "Every harder Thanksgiving page in one PDF, each with its color key, Letter size",
+  },
+  "christmas-older": {
+    cents: 300,
+    name: "Christmas color-by-number PDF (ages 7–9)",
+    description: "A harder Letter-size Christmas color-by-number page, with multiplication, and its color key",
+  },
+  "christmas-older-all": {
+    cents: 700,
+    name: "All 10 harder Christmas color-by-number pages (ages 7–9)",
+    description: "Every harder Christmas page in one PDF, each with its color key, Letter size",
   },
 };
 

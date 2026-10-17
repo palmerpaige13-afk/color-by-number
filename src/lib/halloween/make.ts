@@ -284,3 +284,31 @@ export function withMath(hp: HalloweenPage): HalloweenPage {
   );
   return { ...hp, page: { ...hp.page, labels } };
 }
+
+/** Biggest factor in a multiplication problem (times tables up to 10 × 10). */
+const TIMES_MAX = 10;
+
+/**
+ * The page with a multiplication problem on every shape (older kids). Each color's number in
+ * the key becomes an answer from the times tables (12, 18, 24…, different for every color,
+ * smallest for color 1), and each shape asks for it (3 × 6). The same design always gets the
+ * same problems.
+ */
+export function withTimes(hp: HalloweenPage): HalloweenPage {
+  const rand = seeded(`${hp.design.id}×`);
+  const pairs = new Map<number, [number, number][]>();
+  for (let a = 2; a <= TIMES_MAX; a++) for (let b = a; b <= TIMES_MAX; b++) pairs.set(a * b, [...(pairs.get(a * b) ?? []), [a, b]]);
+  // Answers that can be asked more than one way (24 = 3 × 8 = 4 × 6) first, so problems vary.
+  const pool = [...pairs.keys()].map((v) => ({ v, r: rand() })).sort((x, y) => pairs.get(y.v)!.length - pairs.get(x.v)!.length || x.r - y.r).map(({ v }) => v);
+  const answers = pool.slice(0, hp.page.key.length).sort((x, y) => x - y);
+  const labels = hp.page.layers.map(({ result }, li) =>
+    Array.from({ length: result.regionCount }, (_, i) => {
+      const n = hp.page.numbers[li][result.regionColor[i]];
+      if (!n) return undefined;
+      const ways = pairs.get(answers[n - 1])!;
+      const [a, b] = ways[Math.floor(rand() * ways.length)];
+      return rand() < 0.5 ? `${a} × ${b}` : `${b} × ${a}`;
+    }),
+  );
+  return { ...hp, page: { ...hp.page, labels, answers } };
+}

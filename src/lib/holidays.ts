@@ -5,6 +5,7 @@
 import { DESIGNS as HALLOWEEN, type HalloweenDesign } from "@/lib/halloween/designs";
 import { THANKSGIVING } from "@/lib/holidays/thanksgiving";
 import { CHRISTMAS } from "@/lib/holidays/christmas";
+import { CHRISTMAS_OLDER, HALLOWEEN_OLDER, THANKSGIVING_OLDER } from "@/lib/holidays/older";
 import type { Product } from "@/lib/price";
 
 /** Tailwind classes for a holiday's colors (written out in full so Tailwind keeps them). */
@@ -36,6 +37,8 @@ export interface Holiday {
   /** One page, and all of them in one PDF. */
   product: Product;
   bundle: Product;
+  /** Harder pages for ages 7–9, with multiplication problems. */
+  older: { designs: HalloweenDesign[]; product: Product; bundle: Product };
   theme: HolidayTheme;
 }
 
@@ -48,6 +51,7 @@ export const HOLIDAYS: Record<Holiday["id"], Holiday> = {
     designs: HALLOWEEN,
     product: "halloween",
     bundle: "halloween-all",
+    older: { designs: HALLOWEEN_OLDER, product: "halloween-older", bundle: "halloween-older-all" },
     theme: {
       banner: "bg-orange-100 dark:bg-orange-950",
       bannerTitle: "text-orange-950 dark:text-orange-100",
@@ -69,6 +73,7 @@ export const HOLIDAYS: Record<Holiday["id"], Holiday> = {
     designs: THANKSGIVING,
     product: "thanksgiving",
     bundle: "thanksgiving-all",
+    older: { designs: THANKSGIVING_OLDER, product: "thanksgiving-older", bundle: "thanksgiving-older-all" },
     theme: {
       banner: "bg-amber-100 dark:bg-amber-950",
       bannerTitle: "text-amber-950 dark:text-amber-100",
@@ -90,6 +95,7 @@ export const HOLIDAYS: Record<Holiday["id"], Holiday> = {
     designs: CHRISTMAS,
     product: "christmas",
     bundle: "christmas-all",
+    older: { designs: CHRISTMAS_OLDER, product: "christmas-older", bundle: "christmas-older-all" },
     theme: {
       banner: "bg-emerald-100 dark:bg-emerald-950",
       bannerTitle: "text-emerald-950 dark:text-emerald-100",

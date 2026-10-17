@@ -41,6 +41,11 @@ export interface Page {
    * answer is the number). A shape too small for its text keeps the plain number.
    */
   labels?: (string | undefined)[][];
+  /**
+   * Per color number (index n − 1): what the key and the page print for it instead of n (the
+   * answer of a multiplication problem: 12, 18, 24…). The colors stay numbered 1, 2, 3 inside.
+   */
+  answers?: number[];
 }
 
 /**
@@ -701,7 +706,8 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       const kind = result.regionKind?.[i];
       const patch = kind === CLOTHES && (result.partGroup?.[result.regionColor[i]] ?? 0) >= PATCH_GROUP;
       if (size < (kind === HAIR ? MIN_FONT * HAIR_BAND : kind === PET || kind === FACE || patch ? MIN_FONT * HAIR_NUMBER : MIN_FONT)) continue;
-      let text = String(page.numbers[li][result.regionColor[i]]);
+      const n = page.numbers[li][result.regionColor[i]];
+      let text = String(page.answers?.[n - 1] ?? n);
       let px = size;
       const label = page.labels?.[li]?.[i];
       if (label) {

@@ -52,7 +52,7 @@ function drawKeySheet(page: Page, fit: Fit): HTMLCanvasElement {
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, sw, sw);
     ctx.fillStyle = "#222";
-    ctx.fillText(String(n), x + sw + 0.08 * KEY_DPI, y + sw / 2);
+    ctx.fillText(String(page.answers?.[n - 1] ?? n), x + sw + 0.08 * KEY_DPI, y + sw / 2);
   });
   return canvas;
 }
