@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { noSaving, Watermark } from "@/app/watermark";
 import { useEffect, useRef, useState } from "react";
 import type { HalloweenDesign } from "@/lib/halloween/designs";
 import type { Holiday } from "@/lib/holidays";
@@ -303,10 +304,12 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
                 aria-pressed={chosen?.id === d.id}
                 aria-label={`Open ${d.title}`}
                 className="relative aspect-square w-full overflow-hidden rounded-xl bg-white"
+                {...noSaving}
               >
+                {showNumbers && thumb && <Watermark tile={80} />}
                 {showNumbers && thumb ? (
                   // eslint-disable-next-line @next/next/no-img-element -- drawn on the page
-                  <img src={thumb} alt="" className="h-full w-full" />
+                  <img src={thumb} alt="" draggable={false} className="h-full w-full" />
                 ) : (
                   // eslint-disable-next-line @next/next/no-img-element -- a small inline drawing
                   <img src={previewUrl(d)} alt="" className={`h-full w-full ${showNumbers ? "opacity-30" : ""}`} />
@@ -374,7 +377,8 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
               }}
             />
           )}
-          <div className="relative mx-auto aspect-square w-full max-w-xl rounded-xl border border-zinc-200 bg-white dark:border-zinc-800">
+          <div className="relative mx-auto aspect-square w-full max-w-xl overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800" {...noSaving}>
+            {made && !(paid.has(made.design.id)) && <Watermark />}
             {made ? (
               <canvas ref={canvasRef} className="h-full w-full rounded-xl" aria-label={`${chosen.title} color-by-number page`} />
             ) : (

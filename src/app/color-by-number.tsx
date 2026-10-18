@@ -6,6 +6,7 @@ import { addColor, cleanUp, describe, drawHighlight, join, joinSameColor, lineSh
 import { countTry, sendReport, type FixEntry } from "@/lib/feedback";
 import { ColorWheel } from "@/app/color-wheel";
 import { Checkout, paymentsOn } from "@/app/checkout";
+import { noSaving, Watermark } from "@/app/watermark";
 import { priceLabel } from "@/lib/price";
 import { CONTACT_EMAIL } from "@/lib/contact";
 import { MURAL_PICTURES, muralSrc, muralThumb, type MuralPicture } from "@/lib/murals";
@@ -1046,11 +1047,13 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
             onPointerMove={pointerMove}
             onPointerUp={pointerUp}
             onPointerCancel={pointerUp}
+            {...noSaving}
             style={{ touchAction: fixing ? "none" : undefined }}
             className={`relative select-none overflow-hidden rounded-lg bg-white shadow-sm ${
               fixing ? (tool === "line" ? "cursor-crosshair ring-2 ring-violet-500" : "cursor-pointer ring-2 ring-violet-500") : ""
             }`}
           >
+            {!paid && <Watermark />}
             <div
               className="relative origin-top-left"
               style={fixing ? { transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` } : undefined}
@@ -1163,7 +1166,10 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                 >
                   ‹
                 </button>
-                <canvas ref={bigRef} className="block max-h-[78vh] min-w-0 flex-1 rounded bg-white object-contain" />
+                <div className="relative min-w-0 flex-1" {...noSaving}>
+                  <canvas ref={bigRef} className="block max-h-[78vh] w-full rounded bg-white object-contain" />
+                  {!paid && <Watermark />}
+                </div>
                 <button
                   type="button"
                   aria-label="Next sheet"
