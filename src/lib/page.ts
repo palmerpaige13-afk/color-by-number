@@ -140,10 +140,16 @@ const COOL_PALE_CHROMA = 14;
 const SAME_SKIN = 0.5;
 /** Different people's skin colors are kept at least this far apart (ΔE), nudging lightness. */
 const MIN_SKIN_GAP = 7;
+/** Touching people's clothes closer than this share of the key's usual difference share a number. */
+const NEAR_SAME = 0.5;
 /** Something in front and what it meets (sharing at least this share of the page's width of edge)... */
 const MIN_APART_EDGE = 0.04;
 /** ...that came out closer than this (ΔE, exact copies) are nudged this far apart in lightness. */
 const MIN_APART_GAP = 5;
+/** Rounds of nudging close key colors apart (each nudge can bring a color near another). */
+const KEY_GAP_ROUNDS = 6;
+/** Farthest a key color is moved in lightness (Lab L) by that nudging. */
+const MAX_KEY_NUDGE = 6;
 
 /** Part kinds (see the pipeline's PartKind). */
 const FACE = 1;
@@ -328,8 +334,29 @@ export function buildPage(
     // With people in the photo's own colors, faces' colors and everything else (hair right
     // next to them) keep apart, so giving faces colors of their own doesn't change the hair.
     if ((a.natural || b.natural) && a.faces !== b.faces) return false;
+    // A dark piece of clothing too close in color to what it's beside to tell apart (dark
+    // jeans against dark trees) shares that number rather than the two being nudged apart
+    // (below), which would lighten the jeans: the clothes keep their own outline, and both
+    // stay dark. Only dark ones: a light dress sharing the pale wall's color would vanish
+    // into it. Only for a color that's all people's clothes (so trees don't join each other
+    // through a shared pair of jeans); not skin, nor hair (dark hair against dark trees would
+    // vanish into them).
+    const allClothes = (c: Cluster) => c.members.every((m) => m.kind === CLOTHES);
+    if (
+      (allClothes(a) || allClothes(b)) &&
+      !a.faces && !b.faces && !a.hair && !b.hair &&
+      Math.max(a.lab[0], b.lab[0]) < DARK_KEY_L &&
+      d2 < need2(a, b)
+    )
+      return true;
     if (keptApart(a, b)) return false;
-    if (a.who.size && b.who.size && touch(a.who, b.who)) return d2 < SAME_SKIN * SAME_SKIN;
+    if (a.who.size && b.who.size && touch(a.who, b.who)) {
+      // Two people's clothes so nearly the same color that they'd look alike colored in anyway
+      // (two black shirts) share a number: each stays its own shape, and the key has no two
+      // swatches you can't tell apart. Skin keeps to its own.
+      if (!a.faces && !b.faces && d2 < need2(a, b) * NEAR_SAME * NEAR_SAME) return true;
+      return d2 < SAME_SKIN * SAME_SKIN;
+    }
     return true;
   };
   // Dark colors are harder to tell apart on paper than light ones (a near-black and a dark
@@ -419,6 +446,49 @@ export function buildPage(
     const bareSkin = noFaces && !c.hair && c.members.some((m) => layers[m.layer].people) && skinLike(c.lab);
     return { n: i + 1, rgb: bareSkin ? c.rgb : lively(c) };
   });
+
+  // Colors that had to keep their own numbers though they came out nearly the same (two
+  // people's clothes, hair and skin, a shirt and the wall behind it) are nudged apart in
+  // lightness until they're as far apart as any two key colors: a key with two swatches you
+  // can't tell apart is no use. This is done on the key's own colors (made livelier, above).
+  // Two faces keep the smaller gap above.
+  const keyLabs = key.map((k) => toLab(k.rgb));
+  const startL = keyLabs.map((lab) => lab[0]);
+  for (let round = 0; round < KEY_GAP_ROUNDS; round++) {
+    let moved = false;
+    for (let i = 0; i < key.length; i++) {
+      for (let j = i + 1; j < key.length; j++) {
+        if (clusters[i].faces && clusters[j].faces) continue;
+        const [la, lb] = [keyLabs[i], keyLabs[j]];
+        const d = Math.sqrt(labDist2(la, 0, lb, 0));
+        const t = Math.min(1, Math.max(la[0], lb[0]) / DARK_KEY_L);
+        const need = Math.max(distinct, distinct + (DARK_DISTINCT - distinct) * (1 - t));
+        if (d >= need - 0.01) continue;
+        const [light, dark] = la[0] >= lb[0] ? [i, j] : [j, i];
+        const dL = keyLabs[light][0] - keyLabs[dark][0];
+        // The lightness difference that makes the distance `need`, the tints kept.
+        const tint2 = Math.max(0, d * d - dL * dL);
+        const gap = Math.sqrt(Math.max(0, need * need - tint2)) - dL;
+        // What stays: a face over anything; then a person (their clothes, hair) over the
+        // background, so a white shirt stays white and the wall behind it moves.
+        const rank = (c: Cluster) => (c.faces ? 2 : c.who.size || c.hair ? 1 : 0);
+        const [rl, rd] = [rank(clusters[light]), rank(clusters[dark])];
+        const lightShare = rl === rd ? 0.5 : rl > rd ? 0 : 1;
+        for (const [k, dl] of [[light, gap * lightShare], [dark, -gap * (1 - lightShare)]] as const) {
+          if (!dl) continue;
+          const lab = keyLabs[k];
+          // Never far from the photo's own color (a black dress stays black).
+          const L = Math.min(97, Math.max(3, startL[k] - MAX_KEY_NUDGE, Math.min(startL[k] + MAX_KEY_NUDGE, lab[0] + dl)));
+          if (Math.abs(L - lab[0]) < 0.05) continue;
+          lab[0] = L;
+          key[k].rgb = labToRgb(lab[0], lab[1], lab[2]);
+          rgbToLab(key[k].rgb[0], key[k].rgb[1], key[k].rgb[2], lab, 0);
+          moved = true;
+        }
+      }
+    }
+    if (!moved) break;
+  }
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,
   // shapes are re-found from the numbers themselves. A person's skin, hair and clothes (and a
