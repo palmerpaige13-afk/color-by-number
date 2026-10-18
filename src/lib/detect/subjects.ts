@@ -70,6 +70,10 @@ const PERSON_REACH_PAD = 1.6;
 const SQUARE_EDGE_SHARE = 0.1;
 /** ...so a square this share of a side over that way is looked at too. */
 const SQUARE_SHIFT = 0.6;
+/** A square past the bottom with less than this share person in it found no one there. */
+const SQUARE_EMPTY = 0.02;
+/** A box starting within this share of the photo's height from its top has its head cut off. */
+const TOP_CUT = 0.03;
 /** A face whose box is less than this share face skin (to the segmenter) isn't a person's face. */
 const MIN_FACE_SKIN = 0.1;
 /** The squares searched for more faces in a group are this many faces wide (see detectSubjects). */
@@ -101,6 +105,8 @@ const HEAD_SURE = 0.5;
 const HAIR_COLOR_STEP = 2;
 /** Owner of clothes no face reaches (held things, someone with no face found). */
 const LEFT_OVER = 250;
+/** Someone whose face isn't in the picture: their clothes start below a stand-in face this share of their box's width. */
+const HEADLESS_FACE_WIDTH = 0.4;
 /** Growing clothes between people: extra steps per ΔE of color change crossed. */
 const CLOTHES_EDGE_COST = 2;
 /** Each face claims the clothes below it down to this many face heights below its top. */
@@ -833,7 +839,26 @@ export async function detectSubjects(
   if (seg && mainPeople.length) faceBoxes.push(...facesFromSegmentation(seg, faceBoxes));
   const heads = peopleCut ? await headsOf(faceBoxes).catch(() => null) : null;
   if (peopleCut) extendHair(faceBoxes, peopleCut.hair, heads);
-  if (peopleCut) splitClothes(faceBoxes, peopleCut.clothes);
+  if (peopleCut) {
+    // People whose faces aren't in the picture (cropped at the shoulders) get a stand-in: their
+    // clothes start from the top middle of their own box, as if their face were just above
+    // it, so neighbors' dresses stay apart instead of all going to whichever face there is.
+    // Stand-ins come after the real faces, so they never claim anyone's skin.
+    const faceless = mainPeople.filter(
+      (p) => !faceBoxes.some((f) => {
+        const fx = f.x / toWork + f.width / toWork / 2, fy = f.y / toWork + f.height / toWork / 2;
+        return fx >= p.x && fx <= p.x + p.w && fy >= p.y - p.h * 0.2 && fy <= p.y + p.h * 0.6;
+      }),
+    );
+    const standIns: SubjectBox[] = faceless.map((p) => {
+      const w = p.w * toWork * HEADLESS_FACE_WIDTH;
+      return { kind: "face" as const, x: (p.x + p.w / 2) * toWork - w / 2, y: p.y * toWork - w * 1.2, width: w, height: w };
+    });
+    // A stand-in's strip runs on down, past what they hold, to the hem; so does that of a face
+    // cut off at the top of the photo, with the rest of the person below it.
+    const cutTop = (f: SubjectBox) => f.y <= workH * TOP_CUT;
+    splitClothes([...faceBoxes, ...standIns], peopleCut.clothes, [...faceBoxes.map((f) => (cutTop(f) ? workH : undefined)), ...faceless.map(() => workH)]);
+  }
 
   const subjects = [...out, ...faceBoxes].map((b) => ({
     ...b,
@@ -1405,7 +1430,7 @@ export async function detectSubjects(
    * a straight cut. Faces are used rather than person boxes, which can hold two people.
    * Writes each pixel's owner (1, 2, … by face; LEFT_OVER for clothes no face reaches).
    */
-  function splitClothes(faces: SubjectBox[], clothes: Uint8Array) {
+  function splitClothes(faces: SubjectBox[], clothes: Uint8Array, stripBottom: (number | undefined)[] = []) {
     const n = workW * workH;
     const lab = workLab();
     const owner = new Uint8Array(n);
@@ -1419,7 +1444,7 @@ export async function detectSubjects(
       const y0 = Math.max(0, Math.floor(f.y + f.height * 1.2));
       // Down past the waist, so shorts or a skirt are claimed too even when someone's arm
       // around the waist cuts them off from the shirt.
-      const y1 = Math.min(workH - 1, Math.ceil(f.y + f.height * CLOTHES_STRIP_DEPTH));
+      const y1 = Math.min(workH - 1, Math.ceil(stripBottom[i] ?? f.y + f.height * CLOTHES_STRIP_DEPTH));
       for (let y = y0; y <= y1; y++) {
         for (let x = x0; x <= x1; x++) {
           const p = y * workW + x;
@@ -1586,9 +1611,26 @@ export async function detectSubjects(
         [sy > 0 && along((i) => N + i) >= SQUARE_EDGE_SHARE, 0, -1],
         [sy + side < canvas.height && along((i) => (N - 2) * N + i) >= SQUARE_EDGE_SHARE, 0, 1],
       ];
+      let tallSquare = false;
       for (const [cut, dx, dy] of sides) {
         if (!cut) continue;
-        segmentSquare(sx + dx * side * SQUARE_SHIFT, sy + dy * side * SQUARE_SHIFT, side, { sx, sy, side });
+        const past = segmentSquare(sx + dx * side * SQUARE_SHIFT, sy + dy * side * SQUARE_SHIFT, side, { sx, sy, side });
+        // Below someone's waist with no head or shoulders in view (a row of long dresses), the
+        // segmenter may see no one at all: a bigger square from the same top, with the whole
+        // person in it, is looked at instead.
+        if (dy === 1 && past && past.filter((v) => v < 0.5).length / past.length < SQUARE_EMPTY) tallSquare = true;
+      }
+      // Someone cut off at the top of the photo (their head out of it, no whole face in their
+      // box) may be boxed only down to what they hold, with their skirt below: their bigger
+      // square is looked at too.
+      const headIn = kept.some((c) => {
+        const fx = c.x + c.w / 2;
+        return fx >= p.x && fx <= p.x + p.w && c.y > canvas.height * TOP_CUT && c.y + c.h / 2 <= p.y + p.h * 0.6;
+      });
+      if (!headIn && p.y <= canvas.height * TOP_CUT && p.y + p.h < canvas.height * (1 - TOP_CUT)) tallSquare = true;
+      if (tallSquare) {
+        const big = side * (1 + SQUARE_SHIFT);
+        segmentSquare(sx + side / 2 - big / 2, sy, big, { sx, sy, side });
       }
     });
     // A child held in someone's arms is "held" in their crop but clothes in the child's own:
