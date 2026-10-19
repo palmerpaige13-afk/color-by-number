@@ -53,7 +53,7 @@ export default function Terms() {
           <li>A Halloween page: {priceLabel("halloween")}</li>
           <li>A Thanksgiving page: {priceLabel("thanksgiving")}</li>
           <li>A Christmas page: {priceLabel("christmas")}</li>
-          <li>A group mural: $1 per sheet ({priceLabel("mural-4")} for 4 sheets)</li>
+          <li>A group mural: {priceLabel("mural-4")} for up to 4 sheets, then $1 per sheet ({priceLabel("mural-9")} for 9 sheets)</li>
         </ul>
         <p>
           Prices are in US dollars. It&apos;s a digital download: nothing is shipped. The PDF downloads right after
