@@ -4,6 +4,7 @@
 // both make pages exactly the same way.
 
 import { drawClipped } from "@/lib/draw";
+import { benchCacheOn, benchGet, benchSet, photoKey } from "@/lib/detect/bench-cache";
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import { DIFFICULTY_PARAMS, WORKING_SIZE, type Difficulty, type RegionMask } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
@@ -549,12 +550,21 @@ export interface Photo {
   full: ImageBitmap;
   frame: Frame;
   found: Map<string, FoundSubjects>;
+  /** The photo's fingerprint, on the test bench (see bench-cache). */
+  key?: string;
 }
 
 /** Reads a photo (upright, as the phone shows it) and finds how to frame it. Throws if it can't be read. */
 export async function loadPhoto(file: Blob): Promise<Photo> {
   const full = await createImageBitmap(file, { imageOrientation: "from-image" });
-  return { file, full, frame: await framing(full), found: new Map() };
+  // On the test bench, a test photo seen before skips the finding (see bench-cache).
+  const key = benchCacheOn() ? await photoKey(file) : undefined;
+  let frame = key ? await benchGet<Frame>(`${key}|framing`) : undefined;
+  if (frame === undefined) {
+    frame = await framing(full);
+    if (key) await benchSet(`${key}|framing`, frame);
+  }
+  return { file, full, frame, found: new Map(), key };
 }
 
 /** The choices a page is made with. */
@@ -652,8 +662,9 @@ export async function makePage(
   // The main layer: the people (and pets) on their own when there are some, else the photo.
   const mainRect: Rect = frame?.subjects ?? photoRect;
   const foundKey = `${plain ? "plain" : !!frame} ${workingSize} ${Math.round(mainRect.x)} ${Math.round(mainRect.y)} ${Math.round(mainRect.width)} ${Math.round(mainRect.height)}`;
-  let found = photo.found.get(foundKey);
-  if (!found) {
+  let found = photo.found.get(foundKey) ?? (photo.key ? await benchGet<FoundSubjects>(`${photo.key}|${foundKey}`) : undefined);
+  if (found) photo.found.set(foundKey, found);
+  else {
     const mainBitmap = frame || photoRect.width !== full.width || photoRect.height !== full.height ? await crop(full, mainRect) : full;
     const image = toWorkingImage(mainBitmap, workingSize);
     found = { main: image, subjects: [], animals: [], note: "" };
@@ -676,6 +687,7 @@ export async function makePage(
     }
     if (found.cutout) dropSpecks(found.cutout, image.width);
     photo.found.set(foundKey, found);
+    if (photo.key) await benchSet(`${photo.key}|${foundKey}`, found);
   }
   const { main, subjects, cutout, animals, clothes, bodySkin, held, hair } = found;
   const structure = structureMap(main.data, main.width, main.height);
