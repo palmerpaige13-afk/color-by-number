@@ -163,6 +163,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const frameRef = useRef<HTMLDivElement>(null);
   /** The finished page, and whether to bring it into view (just made, not just edited). */
   const resultRef = useRef<HTMLElement>(null);
+  /** Step 2 (how many sheets) and the Make button below it: where a mural's picture pick leads. */
+  const sheetsRef = useRef<HTMLDivElement>(null);
   const showResult = useRef(false);
   useEffect(() => {
     if (!result || !showResult.current) return;
@@ -481,8 +483,14 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [galleryPick, setGalleryPick] = useState<string | null>(null);
 
   /** Picks a ready-made mural picture: loads it like an upload, with faces shown if it has people. */
+  /** Brings the mural's next steps (how many sheets, then Make) into view once a picture is picked. */
+  function toSheets() {
+    requestAnimationFrame(() => sheetsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
   async function pickMuralPicture(m: MuralPicture) {
     setGalleryPick(m.id);
+    toSheets();
     setShowFaces(m.faces);
     try {
       const blob = await (await fetch(muralSrc(m))).blob();
@@ -637,6 +645,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                     e.preventDefault();
                     setDragging(false);
                     pickFile(e.dataTransfer.files[0]);
+                    if (e.dataTransfer.files[0]) toSheets();
                   }}
                   className={`flex w-full cursor-pointer flex-col overflow-hidden rounded-xl border-2 text-left transition-colors ${
                     dragging || (photoUrl && !galleryPick)
@@ -654,7 +663,15 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
                   )}
                   <span className="px-2 pt-1.5 text-sm font-semibold">Create your own</span>
                   <span className="px-2 pb-1.5 text-xs text-zinc-500">{photoUrl && !galleryPick ? "Tap to choose a different photo" : "Use your own photo"}</span>
-                  <input type="file" accept="image/*" className="sr-only" onChange={(e) => pickFile(e.target.files?.[0])} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(e) => {
+                      pickFile(e.target.files?.[0]);
+                      if (e.target.files?.[0]) toSheets();
+                    }}
+                  />
                 </label>
               </li>
               {MURAL_PICTURES.map((m) => (
@@ -716,7 +733,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
           </label>
         </div>}
 
-        <div>
+        <div ref={sheetsRef} className="scroll-mt-4">
           <h2 className="mb-2 font-semibold">{muralMode ? "2. How many sheets" : "2. Print size"}</h2>
           {muralMode ? (
             <div className="flex flex-wrap items-center gap-2">
