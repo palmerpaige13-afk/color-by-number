@@ -22,6 +22,8 @@ export interface Layer {
   natural?: boolean;
   /** The people layer: never broken up in `gentle` mode (see buildPage). */
   people?: boolean;
+  /** No one's face is really in this layer (only a chin at the edge was found). */
+  noFaces?: boolean;
 }
 
 export interface Page {
@@ -76,7 +78,7 @@ function skinLike(lab: Float32Array): boolean {
 /** Skin tones' ranges, in Lab: lightness, colorfulness (chroma) and hue (degrees). */
 const SKIN_LIKE_L = [35, 90];
 const SKIN_LIKE_CHROMA = [10, 60];
-const SKIN_LIKE_HUE = [25, 75];
+const SKIN_LIKE_HUE = [25, 90];
 
 function lively(c: { lab: Float32Array; faces: boolean; hair: boolean }): RGB {
   const [L, a, b] = c.lab;
@@ -437,7 +439,7 @@ export function buildPage(
 
   // Numbered dark to light.
   clusters.sort((a, b) => a.lab[0] - b.lab[0]);
-  const noFaces = !clusters.some((c) => c.faces);
+  const noFaces = !clusters.some((c) => c.faces) || layers.some((l) => l.people && l.noFaces);
   const numbers = layers.map(({ result }) => new Uint8Array(result.palette.length));
   const key = clusters.map((c, i) => {
     for (const m of c.members) numbers[m.layer][m.index] = i + 1;

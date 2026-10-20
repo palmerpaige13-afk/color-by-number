@@ -35,6 +35,8 @@ const SKIN_DARK = 35;
 
 /** Faces smaller than this share of the picture keep the photo's shared colors (too small for colors of their own). */
 const OWN_FACE_MIN_SHARE = 0.006;
+/** A face at the top edge showing less than this share of its width in height is just a chin. */
+const CHIN_ONLY = 0.6;
 /** ...smaller faces (a big group) on someone's own photo get just one skin color of their own (two lets the shadow take over). */
 const SMALL_FACE_COLORS = 1;
 /** How important a pet is on a page with faces shown (0-1, like a face). */
@@ -872,6 +874,9 @@ export async function makePage(
         outlineBlank: true,
         natural: photoColors,
         people: true,
+        // Only a chin at the top edge "seen" as a face (bridesmaids cropped at the shoulders):
+        // no one's face is really in the picture.
+        noFaces: faces.every((f) => f.y <= 1 && f.height < f.width * CHIN_ONLY),
       },
     ];
     page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors);

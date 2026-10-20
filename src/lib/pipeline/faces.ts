@@ -67,6 +67,8 @@ const SKIN_MIN_HUE = 30;
 const HAIR_DYED = 15;
 /** The tint (Lab a, b) given to hair that came out a dull sky blue-gray. */
 const SKY_HAIR_TINT = [4, 14] as const;
+/** A face at the top edge showing less than this share of its width in height is just a chin. */
+const CHIN_ONLY = 0.6;
 /** Colors for a big thing people hold (a bouquet), picked from it... */
 const HELD_COLORS = 12;
 /** ...and for a small one (a shoe, a watch). */
@@ -653,7 +655,31 @@ export function separateFaces(
       const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
       if (ids.every((id) => id >= 0)) faceTone.set(k, { ids, tone: own.tone });
     }
+    // A "face" that's only a chin at the top edge (bridesmaids cropped at the shoulders) is no
+    // guide to anyone's skin: lightened as a face in shadow it comes out orange. The arms that
+    // go with it keep their own color from the photo.
+    const chinOnly = (f: FaceShape | undefined) => !!f && f.y <= 1 && f.height < f.width * CHIN_ONLY;
+    const ownSkin = new Map<number, number[]>(); // piece -> r, g, b, n
+    if (faces.some(chinOnly)) {
+      for (let p = 0; p < w * h; p++) {
+        const k = parts[p];
+        if (!k || !chinOnly(faces[(skinPieces.get(k) ?? 0) - 1])) continue;
+        let a = ownSkin.get(k);
+        if (!a) ownSkin.set(k, (a = [0, 0, 0, 0]));
+        for (let c = 0; c < 3; c++) a[c] += smoothed[p * 4 + c];
+        a[3]++;
+      }
+    }
     for (const [piece, k] of skinPieces) {
+      const mine = ownSkin.get(piece);
+      if (mine) {
+        const rgb = [0, 1, 2].map((c) => Math.round(mine[c] / mine[3])) as RGB;
+        const l = new Float32Array(3);
+        rgbToLab(rgb[0], rgb[1], rgb[2], l, 0);
+        const id = add(rgb, l, piece);
+        if (id >= 0) faceTone.set(piece, { ids: [id], tone: new Map() });
+        continue;
+      }
       const tone = faceTone.get(k);
       if (!tone) continue;
       const skin = cardSkin.get(k);
