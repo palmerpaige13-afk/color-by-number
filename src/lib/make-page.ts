@@ -82,6 +82,16 @@ const MURAL_MAX_SHAPES = 7000;
 /** A mural's numbers print this much smaller than a page's (about 4.5 pt), and its shapes can be this much smaller. */
 const MURAL_FONT = 0.75;
 const MURAL_SHAPE_SIZE = 0.8;
+/** ...and a mural's faces keep this much finer detail still (a crowd's small faces: eyes, a beard). */
+/** A mural's faces darker than this (Lab L, their middle) are in shadow (see liftShadowedFaces)... */
+const FACE_SHADOW = 40;
+/** ...and are lifted toward this lightness... */
+const FACE_LIFT_LIT = 55;
+/** ...by at most this much... */
+const FACE_LIFT_MAX = 18;
+/** ...with their light-to-dark spread stretched toward this (Lab L), at most this many times. */
+const FACE_LIFT_RANGE = 45;
+const FACE_LIFT_MAX_GAIN = 1.8;
 /**
  * No piece of a mural is bigger than this share of a sheet (1/14): bigger ones are broken up.
  * With the shape budget above, a sheet has about 150-200 shapes: 30-40 minutes to color.
@@ -332,6 +342,55 @@ async function framing(
  * shifted toward red by however much the face's typical color is short of it. Other things keep
  * their colors. Returns a copy of the pixels.
  */
+/**
+ * Faces in shadow (a crowd in a painting, lit from one side) on a mural: eyes, brows and a beard
+ * are nearly the skin's own brown, so at a mural's few colors the face comes out one blank
+ * brown. Such a face is lightened and its contrast stretched, inside an oval over its box
+ * (fading out toward the edge), so its features get colors of their own. Lit faces are left
+ * as they are.
+ */
+function liftShadowedFaces(data: Uint8ClampedArray, width: number, faces: SubjectBox[]): Uint8ClampedArray {
+  const height = data.length / 4 / width;
+  const out = Uint8ClampedArray.from(data);
+  const lab = new Float32Array(3);
+  for (const f of faces) {
+    const cx = f.x + f.width / 2, cy = f.y + f.height / 2;
+    const rx = f.width / 2, ry = f.height / 2;
+    const x0 = Math.max(0, Math.floor(f.x)), x1 = Math.min(width - 1, Math.ceil(f.x + f.width));
+    const y0 = Math.max(0, Math.floor(f.y)), y1 = Math.min(height - 1, Math.ceil(f.y + f.height));
+    const ls: number[] = [];
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 > 1) continue;
+        const p = y * width + x;
+        rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
+        ls.push(lab[0]);
+      }
+    }
+    if (ls.length < 50) continue;
+    ls.sort((a, b) => a - b);
+    const lo = ls[Math.floor(ls.length * 0.05)], mid = ls[ls.length >> 1], hi = ls[Math.floor(ls.length * 0.95)];
+    // Lit faces (Jesus's, in the light) are left alone.
+    if (mid >= FACE_SHADOW) continue;
+    const gain = Math.min(FACE_LIFT_MAX_GAIN, Math.max(1, FACE_LIFT_RANGE / Math.max(1, hi - lo)));
+    const lift = Math.min(FACE_LIFT_MAX, FACE_LIFT_LIT - mid);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2;
+        if (d > 1) continue;
+        // Full strength in the middle of the face, fading to none at the oval's edge.
+        const k = d < 0.5 ? 1 : (1 - d) / 0.5;
+        const p = y * width + x;
+        rgbToLab(data[p * 4], data[p * 4 + 1], data[p * 4 + 2], lab, 0);
+        const L = mid + lift + (lab[0] - mid) * gain;
+        const rgb = labToRgb(lab[0] + (Math.min(95, Math.max(3, L)) - lab[0]) * k, lab[1], lab[2]);
+        for (let c = 0; c < 3; c++) out[p * 4 + c] = rgb[c];
+      }
+    }
+  }
+  return out;
+}
+
 function warmSkin(data: Uint8ClampedArray, width: number, faces: SubjectBox[], bodySkin?: RegionMask): Uint8ClampedArray {
   const out = Uint8ClampedArray.from(data);
   const lab = new Float32Array(3);
@@ -710,6 +769,10 @@ export async function makePage(
   // including hair whose face wasn't found (a head bent down). On one page, pets are parts of
   // their own, so their small features (a nose, a tongue) keep the people's finer detail.
   const card = !!cardShape(printSize, true);
+  // A mural's sheets are each printed full size, so a face a share of the whole picture prints
+  // that many times bigger: the smallest face with colors of its own is that much smaller (the
+  // crowd around Jesus in a painting).
+  const ownFaceMin = OWN_FACE_MIN_SHARE / sheets;
   const realPeople = ownColors && sheets > 1;
   const photoColors = withFaces && !card;
   const colorParams = photoColors
@@ -763,7 +826,7 @@ export async function makePage(
   const mainResult = await runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * OWN_FACE_MIN_SHARE).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined, colors: f.width * f.height < main.width * main.height * OWN_FACE_MIN_SHARE ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin: ownColors ? bodySkin : undefined, faceStyle: "own" as const, cutout }
+      ? { ...main, data: warmSkin(sheets > 1 && !ownColors ? liftShadowedFaces(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces) : colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * ownFaceMin).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined, colors: f.width * f.height < main.width * main.height * ownFaceMin ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin: ownColors ? bodySkin : undefined, faceStyle: "own" as const, cutout }
       : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
