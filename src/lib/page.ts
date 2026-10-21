@@ -148,6 +148,9 @@ const NEAR_SAME = 0.5;
 const MIN_APART_EDGE = 0.04;
 /** ...that came out closer than this (ΔE, exact copies) are nudged this far apart in lightness. */
 const MIN_APART_GAP = 5;
+/** On a mural with people, their share of the colors: their share of the picture times this, at least this many (and the scene too). */
+const PEOPLE_COLORS_WEIGHT = 1.6;
+const PEOPLE_COLORS_MIN = 10;
 /** Rounds of nudging close key colors apart (each nudge can bring a color near another). */
 const KEY_GAP_ROUNDS = 6;
 /** Farthest a key color is moved in lightness (Lab L) by that nudging. */
@@ -186,6 +189,8 @@ export function buildPage(
    * pets stay whole), and only into its own nearby shades (up to BREAKUP_GENTLE_MAX apart).
    */
   gentle = false,
+  /** A mural without extra colors: the people are never broken into patches (only the scene). */
+  wholePeople = false,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
@@ -331,7 +336,21 @@ export function buildPage(
   // clothes) of two people who touch shares a number only if it's exactly the same color, so
   // faces cheek to cheek don't read as one face, nor two people's clothes as one piece. (A
   // person's arms and legs are exact copies of their face's color, so they still join it.)
+  // A mural with people on a layer of their own: the people's colors and the scene's are kept
+  // apart (each with a share of the color limit, see PEOPLE_COLORS_WEIGHT), so whatever is done to
+  // the people (faces shown or not) never changes the scene's colors.
+  const peopleLayer = Number.isFinite(maxColors) && layers.some((l) => l.people) && layers.some((l) => !l.people);
+  const isPeople = (c: Cluster) => c.members.every((m) => layers[m.layer].people);
+  // The people's share of the colors goes with how much of the picture they cover (a couple in
+  // front of a big wall, or a crowd filling a painting).
+  const peopleCover = (() => {
+    let p = 0;
+    for (const l of layers) if (l.people) for (let i = 0; i < l.result.regionCount; i++) if (l.result.regionColor[i] !== l.result.background) p += l.result.regionArea[i] * l.scale * l.scale;
+    return p / (width * height);
+  })();
+  const peopleColors = Math.round(Math.min(maxColors - PEOPLE_COLORS_MIN, Math.max(PEOPLE_COLORS_MIN, maxColors * peopleCover * PEOPLE_COLORS_WEIGHT)));
   const canMerge = (a: Cluster, b: Cluster, d2: number) => {
+    if (peopleLayer && isPeople(a) !== isPeople(b)) return false;
     if ((a.faces && b.hair) || (a.hair && b.faces)) return false;
     // With people in the photo's own colors, faces' colors and everything else (hair right
     // next to them) keep apart, so giving faces colors of their own doesn't change the hair.
@@ -370,22 +389,60 @@ export function buildPage(
     const need = Math.max(distinct, distinct + (DARK_DISTINCT - distinct) * (1 - t));
     return need * need;
   };
+  // A color limit (murals) counts only what isn't a face shown in its own colors: faces get
+  // their colors on top, so turning faces on never takes colors from the rest of the picture
+  // (the background stays the same either way). Merging to meet the limit leaves those faces be.
+  const ownFace = (c: Cluster) => c.faces && c.natural;
   for (;;) {
     let bi = -1;
     let bj = -1;
     let bd = Infinity;
+    let fi = -1;
+    let fj = -1;
+    let fd = Infinity;
     for (let i = 0; i < clusters.length; i++) {
       for (let j = i + 1; j < clusters.length; j++) {
         const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
         const nd = d / need2(clusters[i], clusters[j]);
-        if (nd < bd && canMerge(clusters[i], clusters[j], d)) {
+        if (!canMerge(clusters[i], clusters[j], d)) continue;
+        if (nd < bd) {
           bd = nd;
           bi = i;
           bj = j;
         }
+        if (nd < fd && !ownFace(clusters[i]) && !ownFace(clusters[j])) {
+          fd = nd;
+          fi = i;
+          fj = j;
+        }
       }
     }
-    if (bi < 0 || (bd >= 1 && clusters.length <= maxColors)) break;
+    if (bi < 0) break;
+    if (bd >= 1) {
+      // Over the limit: merge the closest pair in a group that's over its share.
+      const counted = clusters.filter((c) => !ownFace(c));
+      if (!peopleLayer) {
+        if (counted.length <= maxColors || fi < 0) break;
+        [bi, bj] = [fi, fj];
+      } else {
+        const people = counted.filter(isPeople).length;
+        const overPeople = people > peopleColors, overScene = counted.length - people > maxColors - peopleColors;
+        if (!overPeople && !overScene) break;
+        let pi = -1, pj = -1, pd = Infinity;
+        for (let i = 0; i < clusters.length; i++) {
+          for (let j = i + 1; j < clusters.length; j++) {
+            const [a, b] = [clusters[i], clusters[j]];
+            if (ownFace(a) || ownFace(b) || isPeople(a) !== isPeople(b) || (isPeople(a) ? !overPeople : !overScene)) continue;
+            const d = labDist2(a.lab, 0, b.lab, 0);
+            if (!canMerge(a, b, d)) continue;
+            const nd = d / need2(a, b);
+            if (nd < pd) { pd = nd; pi = i; pj = j; }
+          }
+        }
+        if (pi < 0) break;
+        [bi, bj] = [pi, pj];
+      }
+    }
     const [a, b] = [clusters[bi], clusters[bj]];
     const area = a.area + b.area;
     const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
@@ -514,14 +571,19 @@ export function buildPage(
       byNumber[p] = c === result.background ? 0 : numbers[li][c];
       owner[p] = ownerOf(c);
     }
-    if (maxArea && !(gentle && layer.people)) {
+    // On a mural without extra colors, people are never broken into patches (a white wedding
+    // dress in patches of the rocks' colors isn't a dress): only the scene is.
+    if (maxArea && !((gentle || wholePeople) && layer.people)) {
       // Faces, skin and hair are never broken up: a face in patches of random colors isn't a face.
       const keep = new Uint8Array(w * h);
       for (let p = 0; p < keep.length; p++) {
         const kind = result.partKind?.[result.regionColor[labels[p]]];
         keep[p] = kind === FACE || kind === HAIR || (gentle && (kind === CLOTHES || kind === PET)) ? 1 : 0;
       }
-      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), keyLab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX);
+      // The scene's patches take only scene colors (with people on a layer of their own), so
+      // what's done to the people never changes them.
+      const lab = peopleLayer && !layer.people ? Float32Array.from(keyLab, (v, k) => (isPeople(clusters[Math.floor(k / 3)]) || ownFace(clusters[Math.floor(k / 3)]) ? 1e4 : v)) : keyLab;
+      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), lab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX);
     }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
@@ -791,6 +853,17 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       ctx.beginPath();
       ctx.arc(layer.x + e.x * scale, layer.y + e.y * scale, Math.max(2 * t, e.r * scale), 0, Math.PI * 2);
       ctx.fill();
+    }
+    // Mouths (murals): a thin outline, printed, so the smile shows.
+    if (result.mouths?.length) {
+      ctx.strokeStyle = "#333";
+      ctx.lineWidth = Math.max(1, t * 0.6);
+      for (const m of result.mouths) {
+        ctx.beginPath();
+        m.forEach(([x, y], k) => (k ? ctx.lineTo(layer.x + x * scale, layer.y + y * scale) : ctx.moveTo(layer.x + x * scale, layer.y + y * scale)));
+        ctx.closePath();
+        ctx.stroke();
+      }
     }
     if (view === "colored") return;
     ctx.fillStyle = "#555";

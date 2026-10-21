@@ -333,7 +333,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   const isPet = (color: number) => faces?.kind[color] === PartKind.pet;
   // So may an arm or leg (thin bare skin on a small card, not a face's shading), so it isn't
   // swallowed by the hair beside it.
-  const isSkin = (color: number) => !!faces && faces.kind[color] === PartKind.face && (group?.[color] ?? 0) > faces.faceCount;
+  const isSkin = (color: number) =>
+    !!faces && faces.kind[color] === PartKind.face && ((group?.[color] ?? 0) > faces.faceCount || !!params.smallFaceNumbers);
   // Hair (a cap, short hair hugging a head) is held only to the hair's number size, so a thin
   // band of it isn't merged into the face and leave a bald, skin-colored head.
   const isHair = (color: number) => faces?.kind[color] === PartKind.hair;
@@ -607,6 +608,7 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     partKind: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.kind[i] ?? 0) : undefined,
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),
+    mouths: params.smallFaceNumbers ? (input.faces ?? []).flatMap((f) => f.features ?? []) : undefined,
     timings,
     debug: params.debug
       ? { importance: imp, smoothed, quantized: indices, rawRegionCount: raw.count }

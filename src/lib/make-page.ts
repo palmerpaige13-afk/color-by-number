@@ -84,6 +84,8 @@ const MURAL_MAX_SHAPES = 7000;
 /** A mural's numbers print this much smaller than a page's (about 4.5 pt), and its shapes can be this much smaller. */
 const MURAL_FONT = 0.75;
 const MURAL_SHAPE_SIZE = 0.8;
+/** A mural's people get this many times their share of the picture in shapes (the scene the rest). */
+const MURAL_PEOPLE_DETAIL = 1.6;
 /** ...and a mural's faces keep this much finer detail still (a crowd's small faces: eyes, a beard). */
 /** A mural's faces darker than this (Lab L, their middle) are in shadow (see liftShadowedFaces)... */
 const FACE_SHADOW = 40;
@@ -841,6 +843,7 @@ export async function makePage(
       ...(photoColors ? { partMinArea: params.minArea * FACE_DETAIL[difficulty], partMinRadius: params.minRadius * Math.sqrt(FACE_DETAIL[difficulty]) } : {}),
       minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac),
       card,
+      smallFaceNumbers: sheets > 1 && photoColors,
       // The card steps that simplify shapes are for the scene behind cut-out people only: the
       // people keep their shapes exactly.
       cardScene: card && !twoLayers,
@@ -857,7 +860,10 @@ export async function makePage(
     const sceneScale = (k * frame.scene.width) / scene.width;
     // The scene gets whatever part of the budget the people didn't use.
     const peopleShapes = mainResult.regionCount - (mainResult.background === undefined ? 0 : 1);
-    const sceneBudget = params.maxShapes && Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes);
+    // A mural's scene gets a fixed share, so showing faces (more shapes on the people) never
+    // changes the scene.
+    const peopleArea = (mainRect.width * mainRect.height) / (frame.scene.width * frame.scene.height);
+    const sceneBudget = params.maxShapes && (sheets > 1 ? Math.round(params.maxShapes * (1 - Math.min(PEOPLE_SHARE, peopleArea * MURAL_PEOPLE_DETAIL))) : Math.max(Math.round(params.maxShapes * (1 - PEOPLE_SHARE)), params.maxShapes - peopleShapes));
     onStep?.("Building the background…");
     const sceneResult = await runPipelineAsync(
       { ...scene, data: colored(scene, []), importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
@@ -879,7 +885,7 @@ export async function makePage(
         noFaces: faces.every((f) => f.y <= 1 && f.height < f.width * CHIN_ONLY),
       },
     ];
-    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors);
+    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors, sheets > 1 && !extraColors);
   } else {
     page = buildPage(
       main.width * SCALE,

@@ -80,6 +80,8 @@ export interface PipelineParams {
   flatClothes?: boolean;
   /** A small card (4×6, 5×7): runs the card-only steps (see card.ts); Letter pages never do. */
   card?: boolean;
+  /** Faces' own shapes (a smile, an eye) may carry a smaller number, like hair (murals). */
+  smallFaceNumbers?: boolean;
   /** A card's scene (not cut-out people): its shapes are simplified (see card.ts). */
   cardScene?: boolean;
 }
@@ -142,6 +144,8 @@ export interface PipelineResult {
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];
+  /** Mouths printed as an outline (faces too small for their smile to be shapes; murals). */
+  mouths?: [number, number][][];
   timings: Record<string, number>;
   debug?: {
     importance?: Float32Array;
