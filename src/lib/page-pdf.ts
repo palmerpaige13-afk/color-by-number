@@ -72,6 +72,21 @@ export async function pagesPdf(pages: { page: Page; fit: Fit; draw?: DrawSheet }
   return makePdf(sheets);
 }
 
+/**
+ * Mystery pages: each page to color with its key, and the finished pictures all at the end
+ * (the answers, kept apart so they don't spoil the surprise).
+ */
+export async function mysteryPdf(pages: { page: Page; fit: Fit; draw?: DrawSheet }[]): Promise<Blob> {
+  const sheets: PdfPage[] = [];
+  const answers: PdfPage[] = [];
+  for (const { page, fit, draw } of pages) {
+    const [outline, key, finished] = await pageSheets(page, fit, draw);
+    sheets.push(outline, key);
+    answers.push(finished);
+  }
+  return makePdf([...sheets, ...answers]);
+}
+
 /** A page's three printed sheets: the page to color, its color key, and the finished picture. */
 async function pageSheets(page: Page, fit: Fit, draw: DrawSheet = drawPage): Promise<PdfPage[]> {
   const longIn = Math.max(fit.w, fit.h);

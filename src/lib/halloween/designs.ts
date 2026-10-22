@@ -10,6 +10,8 @@ export interface HalloweenDesign {
   shapes: string;
   /** Details printed already filled in: SVG in INK (and white for highlights). */
   ink: string;
+  /** Drawing height when it isn't square (400 wide; a 5 × 7 card is 560 tall). */
+  height?: number;
 }
 
 /** The drawing box. */

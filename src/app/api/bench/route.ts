@@ -49,6 +49,15 @@ export async function POST(request: Request) {
     await writeFile(path.join(DIR, "snapshots", `${body.name}.mp4`), Buffer.from(body.video.split(",")[1], "base64"));
     return Response.json({ ok: true });
   }
+  if (body.kind === "pdf") {
+    // A PDF made while working (bench/snapshots/<name>.pdf).
+    if (!/^[\w-]+$/.test(body.name) || !String(body.pdf).startsWith("data:application/pdf;base64,")) {
+      return new Response("bad pdf", { status: 400 });
+    }
+    await mkdir(path.join(DIR, "snapshots"), { recursive: true });
+    await writeFile(path.join(DIR, "snapshots", `${body.name}.pdf`), Buffer.from(body.pdf.split(",")[1], "base64"));
+    return Response.json({ ok: true });
+  }
   if (body.kind === "debug") {
     // Notes from the page-making code while working on a fix (bench/debug.log).
     await appendFile(path.join(DIR, "debug.log"), JSON.stringify(body.note) + "\n");

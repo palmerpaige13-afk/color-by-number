@@ -24,9 +24,9 @@ export interface HalloweenPage {
 
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 
-function svg(body: string, px: number, crisp: boolean) {
+function svg(body: string, px: number, crisp: boolean, h = SIZE) {
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${px}" height="${px}"` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${h}" width="${px}" height="${Math.round((px * h) / SIZE)}"` +
     `${crisp ? ' shape-rendering="crispEdges"' : ""}>${body}</svg>`
   );
 }
@@ -82,9 +82,15 @@ function joinSpecks(map: Uint8Array, w: number, h: number) {
 
 /**
  * Shapes too thin to hold a number (where a background line just grazes a shape) take the
- * color of the neighbor they share the most border with. Paper and ink are left as they are.
+ * color of the neighbor they share the most border with. Paper and ink are left as they are,
+ * and so is a hole of background inside one shape (the middle of an "o" or a "B"): without it
+ * the letter would be a blob, so it stays, outlined, even with no room for its number.
  */
 function joinThin(map: Uint8Array, w: number, h: number, minRadius: number) {
+  // The background: the color covering the most of the drawing.
+  const area = new Map<number, number>();
+  for (let p = 0; p < w * h; p++) if (map[p]) area.set(map[p], (area.get(map[p]) ?? 0) + 1);
+  const bg = [...area.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   for (let round = 0; round < 3; round++) {
     const { labels, count, color } = labelComponents(map, w, h);
     const { radius } = labelPoints(labels, count, w, h, boundaryDistance(labels, w, h));
@@ -101,6 +107,8 @@ function joinThin(map: Uint8Array, w: number, h: number, minRadius: number) {
         votes.set(l, v);
       }
     }
+    // A hole: background enclosed by a single other color.
+    for (const [l, v] of votes) if (color[l] === bg && v.size === 1) votes.delete(l);
     if (!votes.size) break;
     const to = new Int16Array(count).fill(-1);
     for (const [l, v] of votes) to[l] = [...v.entries()].sort((a, b) => b[1] - a[1])[0][0];
@@ -115,20 +123,23 @@ export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: numbe
   const rgbs = colors.map(hex);
   const ink = hex(INK);
 
-  const img = await loadSvg(svg(design.shapes + design.ink, GRID, true));
+  // A taller drawing (a 5 × 7 card) is cut on a grid as much taller.
+  const GH = Math.round((GRID * (design.height ?? SIZE)) / SIZE);
+  const img = await loadSvg(svg(design.shapes + design.ink, GRID, true, design.height));
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = GRID;
+  canvas.width = GRID;
+  canvas.height = GH;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, GRID, GRID);
-  ctx.drawImage(img, 0, 0, GRID, GRID);
-  const data = ctx.getImageData(0, 0, GRID, GRID).data;
+  ctx.fillRect(0, 0, GRID, GH);
+  ctx.drawImage(img, 0, 0, GRID, GH);
+  const data = ctx.getImageData(0, 0, GRID, GH).data;
 
   // Each pixel to its nearest paint (0 for paper or ink; ink is 255 until specks are joined,
   // so a fleck of ink inside a shape doesn't split it).
   const INK_ID = 255;
   const choices: [number, RGB][] = [[0, [255, 255, 255]], [INK_ID, ink], ...rgbs.map((c, i): [number, RGB] => [i + 1, c])];
-  const map = new Uint8Array(GRID * GRID);
+  const map = new Uint8Array(GRID * GH);
   const memo = new Map<number, number>();
   for (let p = 0; p < map.length; p++) {
     const r = data[p * 4], g = data[p * 4 + 1], b = data[p * 4 + 2];
@@ -147,18 +158,18 @@ export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: numbe
     }
     map[p] = best!;
   }
-  joinSpecks(map, GRID, GRID);
+  joinSpecks(map, GRID, GH);
   for (let p = 0; p < map.length; p++) if (map[p] === INK_ID) map[p] = 0;
   const minRadius = minLabelRadius(GRID, 1, fontFrac);
-  joinThin(map, GRID, GRID, minRadius);
+  joinThin(map, GRID, GH, minRadius);
 
-  const comps = labelComponents(map, GRID, GRID);
+  const comps = labelComponents(map, GRID, GH);
   const labels = Uint16Array.from(comps.labels);
-  const pts = labelPoints(labels, comps.count, GRID, GRID, boundaryDistance(labels, GRID, GRID));
+  const pts = labelPoints(labels, comps.count, GRID, GH, boundaryDistance(labels, GRID, GH));
   const palette: RGB[] = [[255, 255, 255], ...rgbs];
   const result: PipelineResult = {
     width: GRID,
-    height: GRID,
+    height: GH,
     palette,
     regionCount: comps.count,
     labels,
@@ -197,7 +208,7 @@ export async function makeHalloweenPage(design: HalloweenDesign, fontFrac: numbe
 
   const page: Page = {
     width: GRID,
-    height: GRID,
+    height: GH,
     layers: [{ result, x: 0, y: 0, scale: 1, outlineBlank: true }],
     numbers: [numbers],
     key,
@@ -216,13 +227,13 @@ export async function drawHalloweenPage(canvas: HTMLCanvasElement, hp: Halloween
   const px = canvas.width;
   const id = `${hp.design.id}@${px}`;
   let ink = inkCache.get(id);
-  if (!ink) inkCache.set(id, (ink = loadSvg(svg(hp.design.ink, px, false))));
+  if (!ink) inkCache.set(id, (ink = loadSvg(svg(hp.design.ink, px, false, hp.design.height))));
   canvas.getContext("2d")!.drawImage(await ink, 0, 0, px, canvas.height);
 }
 
 /** The drawing in full color, as an SVG (for the gallery). */
 export const previewSvg = (design: HalloweenDesign) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}">${design.shapes}${design.ink}</svg>`;
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${design.height ?? SIZE}">${design.shapes}${design.ink}</svg>`;
 
 /** Biggest number in a math problem (addition and subtraction within 20). */
 const MATH_MAX = 20;
