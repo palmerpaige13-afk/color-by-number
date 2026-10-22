@@ -5,6 +5,7 @@ import { quantize } from "./quantize";
 import { petEyes, petNose } from "./eyes";
 import { PartKind, paintSkin, separateFaces, smoothChins } from "./faces";
 import { labDist2, rgbToLab } from "./color";
+import { findEyes, findTeeth, teethWalls } from "./teeth";
 import { BLANK_GROUP, labelComponents, majorityFilter, mergeRegions, neighborContrast } from "./regions";
 import { bilateralSmooth } from "./smooth";
 import { smoothCardShapes } from "./card";
@@ -552,7 +553,11 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
 
   const final = labelComponents(colorMap, w, h);
   const labels = Uint16Array.from(final.labels);
-  const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h));
+  const found = params.teeth && input.faces?.length ? findTeeth(input.data, w, h, input.faces) : undefined;
+  const teeth = found?.lines;
+  const eyeParts = params.teeth && input.faces?.length ? findEyes(input.data, w, h, input.faces) : undefined;
+  const printed = [...(teeth ?? []), ...(eyeParts ?? []).map((e) => e.line)];
+  const pts = labelPoints(labels, final.count, w, h, boundaryDistance(labels, w, h, printed.length ? teethWalls(printed, w, h) : undefined));
   // Printed pet eyes are off: too often they land in the wrong spot (above a dog's head, on
   // its fur). A pet's nose is printed (filled in black, a spot too small to color) only where
   // it's sure: inside the pet, on a spot that really is dark in the photo.
@@ -608,7 +613,9 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
     partKind: faces ? Uint8Array.from({ length: palette.length }, (_, i) => faces.kind[i] ?? 0) : undefined,
     eyes: petFaces.flatMap((f) => f.eyes),
     noses: petFaces.flatMap((f) => f.nose ?? []),
-    mouths: params.smallFaceNumbers ? (input.faces ?? []).flatMap((f) => f.features ?? []) : undefined,
+    teeth,
+    teethColors: found?.colors,
+    eyeParts,
     timings,
     debug: params.debug
       ? { importance: imp, smoothed, quantized: indices, rawRegionCount: raw.count }

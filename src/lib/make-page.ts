@@ -8,7 +8,7 @@ import { benchCacheOn, benchGet, benchSet, photoKey } from "@/lib/detect/bench-c
 import { detectSubjects, findPeople } from "@/lib/detect/subjects";
 import { DIFFICULTY_PARAMS, WORKING_SIZE, type Difficulty, type RegionMask } from "@/lib/pipeline";
 import { importanceMap, structureMap, type SubjectBox } from "@/lib/pipeline/importance";
-import { buildPage, minLabelRadius, type Layer, type Page } from "@/lib/page";
+import { buildPage, minLabelRadius, type Layer, type Page, type SceneColors } from "@/lib/page";
 import { runPipelineAsync } from "@/lib/run-pipeline";
 import { labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { MURALS, cardShape, fitOnPaper, fontFraction, isMural, pictureShape, type Fit, type PrintSizeId } from "@/lib/print";
@@ -77,6 +77,10 @@ const SIDE_PERSON_SHARE = 0.25;
 const PET_SHARE = 0.05;
 /** With background, the scene is framed so the people and pets span this share of it. */
 const SUBJECT_FILL = 0.8;
+/** With faces shown, hair down to this share of the face's height is the head's own part. */
+const HEAD_TOP_SHARE = 0.4;
+/** Hair covering less than this share of the face's box is short hair (or a cap). */
+const SHORT_HAIR_OF_FACE = 1;
 
 /** A mural gets about this many shapes per sheet, up to MURAL_MAX_SHAPES in all. */
 const MURAL_SHAPES_PER_SHEET = 135;
@@ -353,6 +357,22 @@ async function framing(
  * (fading out toward the edge), so its features get colors of their own. Lit faces are left
  * as they are.
  */
+/**
+ * With faces shown, a cap or short hair on top of a head (down to the eyes), so it stays the
+ * head's own part instead of joining the shirt.
+ */
+function headTop(f: SubjectBox): RegionMask | undefined {
+  const m = f.hair;
+  if (!m) return undefined;
+  // Only short hair or a cap: long hair keeps the photo's colors as before.
+  let n = 0;
+  for (const v of m.data) n += v;
+  if (n > f.width * f.height * SHORT_HAIR_OF_FACE) return undefined;
+  const rows = Math.max(0, Math.min(m.height, Math.round(f.y + f.height * HEAD_TOP_SHARE - m.y)));
+  if (!rows) return undefined;
+  return { ...m, height: rows, data: m.data.slice(0, rows * m.width) };
+}
+
 function liftShadowedFaces(data: Uint8ClampedArray, width: number, faces: SubjectBox[]): Uint8ClampedArray {
   const height = data.length / 4 / width;
   const out = Uint8ClampedArray.from(data);
@@ -615,6 +635,10 @@ export interface Photo {
   found: Map<string, FoundSubjects>;
   /** The photo's fingerprint, on the test bench (see bench-cache). */
   key?: string;
+  /** The people's shape count with faces not shown, by settings (see the scene's budget). */
+  peopleShapes?: Map<string, number>;
+  /** The scene's colors with faces not shown, by settings (see buildPage's sceneFrom). */
+  sceneColors?: Map<string, SceneColors>;
 }
 
 /** Reads a photo (upright, as the phone shows it) and finds how to frame it. Throws if it can't be read. */
@@ -661,7 +685,7 @@ export interface MadePage {
 /** Makes a page. `onStep` hears each step as it starts, and `onNote` what was found. */
 export async function makePage(
   photo: Photo,
-  { printSize, difficulty, faces: withFaces, zoomOut, colorful: askedColorful, ownColors = false }: PageChoices,
+  { printSize, difficulty, faces: askedFaces, zoomOut, colorful: askedColorful, ownColors = false }: PageChoices,
   { onStep, onNote }: { onStep?: (step: string) => void; onNote?: (note: string) => void } = {},
 ): Promise<MadePage> {
   const { full } = photo;
@@ -763,6 +787,9 @@ export async function makePage(
   await new Promise((r) => setTimeout(r, 30));
 
   const faces = subjects.filter((s) => s.kind === "face");
+  // Faces shown changes only the people's faces: with no one's face in the picture (a dog, a
+  // landscape), it changes nothing.
+  const withFaces = askedFaces && faces.length > 0;
   const twoLayers = !!(frame && cutout);
   // With faces shown, people are drawn in the photo's own colors throughout (faces with their
   // eyes and smiles, hair, clothes, what they hold), from more colors, like a paint-by-number
@@ -779,7 +806,7 @@ export async function makePage(
   const ownFaceMin = OWN_FACE_MIN_SHARE / sheets;
   const realPeople = ownColors && sheets > 1;
   const photoColors = withFaces && !card;
-  const colorParams = photoColors
+  const colorParams = photoColors && twoLayers
     ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] }
     : sheets > 1 && extraColors
       ? { paletteSize: COLORFUL_PALETTE }
@@ -827,11 +854,19 @@ export async function makePage(
   });
 
   onStep?.(twoLayers ? "Building the people…" : "Building your shapes…");
-  const mainResult = await runPipelineAsync(
+  /** The people's layer, with faces shown or not. */
+  const runPeople = (faceOn: boolean) => {
+    const photoColors = faceOn && !card;
+    const colorParams = photoColors && twoLayers
+      ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] }
+      : sheets > 1 && extraColors
+        ? { paletteSize: COLORFUL_PALETTE }
+        : {};
+    return runPipelineAsync(
     // Faces shown: the people straight from the photo; else hair, skin and clothes simplified.
     photoColors
-      ? { ...main, data: warmSkin(sheets > 1 && !ownColors ? liftShadowedFaces(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces) : colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * ownFaceMin).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : undefined, colors: f.width * f.height < main.width * main.height * ownFaceMin ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin: ownColors ? bodySkin : undefined, faceStyle: "own" as const, cutout }
-      : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: withFaces ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
+      ? { ...main, data: warmSkin(sheets > 1 && !ownColors ? liftShadowedFaces(colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces) : colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), main.width, faces, bodySkin), importance: ownColors && !realPeople ? petsImportant(even(map.importance), animals, main.width) : even(map.importance), faces: faces.filter((f) => ownColors || f.width * f.height >= main.width * main.height * ownFaceMin).map((f) => ({ ...f, hair: undefined, hairOwn: ownColors ? f.hair : headTop(f), colors: f.width * f.height < main.width * main.height * ownFaceMin ? SMALL_FACE_COLORS : undefined })), looseHair: ownColors ? hair : undefined, animals: ownColors && !realPeople ? animals : undefined, bodySkin, faceStyle: "own" as const, cutout }
+      : { ...main, data: colored(main, faces, bodySkin, twoLayers ? COLORFUL_PEOPLE : 1), importance: even(map.importance), faces, faceStyle: faceOn ? "card" : "shaded", cutout, animals, clothes, bodySkin, held },
     {
       ...budget(twoLayers ? PEOPLE_SHARE : 1),
       ...colorParams,
@@ -844,11 +879,14 @@ export async function makePage(
       minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac),
       card,
       smallFaceNumbers: sheets > 1 && photoColors,
+      teeth: photoColors,
       // The card steps that simplify shapes are for the scene behind cut-out people only: the
       // people keep their shapes exactly.
       cardScene: card && !twoLayers,
     },
   );
+  };
+  const mainResult = await runPeople(withFaces);
 
   let page: Page;
   if (twoLayers && frame && cutout) {
@@ -859,7 +897,18 @@ export async function makePage(
     const keep = sceneMask(scene, frame.scene, { ...main, cutout }, mainRect);
     const sceneScale = (k * frame.scene.width) / scene.width;
     // The scene gets whatever part of the budget the people didn't use.
-    const peopleShapes = mainResult.regionCount - (mainResult.background === undefined ? 0 : 1);
+    // Counted with faces not shown, so showing faces (more shapes on the people) never changes
+    // the scene: the people's own shapes with faces off, made once and remembered.
+    const shapesOf = (r: typeof mainResult) => r.regionCount - (r.background === undefined ? 0 : 1);
+    const countKey = `${foundKey}|${printSize}|${difficulty}|${zoomOut}|${extraColors}`;
+    photo.peopleShapes ??= new Map();
+    photo.sceneColors ??= new Map();
+    // With faces shown and this photo not yet made without, the people as they'd be without
+    // (for the scene's budget and colors).
+    const noFace = withFaces && !(photo.peopleShapes.has(countKey) && photo.sceneColors.has(countKey)) ? await runPeople(false) : undefined;
+    if (!withFaces) photo.peopleShapes.set(countKey, shapesOf(mainResult));
+    else if (!photo.peopleShapes.has(countKey)) photo.peopleShapes.set(countKey, shapesOf(noFace!));
+    const peopleShapes = photo.peopleShapes.get(countKey)!;
     // A mural's scene gets a fixed share, so showing faces (more shapes on the people) never
     // changes the scene.
     const peopleArea = (mainRect.width * mainRect.height) / (frame.scene.width * frame.scene.height);
@@ -885,7 +934,15 @@ export async function makePage(
         noFaces: faces.every((f) => f.y <= 1 && f.height < f.width * CHIN_ONLY),
       },
     ];
-    page = buildPage(frame.scene.width * k, frame.scene.height * k, layers, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors, sheets > 1 && !extraColors);
+    const build = (ls: Layer[], sceneFrom?: SceneColors) =>
+      buildPage(frame.scene.width * k, frame.scene.height * k, ls, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors, sheets > 1 && !extraColors, sceneFrom);
+    // Faces shown changes only the people: the scene keeps the colors it has without them.
+    if (withFaces && !photo.sceneColors.has(countKey)) {
+      const without = build([layers[0], { ...layers[1], result: noFace!, natural: false, noFaces: layers[1].noFaces }]);
+      if (without.sceneColors) photo.sceneColors.set(countKey, without.sceneColors);
+    }
+    page = build(layers, withFaces ? photo.sceneColors.get(countKey) : undefined);
+    if (!withFaces && page.sceneColors) photo.sceneColors.set(countKey, page.sceneColors);
   } else {
     page = buildPage(
       main.width * SCALE,

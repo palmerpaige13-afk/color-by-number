@@ -82,6 +82,8 @@ export interface PipelineParams {
   card?: boolean;
   /** Faces' own shapes (a smile, an eye) may carry a smaller number, like hair (murals). */
   smallFaceNumbers?: boolean;
+  /** Smiles show their teeth and eyes their irises, traced from the photo (faces shown in the photo's own colors). */
+  teeth?: boolean;
   /** A card's scene (not cut-out people): its shapes are simplified (see card.ts). */
   cardScene?: boolean;
 }
@@ -144,8 +146,13 @@ export interface PipelineResult {
   /** Pet eyes and noses, printed already colored in (working pixels). */
   eyes?: { x: number; y: number; r: number }[];
   noses?: { x: number; y: number; rx: number; ry: number }[];
-  /** Mouths printed as an outline (faces too small for their smile to be shapes; murals). */
-  mouths?: [number, number][][];
+  /** Smiles' teeth (closed outlines, working pixels), printed filled in their own color. */
+  teeth?: Float32Array[];
+  /** Each of `teeth`'s colors, from the photo. */
+  teethColors?: RGB[];
+  /** People's eyes (whites, irises, squinting lids; closed outlines in working pixels, in drawing
+   * order), printed filled in their own colors from the photo. */
+  eyeParts?: { line: Float32Array; color: RGB; edge?: RGB }[];
   timings: Record<string, number>;
   debug?: {
     importance?: Float32Array;

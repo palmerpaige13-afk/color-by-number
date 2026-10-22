@@ -6,6 +6,7 @@
 import { labDist2, labInGamut, labToRgb, rgbToLab } from "@/lib/pipeline/color";
 import { boundaryDistance, labelPoints } from "@/lib/pipeline/distance";
 import { labelComponents } from "@/lib/pipeline/regions";
+import { teethWalls } from "@/lib/pipeline/teeth";
 import { traceOutlines, type Outline } from "@/lib/outlines";
 import { HAIR_BAND, HAIR_NUMBER, PATCH_GROUP, type PipelineResult, type RGB } from "@/lib/pipeline";
 
@@ -48,7 +49,15 @@ export interface Page {
    * answer of a multiplication problem: 12, 18, 24…). The colors stay numbered 1, 2, 3 inside.
    */
   answers?: number[];
+  /**
+   * The scene's colors (pages with people on a layer of their own): by the scene's palette
+   * index, its color group, its color before and as printed. Given back to buildPage when the
+   * same photo is made with faces shown, so the scene comes out exactly the same.
+   */
+  sceneColors?: SceneColors;
 }
+
+export type SceneColors = Map<number, { group: number; rgb: RGB; lab: number[]; final: RGB }>;
 
 /**
  * By default, every pair of colors in the key must differ by at least this (ΔE, where about
@@ -148,9 +157,6 @@ const NEAR_SAME = 0.5;
 const MIN_APART_EDGE = 0.04;
 /** ...that came out closer than this (ΔE, exact copies) are nudged this far apart in lightness. */
 const MIN_APART_GAP = 5;
-/** On a mural with people, their share of the colors: their share of the picture times this, at least this many (and the scene too). */
-const PEOPLE_COLORS_WEIGHT = 1.6;
-const PEOPLE_COLORS_MIN = 10;
 /** Rounds of nudging close key colors apart (each nudge can bring a color near another). */
 const KEY_GAP_ROUNDS = 6;
 /** Farthest a key color is moved in lightness (Lab L) by that nudging. */
@@ -191,6 +197,8 @@ export function buildPage(
   gentle = false,
   /** A mural without extra colors: the people are never broken into patches (only the scene). */
   wholePeople = false,
+  /** The scene's colors as made with faces not shown (see Page.sceneColors): kept exactly. */
+  sceneFrom?: SceneColors,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
@@ -316,6 +324,8 @@ export function buildPage(
     natural: boolean;
     /** The faces (and skin), and people's clothes, whose colors are in this cluster. */
     who: Set<string>;
+    /** Its printed color, settled already (the scene's, see sceneFrom). */
+    final?: RGB;
   };
   const toLab = (rgb: RGB) => {
     const lab = new Float32Array(3);
@@ -336,21 +346,7 @@ export function buildPage(
   // clothes) of two people who touch shares a number only if it's exactly the same color, so
   // faces cheek to cheek don't read as one face, nor two people's clothes as one piece. (A
   // person's arms and legs are exact copies of their face's color, so they still join it.)
-  // A mural with people on a layer of their own: the people's colors and the scene's are kept
-  // apart (each with a share of the color limit, see PEOPLE_COLORS_WEIGHT), so whatever is done to
-  // the people (faces shown or not) never changes the scene's colors.
-  const peopleLayer = Number.isFinite(maxColors) && layers.some((l) => l.people) && layers.some((l) => !l.people);
-  const isPeople = (c: Cluster) => c.members.every((m) => layers[m.layer].people);
-  // The people's share of the colors goes with how much of the picture they cover (a couple in
-  // front of a big wall, or a crowd filling a painting).
-  const peopleCover = (() => {
-    let p = 0;
-    for (const l of layers) if (l.people) for (let i = 0; i < l.result.regionCount; i++) if (l.result.regionColor[i] !== l.result.background) p += l.result.regionArea[i] * l.scale * l.scale;
-    return p / (width * height);
-  })();
-  const peopleColors = Math.round(Math.min(maxColors - PEOPLE_COLORS_MIN, Math.max(PEOPLE_COLORS_MIN, maxColors * peopleCover * PEOPLE_COLORS_WEIGHT)));
   const canMerge = (a: Cluster, b: Cluster, d2: number) => {
-    if (peopleLayer && isPeople(a) !== isPeople(b)) return false;
     if ((a.faces && b.hair) || (a.hair && b.faces)) return false;
     // With people in the photo's own colors, faces' colors and everything else (hair right
     // next to them) keep apart, so giving faces colors of their own doesn't change the hair.
@@ -390,74 +386,94 @@ export function buildPage(
     return need * need;
   };
   // A color limit (murals) counts only what isn't a face shown in its own colors: faces get
-  // their colors on top, so turning faces on never takes colors from the rest of the picture
-  // (the background stays the same either way). Merging to meet the limit leaves those faces be.
+  // their colors on top, so turning faces on never takes colors from the rest of the picture.
   const ownFace = (c: Cluster) => c.faces && c.natural;
-  for (;;) {
-    let bi = -1;
-    let bj = -1;
-    let bd = Infinity;
-    let fi = -1;
-    let fj = -1;
-    let fd = Infinity;
-    for (let i = 0; i < clusters.length; i++) {
-      for (let j = i + 1; j < clusters.length; j++) {
-        const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
-        const nd = d / need2(clusters[i], clusters[j]);
-        if (!canMerge(clusters[i], clusters[j], d)) continue;
-        if (nd < bd) {
-          bd = nd;
-          bi = i;
-          bj = j;
-        }
-        if (nd < fd && !ownFace(clusters[i]) && !ownFace(clusters[j])) {
-          fd = nd;
-          fi = i;
-          fj = j;
+  // With people on a layer of their own, the scene's colors are settled first, on their own,
+  // and the people's colors then either join a scene color (taking it as it is) or keep their
+  // own: so whatever is done to the people (faces shown or not) never changes the scene.
+  const twoLayer = layers.some((l) => l.people) && layers.some((l) => !l.people);
+  const stable = !!sceneFrom && twoLayer;
+  const hasScene = (c: Cluster) => c.members.some((m) => !layers[m.layer].people);
+  const merge = (allowed: (a: Cluster, b: Cluster) => boolean, limit: (cs: Cluster[]) => boolean) => {
+    for (;;) {
+      let bi = -1, bj = -1, bd = Infinity, fi = -1, fj = -1, fd = Infinity;
+      for (let i = 0; i < clusters.length; i++) {
+        for (let j = i + 1; j < clusters.length; j++) {
+          if (!allowed(clusters[i], clusters[j])) continue;
+          const d = labDist2(clusters[i].lab, 0, clusters[j].lab, 0);
+          const nd = d / need2(clusters[i], clusters[j]);
+          if (!canMerge(clusters[i], clusters[j], d)) continue;
+          if (nd < bd) { bd = nd; bi = i; bj = j; }
+          if (nd < fd && !ownFace(clusters[i]) && !ownFace(clusters[j])) { fd = nd; fi = i; fj = j; }
         }
       }
-    }
-    if (bi < 0) break;
-    if (bd >= 1) {
-      // Over the limit: merge the closest pair in a group that's over its share.
-      const counted = clusters.filter((c) => !ownFace(c));
-      if (!peopleLayer) {
-        if (counted.length <= maxColors || fi < 0) break;
+      if (bi < 0) break;
+      if (bd >= 1) {
+        // Over the limit: merge the closest pair that isn't a face in its own colors.
+        if (!limit(clusters) || fi < 0) break;
         [bi, bj] = [fi, fj];
-      } else {
-        const people = counted.filter(isPeople).length;
-        const overPeople = people > peopleColors, overScene = counted.length - people > maxColors - peopleColors;
-        if (!overPeople && !overScene) break;
-        let pi = -1, pj = -1, pd = Infinity;
-        for (let i = 0; i < clusters.length; i++) {
-          for (let j = i + 1; j < clusters.length; j++) {
-            const [a, b] = [clusters[i], clusters[j]];
-            if (ownFace(a) || ownFace(b) || isPeople(a) !== isPeople(b) || (isPeople(a) ? !overPeople : !overScene)) continue;
-            const d = labDist2(a.lab, 0, b.lab, 0);
-            if (!canMerge(a, b, d)) continue;
-            const nd = d / need2(a, b);
-            if (nd < pd) { pd = nd; pi = i; pj = j; }
-          }
-        }
-        if (pi < 0) break;
-        [bi, bj] = [pi, pj];
       }
+      const [a, b] = [clusters[bi], clusters[bj]];
+      const area = a.area + b.area;
+      // A scene color stays as it is when people's colors join it.
+      const keep = stable && hasScene(a) !== hasScene(b) ? (hasScene(a) ? a : b) : null;
+      const rgb = keep ? keep.rgb : (a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB);
+      clusters = clusters.filter((_, k) => k !== bi && k !== bj);
+      clusters.push({
+        members: [...a.members, ...b.members],
+        rgb,
+        lab: toLab(rgb),
+        area,
+        faces: a.faces || b.faces,
+        hair: a.hair || b.hair,
+        natural: a.natural || b.natural,
+        who: new Set([...a.who, ...b.who]),
+        final: keep?.final,
+      });
     }
-    const [a, b] = [clusters[bi], clusters[bj]];
-    const area = a.area + b.area;
-    const rgb = a.rgb.map((v, c) => Math.round((v * a.area + b.rgb[c] * b.area) / area)) as RGB;
-    clusters = clusters.filter((_, k) => k !== bi && k !== bj);
-    clusters.push({
-      members: [...a.members, ...b.members],
-      rgb,
-      lab: toLab(rgb),
-      area,
-      faces: a.faces || b.faces,
-      hair: a.hair || b.hair,
-      natural: a.natural || b.natural,
-      who: new Set([...a.who, ...b.who]),
-    });
+  };
+  const counted = (cs: Cluster[]) => cs.filter((c) => !ownFace(c));
+  if (stable) {
+    // The scene's colors as they were with faces not shown, grouped and colored the same.
+    const groups = new Map<number, Cluster>();
+    const rest: Cluster[] = [];
+    for (const c of clusters) {
+      const e = c.members[0];
+      const sc = !layers[e.layer].people ? sceneFrom!.get(e.index) : undefined;
+      if (!sc) {
+        rest.push(c);
+        continue;
+      }
+      let g = groups.get(sc.group);
+      if (!g) groups.set(sc.group, (g = { members: [], rgb: sc.rgb, lab: Float32Array.from(sc.lab), area: 0, faces: false, hair: false, natural: false, who: new Set(), final: sc.final }));
+      g.members.push(e);
+      g.area += c.area;
+    }
+    clusters = [...groups.values(), ...rest];
+    // People's colors join a scene color only when nearly the same (it's taken as it is).
+    merge(
+      (a, b) => !(hasScene(a) && hasScene(b)) && (hasScene(a) === hasScene(b) || labDist2(a.lab, 0, b.lab, 0) < need2(a, b) * NEAR_SAME * NEAR_SAME),
+      (cs) => counted(cs).length > maxColors,
+    );
+  } else {
+    merge(() => true, (cs) => counted(cs).length > maxColors);
   }
+  // Nudges below move a people-only color rather than a scene color (the scene stays put), and
+  // a scene color is judged as the scene's alone (people's colors that joined it don't count).
+  const fixed = (c: Cluster) => stable && hasScene(c);
+  const isFace = (c: Cluster) => !fixed(c) && c.faces;
+  const isHair = (c: Cluster) => !fixed(c) && c.hair;
+  const whoOf = (c: Cluster) => (fixed(c) ? new Set<string>() : c.who);
+  /** Moves the two apart in lightness by `gap` in all: half each, or all of it on the one that isn't fixed. */
+  const pushApart = (light: Cluster, dark: Cluster, gap: number) => {
+    if (fixed(light) && fixed(dark)) return;
+    const share = fixed(light) === fixed(dark) ? 0.5 : fixed(light) ? 0 : 1;
+    for (const [c, dl] of [[light, gap * share], [dark, -gap * (1 - share)]] as const) {
+      if (!dl) continue;
+      c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
+      c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
+    }
+  };
 
   // Touching people's skin that came out nearly the same color is nudged apart in lightness
   // (the lighter a little lighter, the darker a little darker), so two faces side by side
@@ -469,11 +485,7 @@ export function buildPage(
         const d = Math.sqrt(labDist2(a.lab, 0, b.lab, 0));
         if (d >= MIN_SKIN_GAP) continue;
         const [light, dark] = a.lab[0] >= b.lab[0] ? [a, b] : [b, a];
-        const push = (MIN_SKIN_GAP - d) / 2;
-        for (const [c, dl] of [[light, push], [dark, -push]] as const) {
-          c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
-          c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
-        }
+        pushApart(light, dark, MIN_SKIN_GAP - d);
       }
     }
   }
@@ -486,11 +498,7 @@ export function buildPage(
       const d = Math.sqrt(labDist2(a.lab, 0, b.lab, 0));
       if (d >= MIN_APART_GAP) continue;
       const [light, dark] = a.lab[0] >= b.lab[0] ? [a, b] : [b, a];
-      const push = (MIN_APART_GAP - d) / 2;
-      for (const [c, dl] of [[light, push], [dark, -push]] as const) {
-        c.lab[0] = Math.min(95, Math.max(5, c.lab[0] + dl));
-        c.rgb = labToRgb(c.lab[0], c.lab[1], c.lab[2]);
-      }
+      pushApart(light, dark, MIN_APART_GAP - d);
     }
   }
 
@@ -502,8 +510,8 @@ export function buildPage(
     for (const m of c.members) numbers[m.layer][m.index] = i + 1;
     // When no one's face is in the picture (cropped at the shoulders), skin-colored colors on
     // the people (arms, shoulders) keep the photo's own color: livelier, they turn orange.
-    const bareSkin = noFaces && !c.hair && c.members.some((m) => layers[m.layer].people) && skinLike(c.lab);
-    return { n: i + 1, rgb: bareSkin ? c.rgb : lively(c) };
+    const bareSkin = !fixed(c) && noFaces && !c.hair && c.members.some((m) => layers[m.layer].people) && skinLike(c.lab);
+    return { n: i + 1, rgb: c.final ?? (bareSkin ? c.rgb : lively({ lab: c.lab, faces: isFace(c), hair: isHair(c) })) };
   });
 
   // Colors that had to keep their own numbers though they came out nearly the same (two
@@ -517,7 +525,8 @@ export function buildPage(
     let moved = false;
     for (let i = 0; i < key.length; i++) {
       for (let j = i + 1; j < key.length; j++) {
-        if (clusters[i].faces && clusters[j].faces) continue;
+        if (isFace(clusters[i]) && isFace(clusters[j])) continue;
+        if (fixed(clusters[i]) && fixed(clusters[j])) continue;
         const [la, lb] = [keyLabs[i], keyLabs[j]];
         const d = Math.sqrt(labDist2(la, 0, lb, 0));
         const t = Math.min(1, Math.max(la[0], lb[0]) / DARK_KEY_L);
@@ -530,9 +539,10 @@ export function buildPage(
         const gap = Math.sqrt(Math.max(0, need * need - tint2)) - dL;
         // What stays: a face over anything; then a person (their clothes, hair) over the
         // background, so a white shirt stays white and the wall behind it moves.
-        const rank = (c: Cluster) => (c.faces ? 2 : c.who.size || c.hair ? 1 : 0);
+        const rank = (c: Cluster) => (isFace(c) ? 2 : whoOf(c).size || isHair(c) ? 1 : 0);
         const [rl, rd] = [rank(clusters[light]), rank(clusters[dark])];
-        const lightShare = rl === rd ? 0.5 : rl > rd ? 0 : 1;
+        const [fl, fd] = [fixed(clusters[light]), fixed(clusters[dark])];
+        const lightShare = fl !== fd ? (fl ? 0 : 1) : rl === rd ? 0.5 : rl > rd ? 0 : 1;
         for (const [k, dl] of [[light, gap * lightShare], [dark, -gap * (1 - lightShare)]] as const) {
           if (!dl) continue;
           const lab = keyLabs[k];
@@ -547,6 +557,15 @@ export function buildPage(
       }
     }
     if (!moved) break;
+  }
+
+  // The scene's colors, to make it again exactly the same with faces shown.
+  let sceneColors: SceneColors | undefined;
+  if (layers.some((l) => l.people) && layers.some((l) => !l.people)) {
+    sceneColors = new Map();
+    clusters.forEach((c, i) => {
+      for (const m of c.members) if (!layers[m.layer].people) sceneColors!.set(m.index, { group: i, rgb: c.rgb, lab: [...c.lab], final: key[i].rgb });
+    });
   }
 
   // Neighboring shapes that ended up with the same number become one shape: in each layer,
@@ -582,14 +601,14 @@ export function buildPage(
       }
       // The scene's patches take only scene colors (with people on a layer of their own), so
       // what's done to the people never changes them.
-      const lab = peopleLayer && !layer.people ? Float32Array.from(keyLab, (v, k) => (isPeople(clusters[Math.floor(k / 3)]) || ownFace(clusters[Math.floor(k / 3)]) ? 1e4 : v)) : keyLab;
-      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), lab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX);
+      const lab = twoLayer && !layer.people ? Float32Array.from(keyLab, (v, k) => (hasScene(clusters[Math.floor(k / 3)]) ? v : 1e4)) : keyLab;
+      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), lab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX, gentle);
     }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
     const regionKind = new Uint8Array(comps.count);
     for (let p = 0; p < newLabels.length; p++) regionKind[newLabels[p]] = result.partKind?.[result.regionColor[labels[p]]] ?? 0;
-    const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h));
+    const pts = labelPoints(newLabels, comps.count, w, h, boundaryDistance(newLabels, w, h, result.teeth?.length || result.eyeParts?.length ? teethWalls([...(result.teeth ?? []), ...(result.eyeParts ?? []).map((e) => e.line)], w, h) : undefined));
     const next: PipelineResult = {
       ...result,
       palette,
@@ -611,7 +630,7 @@ export function buildPage(
   for (const { result } of merged) {
     for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== 0) shapes++;
   }
-  return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac };
+  return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac, sceneColors };
 }
 
 /**
@@ -699,6 +718,8 @@ function breakUpBig(
   keyLab: Float32Array,
   keep: Uint8Array,
   maxDelta = BREAKUP_MAX,
+  /** Only shades of the same color (a photo's own colors; a grey sidewalk never takes the leaves' olive). */
+  sameHueOnly = maxDelta === BREAKUP_GENTLE_MAX,
 ) {
   const colors = keyLab.length / 3;
   const near = new Map<number, number[]>();
@@ -712,7 +733,7 @@ function breakUpBig(
       if (d < BREAKUP_MIN || d > maxDelta) continue;
       // Gentle (someone's own photo): only shades of the same color, so a grey sky never takes
       // the sand's beige. A nearly grey color takes only other greys.
-      if (maxDelta === BREAKUP_GENTLE_MAX && !sameHue(keyLab, n - 1, o - 1)) continue;
+      if (sameHueOnly && !sameHue(keyLab, n - 1, o - 1)) continue;
       list.push([o, d]);
     }
     list.sort((a, b) => a[1] - b[1]);
@@ -854,14 +875,35 @@ export function drawPage(canvas: HTMLCanvasElement, page: Page, view: "outline" 
       ctx.arc(layer.x + e.x * scale, layer.y + e.y * scale, Math.max(2 * t, e.r * scale), 0, Math.PI * 2);
       ctx.fill();
     }
-    // Mouths (murals): a thin outline, printed, so the smile shows.
-    if (result.mouths?.length) {
-      ctx.strokeStyle = "#333";
-      ctx.lineWidth = Math.max(1, t * 0.6);
-      for (const m of result.mouths) {
-        ctx.beginPath();
-        m.forEach(([x, y], k) => (k ? ctx.lineTo(layer.x + x * scale, layer.y + y * scale) : ctx.moveTo(layer.x + x * scale, layer.y + y * scale)));
-        ctx.closePath();
+    // A smile's teeth: printed in their own color from the photo (nothing to color), with a
+    // faint outline on the numbers page only, so they blend in like the photo's.
+    (result.teeth ?? []).forEach((line, k) => {
+      ctx.beginPath();
+      ctx.moveTo(layer.x + line[0] * scale, layer.y + line[1] * scale);
+      for (let i = 2; i < line.length; i += 2) ctx.lineTo(layer.x + line[i] * scale, layer.y + line[i + 1] * scale);
+      ctx.closePath();
+      const rgb = result.teethColors?.[k] ?? [235, 230, 222];
+      ctx.fillStyle = `rgb(${rgb.join(",")})`;
+      ctx.fill();
+      if (view !== "colored") {
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.lineWidth = Math.max(1, W / 2000);
+        ctx.stroke();
+      }
+    });
+    // Eyes: the white, the iris and a squinting eye's lids, printed in their own colors from the
+    // photo (too small to color), with the lid line around an eye's white.
+    for (const part of result.eyeParts ?? []) {
+      const line = part.line;
+      ctx.beginPath();
+      ctx.moveTo(layer.x + line[0] * scale, layer.y + line[1] * scale);
+      for (let i = 2; i < line.length; i += 2) ctx.lineTo(layer.x + line[i] * scale, layer.y + line[i + 1] * scale);
+      ctx.closePath();
+      ctx.fillStyle = `rgb(${part.color.join(",")})`;
+      ctx.fill();
+      if (part.edge) {
+        ctx.strokeStyle = `rgb(${part.edge.join(",")})`;
+        ctx.lineWidth = Math.max(1, W / 1500);
         ctx.stroke();
       }
     }

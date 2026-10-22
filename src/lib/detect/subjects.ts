@@ -74,8 +74,12 @@ const SQUARE_SHIFT = 0.6;
 const SQUARE_EMPTY = 0.02;
 /** A box starting within this share of the photo's height from its top has its head cut off. */
 const TOP_CUT = 0.03;
-/** The landmarker's points around the outside of the lips, in order. */
+/** The landmarker's points around the outside of the lips, in order. (Its inner lip points close
+ * up on a smile with teeth together, so the teeth are looked for within the whole mouth.) */
 const OUTER_LIPS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185];
+/** The landmarker's points around each eye (between the lids), in order. */
+const RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246];
+const LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398];
 /** A face whose box is less than this share face skin (to the segmenter) isn't a person's face. */
 const MIN_FACE_SKIN = 0.1;
 /** The squares searched for more faces in a group are this many faces wide (see detectSubjects). */
@@ -749,8 +753,8 @@ export async function detectSubjects(
     box.width = (Math.max(...xs) - Math.min(...xs)) * toWork;
     box.height = (Math.max(...ys) - Math.min(...ys)) * toWork;
     box.outline = chain(FaceLandmarker.FACE_LANDMARKS_FACE_OVAL).map((i) => w(lm[i]));
-    // The lips' outline, for faces too small for the smile to be a shape of its own (murals).
-    box.features = [OUTER_LIPS.map((i) => w(lm[i]))];
+    // The mouth and eyes, where a smile's teeth and the eyes are looked for (see teeth.ts).
+    box.features = [OUTER_LIPS, RIGHT_EYE, LEFT_EYE].map((loop) => loop.map((i) => w(lm[i])));
     return [box];
   });
 

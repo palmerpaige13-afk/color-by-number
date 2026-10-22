@@ -170,6 +170,10 @@ const PIECE_EDGE = 6;
 const PIECE_EDGE_SPAN = 2;
 /** Smallest piece of bare skin, as a share of the picture. */
 const MIN_PIECE_SHARE = 0.0006;
+/** With faces shown, bare skin smaller than this share of its face keeps the face's color. */
+const SMALL_SKIN_OF_FACE = 0.6;
+/** With faces shown, hair fills the head's unclaimed bits down to this share of the face. */
+const OWN_HAIR_REACH = 0.4;
 
 export interface FaceRegions {
   palette: RGB[];
@@ -497,10 +501,17 @@ export function separateFaces(
       : new Map<number, number>();
   for (const k of skinPieces.keys()) next = Math.max(next, k + 1);
   // People in the photo's own colors keep their real neck and arm shading; only a small face
-  // in one color of its own (a big group) has its neck in that color too, so they match.
+  // in one color of its own (a big group) has its neck in that color too, so they match. So
+  // does a piece of skin smaller than its face (a neck under a small head): left to the
+  // photo's colors it is too small to keep, and joins the shirt beside it.
   if (style === "own" && skinPieces.size) {
+    const area = new Map<number, number>();
+    for (let p = 0; p < w * h; p++) if (parts[p]) area.set(parts[p], (area.get(parts[p]) ?? 0) + 1);
     const drop = new Set<number>();
-    for (const [piece, k] of skinPieces) if (faces[k - 1]?.colors !== 1) drop.add(piece);
+    for (const [piece, k] of skinPieces) {
+      if (faces[k - 1]?.colors === 1 || (area.get(piece) ?? 0) < (area.get(k) ?? 0) * SMALL_SKIN_OF_FACE) continue;
+      drop.add(piece);
+    }
     if (drop.size) {
       for (let p = 0; p < w * h; p++) if (drop.has(parts[p])) parts[p] = 0;
       for (const piece of drop) skinPieces.delete(piece);
@@ -546,7 +557,7 @@ export function separateFaces(
     const f = k <= faces.length ? k : skinPieces.get(k);
     return f !== undefined && faces[f - 1]?.colors === 1;
   };
-  if (person && (!own || faces.some((f) => f.colors === 1))) {
+  if (person && (!own || faces.some((f) => f.colors === 1) || hairParts.size > 0)) {
     // Each face's typical color, for what its skin may take.
     if (!bodySkin) for (let p = 0; p < w * h; p++) if (mask[p]) rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, p * 3);
     const faceLab = faces.map((_, i) => {
@@ -563,7 +574,14 @@ export function separateFaces(
     for (const k of hairParts.keys()) hairHue.set(k, usualHue(parts, k, smoothed));
     fillGaps(parts, person, w, h, Math.max(4, ...faces.map((f) => f.height * GAP_REACH)), (k, q) => {
       const kind = kindOf.get(k);
-      if (own && (kind !== PartKind.face || !smallFace(k))) return false;
+      // Hair still takes the unclaimed bits of the head beside it (a cap the segmenter wasn't
+      // sure of), so a cap isn't left to merge into the shirt.
+      if (own && kind !== PartKind.hair && (kind !== PartKind.face || !smallFace(k))) return false;
+      if (own && kind === PartKind.hair) {
+        // ...but only on the head, above the eyes: not down the shirt beside it.
+        const face = faces[(hairParts.get(k) ?? 0) - 1];
+        if (!face || Math.floor(q / w) > face.y + face.height * OWN_HAIR_REACH) return false;
+      }
       if (kind !== PartKind.face && kind !== PartKind.hair) return true;
       const usual = kind === PartKind.face ? skinOf(k) : hairHue.get(k);
       if (!usual) return true;

@@ -49,9 +49,10 @@ function edt1d(
 
 /**
  * Squared distance from each pixel to the nearest boundary pixel. A pixel is a boundary pixel
- * if it touches a different region (4-neighborhood) or the image edge.
+ * if it touches a different region (4-neighborhood) or the image edge, or is marked in `walls`
+ * (something printed on top, like a smile's teeth, that a number must keep clear of).
  */
-export function boundaryDistance(labels: Int32Array | Uint16Array, w: number, h: number): Float64Array {
+export function boundaryDistance(labels: Int32Array | Uint16Array, w: number, h: number, walls?: Uint8Array): Float64Array {
   const f = new Float64Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -65,7 +66,8 @@ export function boundaryDistance(labels: Int32Array | Uint16Array, w: number, h:
         labels[p - 1] !== l ||
         labels[p + 1] !== l ||
         labels[p - w] !== l ||
-        labels[p + w] !== l;
+        labels[p + w] !== l ||
+        !!walls?.[p];
       f[p] = edge ? 0 : INF;
     }
   }
