@@ -510,12 +510,15 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // them, mostly its dark leaves and shadow: a pink bouquet comes out a black band. A dark
   // color of a held thing that swallowed its flowers (what it now covers is clearly different
   // on average) takes the photo's average over what it covers (on a card, the flowers' own).
-  if (faces?.held.size) {
+  // The same goes for clothes: a striped shirt's thin light stripes join a dark one, and a pink
+  // shirt comes out black.
+  const recolor = (c: number) => !!faces && (faces.held.has(faces.group[c] ?? 0) || faces.kind[c] === PartKind.clothes);
+  if (faces && (faces.held.size || faces.kind.some((k) => k === PartKind.clothes))) {
     const sums = new Map<number, number[]>();
     const covers = new Map<number, number[]>(); // color -> its pixels
     for (let p = 0; p < w * h; p++) {
       const c = colorMap[p];
-      if (!faces.held.has(faces.group[c] ?? 0)) continue;
+      if (!recolor(c)) continue;
       let sum = sums.get(c);
       if (!sum) {
         sums.set(c, (sum = [0, 0, 0, 0]));
