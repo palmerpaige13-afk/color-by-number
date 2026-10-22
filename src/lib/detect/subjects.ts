@@ -98,6 +98,14 @@ const HELD_SURE = 0.75;
 const HELD_NOT_CLOTHES = 0.1;
 /** Segmenter input size, and how much around the face it looks at (x face size). */
 const SEGMENT_SIZE = 256;
+/** Feet are looked at again in a square this share of the person's height... */
+const FEET_SQUARE = 0.35;
+/** ...(at least this share of their width)... */
+const FEET_WIDTH = 1.5;
+/** ...reaching this share of it below their box (shoes the detector cut off)... */
+const FEET_BELOW = 0.25;
+/** ...and only for the bottom of them (this share of their box's height). */
+const FEET_ZONE = 0.2;
 const SEGMENT_PAD = 3;
 /** A face's own hair starts within this much of its size around the face. */
 const HAIR_SEED_PAD = 0.35;
@@ -1536,7 +1544,14 @@ export async function detectSubjects(
      * skin, hair and held things in it; with `skip`, not inside that square (already done).
      * Returns the background confidence (null if the segmenter gave none).
      */
-    const segmentSquare = (sx: number, sy: number, side: number, skip?: { sx: number; sy: number; side: number }) => {
+    const segmentSquare = (
+      sx: number,
+      sy: number,
+      side: number,
+      skip?: { sx: number; sy: number; side: number },
+      only?: (x: number, y: number) => boolean,
+      shoes = false,
+    ) => {
       crop.width = crop.height = N;
       const ctx = crop.getContext("2d")!;
       ctx.fillStyle = "#000";
@@ -1570,13 +1585,24 @@ export async function detectSubjects(
         const vi = Math.floor(v);
         const fv = v - vi;
         for (let x = x0; x <= x1; x++) {
-          if (inSkip(x, y)) continue;
+          if (inSkip(x, y) || (only && !only(x, y))) continue;
           const u = (((x + 0.5) / toWork - sx) / side) * N - 0.5;
           const ui = Math.floor(u);
           const fu = u - ui;
           const b =
             (at(ui, vi) * (1 - fu) + at(ui + 1, vi) * fu) * (1 - fv) +
             (at(ui, vi + 1) * (1 - fu) + at(ui + 1, vi + 1) * fu) * fv;
+          if (shoes) {
+            // Only what's not clothes, skin or hair (shoes; the segmenter is often unsure what
+            // they are) is added: a dress's hem cut by the square's edge would get a straight seam.
+            const lerp = (f: (u: number, v: number) => number) =>
+              (f(ui, vi) * (1 - fu) + f(ui + 1, vi) * fu) * (1 - fv) + (f(ui, vi + 1) * (1 - fu) + f(ui + 1, vi + 1) * fu) * fv;
+            if (b < 0.5 && lerp(clAt) < 0.5 && lerp(skAt) < 0.5 && lerp(hrAt) < 0.5) {
+              mask[y * workW + x] = 1;
+              if (lerp(otAt) >= HELD_SURE) held[y * workW + x] = 1;
+            }
+            continue;
+          }
           if (b < 0.5) mask[y * workW + x] = 1;
           const c =
             (clAt(ui, vi) * (1 - fu) + clAt(ui + 1, vi) * fu) * (1 - fv) +
@@ -1640,6 +1666,17 @@ export async function detectSubjects(
         const big = side * (1 + SQUARE_SHIFT);
         segmentSquare(sx + side / 2 - big / 2, sy, big, { sx, sy, side });
       }
+      // Feet are small in a square around the whole person, and shoes (gray sneakers on a gray
+      // sidewalk) are often missed: a closer square around the feet adds the shoes it finds
+      // there, on pixels nothing was found on yet (not what's already someone's clothes or skin).
+      // (Only when their feet are in the photo: someone cut off at the bottom has none.)
+      if (p.y + p.h > canvas.height * (1 - TOP_CUT)) return;
+      const fside = Math.max(p.w * FEET_WIDTH, p.h * FEET_SQUARE);
+      const feetTop = (p.y + p.h * (1 - FEET_ZONE)) * toWork;
+      segmentSquare(p.x + p.w / 2 - fside / 2, p.y + p.h - fside * (1 - FEET_BELOW), fside, undefined, (x, y) => {
+        const q = y * workW + x;
+        return y >= feetTop && !clothes[q] && !bodySkin[q] && !hair[q] && !held[q];
+      }, true);
     });
     // A child held in someone's arms is "held" in their crop but clothes in the child's own:
     // clothes win.
