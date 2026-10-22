@@ -404,7 +404,12 @@ export function buildPage(
           const nd = d / need2(clusters[i], clusters[j]);
           if (!canMerge(clusters[i], clusters[j], d)) continue;
           if (nd < bd) { bd = nd; bi = i; bj = j; }
-          if (nd < fd && !ownFace(clusters[i]) && !ownFace(clusters[j])) { fd = nd; fi = i; fj = j; }
+          // Over the limit, a merge costs more the more picture it recolors: a big area (the
+          // sky's dark blue) isn't turned into another color (the crowd's dark brown) while small
+          // ones can join their nearest instead.
+          const a = clusters[i], b = clusters[j];
+          const cost = (nd * a.area * b.area) / (a.area + b.area);
+          if (cost < fd && !ownFace(a) && !ownFace(b)) { fd = cost; fi = i; fj = j; }
         }
       }
       if (bi < 0) break;
