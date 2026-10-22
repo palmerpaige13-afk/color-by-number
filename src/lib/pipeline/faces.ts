@@ -137,6 +137,12 @@ const WHITE_MAX_CHROMA = 12;
 const WHITE_MIN_SHARE = 0.02;
 /** How much further apart in lightness white clothes' shades are spread. */
 const WHITE_STRETCH = 2;
+/** Lace: clothes pixels whose color varies more than this (Lab, standard deviation)... */
+const LACE_VARIATION = 1.2;
+/** ...within this many pixels around them. */
+const LACE_REACH = 2;
+/** ...and the clothes this close to them are lace too. */
+const LACE_GROW = 3;
 /** A hair pixel this far from the hair's usual hue (Lab a, b)... */
 const HAIR_COLOR_REACH = 25;
 /** ...and this much more colorful than it isn't hair (flowers held against it). */
@@ -170,8 +176,10 @@ const PIECE_EDGE = 6;
 const PIECE_EDGE_SPAN = 2;
 /** Smallest piece of bare skin, as a share of the picture. */
 const MIN_PIECE_SHARE = 0.0006;
-/** With faces shown, bare skin smaller than this share of its face keeps the face's color. */
+/** With faces shown, a neck smaller than this share of its face keeps the face's color... */
 const SMALL_SKIN_OF_FACE = 0.6;
+/** ...when it's a neck: its top within this share of the face's height below the face's top. */
+const NECK_REACH = 1.3;
 /** With faces shown, hair fills the head's unclaimed bits down to this share of the face. */
 const OWN_HAIR_REACH = 0.4;
 
@@ -506,10 +514,28 @@ export function separateFaces(
   // photo's colors it is too small to keep, and joins the shirt beside it.
   if (style === "own" && skinPieces.size) {
     const area = new Map<number, number>();
-    for (let p = 0; p < w * h; p++) if (parts[p]) area.set(parts[p], (area.get(parts[p]) ?? 0) + 1);
+    const top = new Map<number, number>();
+    const left = new Map<number, number>();
+    const right = new Map<number, number>();
+    for (let p = 0; p < w * h; p++) {
+      const k = parts[p];
+      if (!k) continue;
+      area.set(k, (area.get(k) ?? 0) + 1);
+      const x = p % w, y = (p - x) / w;
+      if (!top.has(k)) top.set(k, y);
+      left.set(k, Math.min(left.get(k) ?? w, x));
+      right.set(k, Math.max(right.get(k) ?? 0, x));
+    }
+    // A neck: right under its face (its top no lower than the chin's reach, overlapping the
+    // face side to side). Hands and arms keep the photo's own shading.
+    const neck = (piece: number, k: number) => {
+      const f = faces[k - 1];
+      if (!f) return false;
+      return (top.get(piece) ?? h) <= f.y + f.height * NECK_REACH && (left.get(piece) ?? w) <= f.x + f.width && (right.get(piece) ?? 0) >= f.x;
+    };
     const drop = new Set<number>();
     for (const [piece, k] of skinPieces) {
-      if (faces[k - 1]?.colors === 1 || (area.get(piece) ?? 0) < (area.get(k) ?? 0) * SMALL_SKIN_OF_FACE) continue;
+      if (faces[k - 1]?.colors === 1 || ((area.get(piece) ?? 0) < (area.get(k) ?? 0) * SMALL_SKIN_OF_FACE && neck(piece, k))) continue;
       drop.add(piece);
     }
     if (drop.size) {
@@ -728,12 +754,67 @@ export function separateFaces(
   // White clothes (a wedding dress) have only faint folds, which the photo's shared colors
   // flatten into one: their white pixels get their own shadow, middle and light shades.
   const whiteTone = new Map<number, { ids: number[]; tone: Map<number, number> }>();
+  // In the photo's own colors, lace (a pattern of white and skin, much lighter and darker than
+  // what's right around it) keeps the photo's colors, so its pattern shows; only smooth cloth
+  // takes the fold shades.
+  if (style === "own") {
+    const kinds = new Set([...kindOf].filter(([k, kind]) => kind === PartKind.clothes && !heldParts.has(k)).map(([k]) => k));
+    if (kinds.size) {
+      // Lace shows as fine dots (white threads, skin between them): color that keeps changing
+      // within a few pixels, where plain cloth changes only slowly across a fold.
+      const Lc = new Float32Array(w * h);
+      const A = new Float32Array(w * h);
+      const B = new Float32Array(w * h);
+      const lab1 = new Float32Array(3);
+      for (let p = 0; p < w * h; p++) {
+        rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab1, 0);
+        Lc[p] = lab1[0];
+        A[p] = lab1[1];
+        B[p] = lab1[2];
+      }
+      const r = LACE_REACH;
+      const lace: number[] = [];
+      for (let p = 0; p < w * h; p++) {
+        if (!kinds.has(parts[p])) continue;
+        const x = p % w, y = (p - x) / w;
+        let sl = 0, sl2 = 0, sa = 0, sa2 = 0, sb = 0, sb2 = 0, n = 0;
+        for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h || !kinds.has(parts[yy * w + xx])) continue;
+          const q = yy * w + xx;
+          sl += Lc[q]; sl2 += Lc[q] * Lc[q]; sa += A[q]; sa2 += A[q] * A[q]; sb += B[q]; sb2 += B[q] * B[q]; n++;
+        }
+        const v = Math.max(0, sl2 / n - (sl / n) ** 2) + Math.max(0, sa2 / n - (sa / n) ** 2) + Math.max(0, sb2 / n - (sb / n) ** 2);
+        if (Math.sqrt(v) > LACE_VARIATION) lace.push(p);
+      }
+      // The whole lace (its white threads too, not just the skin between them).
+      const grow = LACE_GROW;
+      const drop = new Uint8Array(w * h);
+      for (const p of lace) {
+        const x = p % w, y = (p - x) / w;
+        for (let dy = -grow; dy <= grow; dy++) for (let dx = -grow; dx <= grow; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx >= 0 && yy >= 0 && xx < w && yy < h && kinds.has(parts[yy * w + xx])) drop[yy * w + xx] = 1;
+        }
+      }
+      for (let p = 0; p < w * h; p++) if (drop[p]) parts[p] = 0;
+    }
+  }
   for (const [k, kind] of kindOf) {
     if (kind !== PartKind.clothes || clothesColors > 0 || heldParts.has(k)) continue;
     const own = whiteShades(smoothed, parts, k);
     if (!own) continue;
     const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
     if (ids.every((id) => id >= 0)) whiteTone.set(k, { ids, tone: own.tone });
+  }
+  // People in the photo's own colors keep their clothes in the photo's colors; only white
+  // clothes (a wedding dress) are parts of their own, for the shades that show their folds.
+  if (style === "own") {
+    for (const [k, kind] of kindOf) {
+      if (kind !== PartKind.clothes || heldParts.has(k) || whiteTone.has(k)) continue;
+      for (let p = 0; p < w * h; p++) if (parts[p] === k) parts[p] = 0;
+      kindOf.delete(k);
+    }
   }
   const patches = new Set<number>();
   if (clothesColors > 0) {
