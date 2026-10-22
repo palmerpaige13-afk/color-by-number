@@ -180,7 +180,8 @@ export function HolidayGallery({ holiday }: { holiday: Holiday }) {
   }
   const allPaid = DESIGNS.every((d) => paid.has(d.id));
   /** What all the pages would cost one at a time, as people see it. */
-  const separately = `$${(DESIGNS.length * PRODUCTS[set.product].cents) / 100}`;
+  const separatelyCents = DESIGNS.length * PRODUCTS[set.product].cents;
+  const separately = `$${(separatelyCents / 100).toFixed(separatelyCents % 100 ? 2 : 0)}`;
 
   /** This page has to be paid for before it downloads. */
   const mustPay = paymentsOn && !!chosen && !paid.has(chosen.id);

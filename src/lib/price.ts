@@ -28,7 +28,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Your printable color-by-number page and its color key",
   },
   halloween: {
-    cents: 300,
+    cents: 150,
     name: "Halloween color-by-number PDF",
     description: "A Letter-size Halloween color-by-number page and its color key",
   },
@@ -43,7 +43,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Every Halloween page in one PDF, each with its color key, Letter size",
   },
   thanksgiving: {
-    cents: 300,
+    cents: 150,
     name: "Thanksgiving color-by-number PDF",
     description: "A Letter-size Thanksgiving color-by-number page and its color key",
   },
@@ -53,7 +53,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Every Thanksgiving page in one PDF, each with its color key, Letter size",
   },
   christmas: {
-    cents: 300,
+    cents: 150,
     name: "Christmas color-by-number PDF",
     description: "A Letter-size Christmas color-by-number page and its color key",
   },
@@ -63,7 +63,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Every Christmas page in one PDF, each with its color key, Letter size",
   },
   "halloween-older": {
-    cents: 300,
+    cents: 150,
     name: "Halloween color-by-number PDF (ages 7–9)",
     description: "A harder Letter-size Halloween color-by-number page, with multiplication, and its color key",
   },
@@ -73,7 +73,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Every harder Halloween page in one PDF, each with its color key, Letter size",
   },
   "thanksgiving-older": {
-    cents: 300,
+    cents: 150,
     name: "Thanksgiving color-by-number PDF (ages 7–9)",
     description: "A harder Letter-size Thanksgiving color-by-number page, with multiplication, and its color key",
   },
@@ -83,7 +83,7 @@ export const PRODUCTS: Record<Product, { cents: number; name: string; descriptio
     description: "Every harder Thanksgiving page in one PDF, each with its color key, Letter size",
   },
   "christmas-older": {
-    cents: 300,
+    cents: 150,
     name: "Christmas color-by-number PDF (ages 7–9)",
     description: "A harder Letter-size Christmas color-by-number page, with multiplication, and its color key",
   },
