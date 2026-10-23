@@ -639,6 +639,8 @@ export interface Photo {
   peopleShapes?: Map<string, number>;
   /** The scene's colors with faces not shown, by settings (see buildPage's sceneFrom). */
   sceneColors?: Map<string, SceneColors>;
+  /** A mural's people colors without extra colors, by settings (see buildPage's peopleFrom). */
+  peopleColors?: Map<string, SceneColors>;
 }
 
 /** Reads a photo (upright, as the phone shows it) and finds how to frame it. Throws if it can't be read. */
@@ -669,6 +671,13 @@ export interface PageChoices {
    * as on one page; no extra colors, no limit on colors, no big pieces broken up.
    */
   ownColors?: boolean;
+  /**
+   * A mural of someone's own photo (not a ready-made picture): its plain areas stay in the
+   * photo's own colors (no cool tint; big shapes broken into its own shades), so a gray
+   * sidewalk stays gray. Ready-made pictures keep their livelier patches, which are more fun
+   * to color.
+   */
+  natural?: boolean;
 }
 
 export interface MadePage {
@@ -685,7 +694,7 @@ export interface MadePage {
 /** Makes a page. `onStep` hears each step as it starts, and `onNote` what was found. */
 export async function makePage(
   photo: Photo,
-  { printSize, difficulty, faces: askedFaces, zoomOut, colorful: askedColorful, ownColors = false }: PageChoices,
+  { printSize, difficulty, faces: askedFaces, zoomOut, colorful: askedColorful, ownColors = false, natural = false }: PageChoices,
   { onStep, onNote }: { onStep?: (step: string) => void; onNote?: (note: string) => void } = {},
 ): Promise<MadePage> {
   const { full } = photo;
@@ -831,6 +840,9 @@ export async function makePage(
   // Faces, hair and bare skin keep their own colors; clothes (a white robe) get gentler extra colors.
   const colored = (img: { width: number; height: number; data: Uint8ClampedArray }, faceBoxes: SubjectBox[], skin?: RegionMask, strength = 1) => {
     if (sheets <= 1 || !extraColors) return img.data;
+    // A mural of someone's own photo: the people keep their own colors (only the scene behind
+    // them gets extra ones).
+    if (natural && img === main && twoLayers) return img.data;
     const sheetPx = img.width / (fit.mural ? fit.mural.cols : 1);
     const inMask = (m: RegionMask | undefined, x: number, y: number) =>
       !!m && x >= m.x && y >= m.y && x < m.x + m.width && y < m.y + m.height && !!m.data[(y - m.y) * m.width + x - m.x];
@@ -859,7 +871,7 @@ export async function makePage(
     const photoColors = faceOn && !card;
     const colorParams = photoColors && twoLayers
       ? { paletteSize: PHOTO_COLORS_PALETTE[difficulty] }
-      : sheets > 1 && extraColors
+      : sheets > 1 && extraColors && !(natural && twoLayers)
         ? { paletteSize: COLORFUL_PALETTE }
         : {};
     return runPipelineAsync(
@@ -879,6 +891,7 @@ export async function makePage(
       minLabelRadius: minLabelRadius(pageWidth, mainScale, fontFrac),
       card,
       smallFaceNumbers: sheets > 1 && photoColors,
+      keepClothes: sheets > 1 && !natural,
       teeth: photoColors,
       // The card steps that simplify shapes are for the scene behind cut-out people only: the
       // people keep their shapes exactly.
@@ -934,8 +947,24 @@ export async function makePage(
         noFaces: faces.every((f) => f.y <= 1 && f.height < f.width * CHIN_ONLY),
       },
     ];
+    // Extra colors on someone's own photo: the people keep the colors they have without (made
+    // once, plain, and remembered).
+    photo.peopleColors ??= new Map();
+    const plainKey = `${foundKey}|${printSize}|${difficulty}|${zoomOut}|false|${withFaces}`;
+    let peopleFrom: SceneColors | undefined;
+    if (natural && sheets > 1 && extraColors && !withFaces) {
+      if (!photo.peopleColors.has(plainKey)) {
+        const plainScene = await runPipelineAsync(
+          { ...scene, importance: even(structureMap(scene.data, scene.width, scene.height)), cutout: keep },
+          { ...params, maxShapes: sceneBudget, minLabelRadius: minLabelRadius(pageWidth, sceneScale, fontFrac), card, cardScene: card },
+        );
+        const plain = buildPage(frame.scene.width * k, frame.scene.height * k, [{ ...layers[0], result: plainScene }, layers[1]], fontFrac, KEY_DISTINCT[difficulty], 0, maxColors, maxPiece, ownColors, true, undefined, true);
+        if (plain.peopleColors) photo.peopleColors.set(plainKey, plain.peopleColors);
+      }
+      peopleFrom = photo.peopleColors.get(plainKey);
+    }
     const build = (ls: Layer[], sceneFrom?: SceneColors) =>
-      buildPage(frame.scene.width * k, frame.scene.height * k, ls, fontFrac, KEY_DISTINCT[difficulty], COOL_BOOST[difficulty], maxColors, maxPiece, ownColors, sheets > 1 && !extraColors, sceneFrom);
+      buildPage(frame.scene.width * k, frame.scene.height * k, ls, fontFrac, KEY_DISTINCT[difficulty], natural && sheets > 1 && !extraColors ? 0 : COOL_BOOST[difficulty], maxColors, maxPiece, ownColors, sheets > 1 && (!extraColors || natural), sceneFrom, natural && sheets > 1 && !extraColors, peopleFrom);
     // Faces shown changes only the people: the scene keeps the colors it has without them.
     if (withFaces && !photo.sceneColors.has(countKey)) {
       const without = build([layers[0], { ...layers[1], result: noFace!, natural: false, noFaces: layers[1].noFaces }]);
@@ -943,6 +972,7 @@ export async function makePage(
     }
     page = build(layers, withFaces ? photo.sceneColors.get(countKey) : undefined);
     if (!withFaces && page.sceneColors) photo.sceneColors.set(countKey, page.sceneColors);
+    if (natural && sheets > 1 && !extraColors && page.peopleColors) photo.peopleColors.set(plainKey, page.peopleColors);
   } else {
     page = buildPage(
       main.width * SCALE,
@@ -950,10 +980,13 @@ export async function makePage(
       [{ result: mainResult, x: 0, y: 0, scale: SCALE, outlineBlank: true, natural: photoColors && faces.length > 0 }],
       fontFrac,
       KEY_DISTINCT[difficulty],
-      COOL_BOOST[difficulty],
+      natural && sheets > 1 && !extraColors ? 0 : COOL_BOOST[difficulty],
       maxColors,
       maxPiece,
       ownColors,
+      false,
+      undefined,
+      natural && sheets > 1 && !extraColors,
     );
   }
   return { page, fit, shows: frame?.scene ?? photoRect, note, people: subjects.filter((s) => s.kind === "person").length, faces: faces.length };

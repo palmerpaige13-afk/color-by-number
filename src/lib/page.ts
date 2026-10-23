@@ -55,6 +55,8 @@ export interface Page {
    * same photo is made with faces shown, so the scene comes out exactly the same.
    */
   sceneColors?: SceneColors;
+  /** The people's colors (people layer palette index -> color), to keep them exactly with extra colors on. */
+  peopleColors?: SceneColors;
 }
 
 export type SceneColors = Map<number, { group: number; rgb: RGB; lab: number[]; final: RGB }>;
@@ -199,6 +201,13 @@ export function buildPage(
   wholePeople = false,
   /** The scene's colors as made with faces not shown (see Page.sceneColors): kept exactly. */
   sceneFrom?: SceneColors,
+  /**
+   * A mural of someone's own photo without extra colors: big shapes break only into nearby
+   * shades of their own color (a gray sidewalk into grays), or into pieces of the same color.
+   */
+  natural = false,
+  /** The people's colors from the same mural without extra colors (see Page.peopleColors): kept exactly. */
+  peopleFrom?: SceneColors,
 ): Page {
   // Every color used anywhere, with how much of the page it covers.
   type Entry = { layer: number; index: number; rgb: RGB; area: number; kind: number; face?: string; natural?: boolean };
@@ -438,7 +447,31 @@ export function buildPage(
     }
   };
   const counted = (cs: Cluster[]) => cs.filter((c) => !ownFace(c));
-  if (stable) {
+  // Extra colors on someone's own photo: the people keep exactly the colors they have without
+  // (grouped and colored the same); only the scene's colors are merged.
+  const lock = !!peopleFrom && twoLayer && !stable;
+  const locked = (c: Cluster) => lock && !!c.final && !hasScene(c);
+  if (lock) {
+    const groups = new Map<number, Cluster>();
+    const rest: Cluster[] = [];
+    for (const c of clusters) {
+      const e = c.members[0];
+      const pc = layers[e.layer].people ? peopleFrom!.get(e.index) : undefined;
+      if (!pc) {
+        rest.push(c);
+        continue;
+      }
+      let g = groups.get(pc.group);
+      if (!g) groups.set(pc.group, (g = { ...c, members: [], rgb: pc.rgb, lab: Float32Array.from(pc.lab), area: 0, who: new Set(), final: pc.final }));
+      g.members.push(e);
+      g.area += c.area;
+      for (const f of c.who) g.who.add(f);
+      g.faces ||= c.faces;
+      g.hair ||= c.hair;
+    }
+    clusters = [...groups.values(), ...rest];
+    merge((a, b) => !locked(a) && !locked(b), (cs) => counted(cs).length > maxColors);
+  } else if (stable) {
     // The scene's colors as they were with faces not shown, grouped and colored the same.
     const groups = new Map<number, Cluster>();
     const rest: Cluster[] = [];
@@ -465,7 +498,7 @@ export function buildPage(
   }
   // Nudges below move a people-only color rather than a scene color (the scene stays put), and
   // a scene color is judged as the scene's alone (people's colors that joined it don't count).
-  const fixed = (c: Cluster) => stable && hasScene(c);
+  const fixed = (c: Cluster) => (stable && hasScene(c)) || locked(c);
   const isFace = (c: Cluster) => !fixed(c) && c.faces;
   const isHair = (c: Cluster) => !fixed(c) && c.hair;
   const whoOf = (c: Cluster) => (fixed(c) ? new Set<string>() : c.who);
@@ -564,6 +597,14 @@ export function buildPage(
     if (!moved) break;
   }
 
+  // The people's colors, to keep them exactly the same with extra colors on.
+  let peopleColors: SceneColors | undefined;
+  if (twoLayer) {
+    peopleColors = new Map();
+    clusters.forEach((c, i) => {
+      for (const m of c.members) if (layers[m.layer].people) peopleColors!.set(m.index, { group: i, rgb: c.rgb, lab: [...c.lab], final: key[i].rgb });
+    });
+  }
   // The scene's colors, to make it again exactly the same with faces shown.
   let sceneColors: SceneColors | undefined;
   if (layers.some((l) => l.people) && layers.some((l) => !l.people)) {
@@ -607,7 +648,9 @@ export function buildPage(
       // The scene's patches take only scene colors (with people on a layer of their own), so
       // what's done to the people never changes them.
       const lab = twoLayer && !layer.people ? Float32Array.from(keyLab, (v, k) => (hasScene(clusters[Math.floor(k / 3)]) ? v : 1e4)) : keyLab;
-      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), lab, keep, gentle ? BREAKUP_GENTLE_MAX : BREAKUP_MAX, gentle);
+      // Someone's own photo (natural): a big shape breaks only into nearby shades of its own
+      // color (a grey sidewalk into greys, never the leaves' olive).
+      breakUpBig(byNumber, owner, w, h, maxArea / (layer.scale * layer.scale), lab, keep, gentle ? BREAKUP_GENTLE_MAX : natural ? BREAKUP_PLAIN_MAX : BREAKUP_MAX, gentle || natural, natural);
     }
     const comps = labelComponents(byNumber, w, h, owner);
     const newLabels = Uint16Array.from(comps.labels);
@@ -635,7 +678,7 @@ export function buildPage(
   for (const { result } of merged) {
     for (let i = 0; i < result.regionCount; i++) if (result.regionColor[i] !== 0) shapes++;
   }
-  return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac, sceneColors };
+  return { width, height, layers: merged, numbers: identity, key, shapes, fontFrac, sceneColors, peopleColors };
 }
 
 /**
@@ -675,6 +718,14 @@ const BREAKUP_MIN = 6;
 const BREAKUP_MAX = 45;
 /** ...or this, for someone's own photo: the sky in its own shades of blue, nothing else. */
 const BREAKUP_GENTLE_MAX = 13;
+/** ...or this, for a mural without extra colors. */
+const BREAKUP_PLAIN_MAX = 22;
+/** Pieces a still-too-big shape is cut into are about this many patches across... */
+const CUT_CELL = 1.6;
+/** ...and none smaller than this share of the biggest a piece may be. */
+const CUT_SLIVER = 0.15;
+/** Owner values for the pieces of a cut scene shape (people's parts use lower values). */
+const CUT_OWNERS = [0, 251, 252, 253];
 /** Below this chroma a color counts as grey. */
 const GREY_CHROMA = 8;
 
@@ -723,8 +774,10 @@ function breakUpBig(
   keyLab: Float32Array,
   keep: Uint8Array,
   maxDelta = BREAKUP_MAX,
-  /** Only shades of the same color (a photo's own colors; a grey sidewalk never takes the leaves' olive). */
+  /** Only shades of the same color (a grey sidewalk never takes the leaves' olive). */
   sameHueOnly = maxDelta === BREAKUP_GENTLE_MAX,
+  /** What's still too big after the patches is cut into pieces of the same color. */
+  cut = false,
 ) {
   const colors = keyLab.length / 3;
   const near = new Map<number, number[]>();
@@ -747,7 +800,7 @@ function breakUpBig(
     return found;
   };
   const cell = Math.max(3, Math.sqrt(maxArea) * 0.45);
-  for (let round = 0; round < 4; round++) {
+  for (let round = 0; round < (cut ? 5 : 4); round++) {
     const comps = labelComponents(byNumber, w, h, owner);
     const big = new Uint8Array(comps.count);
     let any = false;
@@ -757,6 +810,19 @@ function breakUpBig(
       any = true;
     }
     if (!any) return;
+    // After one round of patches, what's still too big (a plain grey sidewalk with no shades of
+    // its own in the key) is cut into pieces of the same color, with a line between them, so
+    // it's never one huge shape and never takes a color it doesn't have.
+    if (cut && round > 0) {
+      const a = blobs(w, h, cell * CUT_CELL, 31 + round * 53);
+      const b = blobs(w, h, cell * CUT_CELL, 47 + round * 71);
+      for (let p = 0; p < w * h; p++) {
+        if (!big[comps.labels[p]] || keep[p] || owner[p] !== 0) continue;
+        owner[p] = CUT_OWNERS[(a[p] > 0 ? 1 : 0) + (b[p] > 0 ? 2 : 0)];
+      }
+      mergeSlivers(byNumber, owner, w, h, maxArea * CUT_SLIVER);
+      return;
+    }
     const a = blobs(w, h, cell, 11 + round * 97);
     const b = blobs(w, h, cell * 0.7, 23 + round * 89);
     for (let p = 0; p < w * h; p++) {
@@ -767,6 +833,37 @@ function breakUpBig(
       else if (b[p] > 0.3 && alts[1]) byNumber[p] = alts[1];
       else if (a[p] < -0.45 && alts[2]) byNumber[p] = alts[2];
     }
+  }
+}
+
+/**
+ * Pieces of a cut shape smaller than `min` take the owner of the piece of the same number
+ * around them that touches them most, so a cut never leaves a sliver too small for a number.
+ */
+function mergeSlivers(byNumber: Uint8Array, owner: Uint8Array, w: number, h: number, min: number) {
+  for (let round = 0; round < 3; round++) {
+    const comps = labelComponents(byNumber, w, h, owner);
+    let changed = false;
+    const touch = new Map<number, Map<number, number>>();
+    for (let p = 0; p < w * h; p++) {
+      const l = comps.labels[p];
+      if (comps.area[l] >= min || !CUT_OWNERS.includes(owner[p])) continue;
+      const x = p % w;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= w * h || byNumber[q] !== byNumber[p] || comps.labels[q] === l || !CUT_OWNERS.includes(owner[q])) continue;
+        let m = touch.get(l);
+        if (!m) touch.set(l, (m = new Map()));
+        m.set(owner[q], (m.get(owner[q]) ?? 0) + 1);
+      }
+    }
+    if (!touch.size) return;
+    const to = new Map<number, number>();
+    for (const [l, m] of touch) to.set(l, [...m].sort((x, y) => y[1] - x[1])[0][0]);
+    for (let p = 0; p < w * h; p++) {
+      const o = to.get(comps.labels[p]);
+      if (o !== undefined) { owner[p] = o; changed = true; }
+    }
+    if (!changed) return;
   }
 }
 

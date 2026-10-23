@@ -512,8 +512,8 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // on average) takes the photo's average over what it covers (on a card, the flowers' own).
   // The same goes for clothes: a striped shirt's thin light stripes join a dark one, and a pink
   // shirt comes out black.
-  const recolor = (c: number) => !!faces && (faces.held.has(faces.group[c] ?? 0) || faces.kind[c] === PartKind.clothes);
-  if (faces && (faces.held.size || faces.kind.some((k) => k === PartKind.clothes))) {
+  const recolor = (c: number) => !!faces && (faces.held.has(faces.group[c] ?? 0) || (!params.keepClothes && faces.kind[c] === PartKind.clothes));
+  if (faces && (faces.held.size || (!params.keepClothes && faces.kind.some((k) => k === PartKind.clothes)))) {
     const sums = new Map<number, number[]>();
     const covers = new Map<number, number[]>(); // color -> its pixels
     for (let p = 0; p < w * h; p++) {

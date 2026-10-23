@@ -82,6 +82,8 @@ export interface PipelineParams {
   card?: boolean;
   /** Faces' own shapes (a smile, an eye) may carry a smaller number, like hair (murals). */
   smallFaceNumbers?: boolean;
+  /** Clothes keep their colors as made (ready-made mural pictures stay as they were). */
+  keepClothes?: boolean;
   /** Smiles show their teeth and eyes their irises, traced from the photo (faces shown in the photo's own colors). */
   teeth?: boolean;
   /** A card's scene (not cut-out people): its shapes are simplified (see card.ts). */

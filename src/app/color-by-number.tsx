@@ -544,7 +544,7 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     }
     const { page, fit: pageFit, shows, people, faces } = await makePage(
       photo,
-      { printSize: pageSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide, colorful: muralMode && extraColors, ownColors: !muralMode },
+      { printSize: pageSize, difficulty: testLevel() ?? difficulty, faces: withFaces, zoomOut: wide, colorful: muralMode && extraColors, ownColors: !muralMode, natural: muralMode && !galleryPick },
       { onStep: setBusy, onNote: setFocusNote },
     );
     setFit(pageFit);
