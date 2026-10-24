@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { REVIEW_COOKIE, passwordToken, setManyReviewed, setReviewed, signedIn, tokenOk } from "@/lib/review";
+import { REVIEW_COOKIE, passwordToken, resetCounts, setManyReviewed, setReviewed, signedIn, tokenOk } from "@/lib/review";
 
 /** Signs in with the review password (kept as a hash in a cookie for 30 days). */
 export async function signIn(formData: FormData) {
@@ -35,5 +35,12 @@ export async function markReviewed(formData: FormData) {
 export async function markAllReviewed(formData: FormData) {
   if (!(await signedIn())) return;
   await setManyReviewed(String(formData.get("ids") ?? "").split(","), true);
+  revalidatePath("/review");
+}
+
+/** Starts the visit and try counts over from now. */
+export async function resetVisitCounts() {
+  if (!(await signedIn())) return;
+  await resetCounts();
   revalidatePath("/review");
 }

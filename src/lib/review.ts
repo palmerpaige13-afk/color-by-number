@@ -114,10 +114,31 @@ export interface VisitStats {
 /** Visits are counted from here on (the counts were reset then; older visits are kept, just not counted). */
 const VISITS_COUNTED_FROM = "2026-10-17T16:48:00Z";
 
+/** When the owner last reset the counts (from the review page's button), if ever. */
+async function countsResetAt(): Promise<string | null> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/review_settings?key=eq.counts_reset_at&select=value`, { headers: headers(), cache: "no-store" });
+  if (!res.ok) return null;
+  const rows = (await res.json()) as { value: string }[];
+  return rows[0]?.value ?? null;
+}
+
+/** Starts the visit and try counts over from now (nothing is deleted; older ones just aren't counted). */
+export async function resetCounts(): Promise<void> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/review_settings?on_conflict=key`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify({ key: "counts_reset_at", value: new Date().toISOString(), updated_at: new Date().toISOString() }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Couldn't reset the counts (${res.status}).`);
+}
+
 /** How many people visited lately, and where from (Facebook, Instagram, a shared link…). */
 export async function loadVisitStats(days = 7): Promise<VisitStats> {
   const lastDays = new Date(Date.now() - days * 86_400_000).toISOString();
-  const since = lastDays > VISITS_COUNTED_FROM ? lastDays : VISITS_COUNTED_FROM;
+  const reset = (await countsResetAt()) ?? VISITS_COUNTED_FROM;
+  const countedFrom = reset > VISITS_COUNTED_FROM ? reset : VISITS_COUNTED_FROM;
+  const since = lastDays > countedFrom ? lastDays : countedFrom;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/visits?select=source,page,created_at&created_at=gte.${since}&limit=50000`, {
     headers: headers(),
     cache: "no-store",
@@ -155,7 +176,7 @@ export async function loadVisitStats(days = 7): Promise<VisitStats> {
     today: rows.filter((r) => day(r.created_at) === today).length,
     bySource: count((r) => r.source ?? "not tracked yet"),
     byPage: count((r) => r.page ?? "?"),
-    since: since === VISITS_COUNTED_FROM ? since : undefined,
+    since: since === countedFrom ? since : undefined,
   };
 }
 

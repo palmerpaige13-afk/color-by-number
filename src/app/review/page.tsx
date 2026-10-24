@@ -4,7 +4,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { loadReports, loadVisitStats, photoLink, reviewSetupMissing, signedIn, type Fix, type Report, type VisitStats } from "@/lib/review";
-import { markAllReviewed, markReviewed, signIn, signOut } from "./actions";
+import { markAllReviewed, markReviewed, resetVisitCounts, signIn, signOut } from "./actions";
 
 export const metadata: Metadata = { title: "Reports · Color by Number", robots: { index: false, follow: false } };
 
@@ -65,6 +65,7 @@ function Visits({ stats }: { stats: VisitStats }) {
   );
   return (
     <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-3">
       <h2 className="text-lg font-bold">
         Visits{" "}
         <span className="text-sm font-normal text-zinc-500">
@@ -73,6 +74,15 @@ function Visits({ stats }: { stats: VisitStats }) {
             : `last ${stats.days} days`}
         </span>
       </h2>
+        <form action={resetVisitCounts} className="ml-auto">
+          <button
+            type="submit"
+            className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            Reset counts to zero
+          </button>
+        </form>
+      </div>
       <p>
         <span className="text-2xl font-bold">{stats.total}</span> visits · <span className="font-semibold">{stats.today}</span> today
       </p>
