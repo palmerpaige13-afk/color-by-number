@@ -35,6 +35,8 @@ function regionImportance(labels: Int32Array, count: number, importance: Float32
  * Merging for the shape budget never joins two clearly different colors within a person
  * (shirt and jeans, a white dress and a dark suit), even if that leaves a few more shapes.
  */
+/** With faces in their own colors, the rest of the people keeps at least this share of the shape budget. */
+const OWN_REST_SHARE = 0.5;
 const BUDGET_PART_DIST = 20;
 /** Within one person's clothes, colors closer than this (ΔE) are light and shadow on one piece. */
 const CLOTHES_SHADE = 22;
@@ -447,8 +449,20 @@ export function runPipeline(input: PipelineInput, params: PipelineParams): Pipel
   // Budget: if there are still too many shapes, merge the smallest until it fits.
   if (params.maxShapes) {
     const counted = labelComponents(colorMap, w, h);
-    if (counted.count > params.maxShapes) {
-      colorMap = mergeRegions(counted, w, h, paletteLab, () => true, group, params.maxShapes, BUDGET_PART_DIST);
+    // People in the photo's own colors: their faces and hair are many small shapes that don't
+    // merge away (each keeps to its own part). When they'd take most of the budget (big faces
+    // filling the picture), the rest still gets its share, or every shirt, arm and pair of
+    // jeans would merge into one dark shape.
+    let partRegions = 0;
+    if (faceStyle === "own" && faces) {
+      for (let i = 0; i < counted.count; i++) {
+        const k = faces.kind[counted.color[i]];
+        if (k === PartKind.face || k === PartKind.hair) partRegions++;
+      }
+    }
+    const budget = Math.max(params.maxShapes, Math.round(partRegions + params.maxShapes * OWN_REST_SHARE));
+    if (counted.count > budget) {
+      colorMap = mergeRegions(counted, w, h, paletteLab, () => true, group, budget, BUDGET_PART_DIST);
     }
   }
 
