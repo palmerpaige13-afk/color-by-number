@@ -89,6 +89,14 @@ const BIG_SHEET_PX = 1600;
 const TAP_SLOP = 8;
 
 /** "mural": the Group mural page (only mural sizes); else the photo page (only regular sizes). */
+/** Each step of making a page: where the bar starts and how far it may go during it (percent). */
+const MAKE_STEPS: Record<string, [number, number]> = {
+  "Finding people and faces…": [0, 40],
+  "Building the people…": [40, 70],
+  "Building your shapes…": [40, 95],
+  "Building the background…": [70, 97],
+};
+
 export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mural" }) {
   const muralMode = mode === "mural";
   const [file, setFile] = useState<File | null>(null);
@@ -96,6 +104,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
   const [result, setResult] = useState<Page | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** How far along making the page is (0-100), shown as a bar while it's being made. */
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   /** A mural's plain areas (sky, walls) in extra colors, so every sheet has plenty to color. */
   const [extraColors, setExtraColors] = useState(false);
@@ -520,10 +530,20 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
    * Makes the page. `options` are the picture choices by Fix it (faces shown, zoomed out),
    * passed when one was just changed, before its new value is in state.
    */
+  // The bar creeps toward the end of the current step (it slows as it gets close, so it keeps
+  // moving without ever passing a step that hasn't finished).
+  useEffect(() => {
+    const step = busy ? MAKE_STEPS[busy] : undefined;
+    if (!step) return;
+    const id = setInterval(() => setProgress((p) => Math.max(p, step[0]) + (step[1] - Math.max(p, step[0])) * 0.035), 150);
+    return () => clearInterval(id);
+  }, [busy]);
+
   async function generate(options: { faces?: boolean; zoomOut?: boolean } = {}) {
     const withFaces = options.faces ?? showFaces;
     const wide = options.zoomOut ?? zoomOut;
     if (!file) return;
+    setProgress(0);
     setBusy("Finding people and faces…");
     setError(null);
     setFocusNote(null);
@@ -565,6 +585,8 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
     showResult.current = true;
     setResult(page);
     setReveal(50);
+    setProgress(100);
+    await new Promise((r) => setTimeout(r, 250));
     setBusy(null);
   }
 
@@ -878,6 +900,14 @@ export default function ColorByNumber({ mode = "photo" }: { mode?: "photo" | "mu
               "3. Make my color-by-number"
             )}
           </button>
+          {busy && MAKE_STEPS[busy] && (
+            <div className="w-full max-w-md" role="progressbar" aria-label="Making your page" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                <div className="h-full rounded-full bg-violet-600 transition-[width] duration-150 ease-linear" style={{ width: `${progress}%` }} />
+              </div>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{Math.round(progress)}% done</p>
+            </div>
+          )}
           {!file && <span className="text-sm text-zinc-500">Upload a photo first</span>}
           {error && <span className="text-sm text-red-600">{error}</span>}
         </div>
