@@ -47,6 +47,8 @@ const EYE_WHITE_MAX_CHROMA = 22;
 const EYE_WHITE_FROM = 0.7;
 /** An eye whose light part is darker than this (Lab L) is behind sunglasses. */
 const SUNGLASSES_L = 25;
+/** ...but one in shadow is still shown (its partner clear) down to this lightness. */
+const SHADOW_EYE_L = 12;
 /** The iris is at most the darkest this share of the eye... */
 const EYE_DARK_SHARE = 0.45;
 /** ...and this much darker than the eye's white. */
@@ -211,19 +213,28 @@ function toneColor(data: Uint8ClampedArray, w: number, L: Float32Array, gw: numb
 export function findEyes(data: Uint8ClampedArray, w: number, h: number, faces: FaceShape[]): EyePart[] {
   const out: EyePart[] = [];
   for (const f of faces) {
-    for (const eye of f.features?.slice(1, 3) ?? []) {
-      if (eye.length < 6) continue;
-      const { x0, y0, x1, gw, gh, L, values } = sampleInside(data, w, h, eye);
-      if (x1 - x0 < MIN_EYE_WIDTH || values.length < 8) continue;
+    const eyes = (f.features?.slice(1, 3) ?? []).filter((eye) => eye.length >= 6).map((eye) => {
+      const s = sampleInside(data, w, h, eye);
+      const { x0, y0, x1, gw, L, values } = s;
+      if (x1 - x0 < MIN_EYE_WIDTH || values.length < 8) return null;
       const light = values[Math.floor(values.length * 0.85)];
-      if (light < SUNGLASSES_L) continue;
       const darkL = values[Math.floor(values.length * EYE_DARK_SHARE)];
       const dark = toneColor(data, w, L, gw, x0, y0, -0.5, darkL);
       const white = toneColor(data, w, L, gw, x0, y0, values[Math.floor(values.length * EYE_WHITE_FROM)], 101);
-      // An eye's white is nearly colorless: a colorful "white" is a sunglasses lens.
       const wl = new Float32Array(3);
       rgbToLab(white[0], white[1], white[2], wl, 0);
-      if (Math.hypot(wl[1], wl[2]) > EYE_WHITE_MAX_CHROMA) continue;
+      // An eye's white is nearly colorless and not dark: a dark or colorful "white" is behind
+      // sunglasses (or in shadow, or warm light).
+      const clear = light >= SUNGLASSES_L && Math.hypot(wl[1], wl[2]) <= EYE_WHITE_MAX_CHROMA;
+      return { eye, s, light, darkL, dark, white, clear };
+    });
+    // Sunglasses cover both eyes: an eye that doesn't look clear (in shadow, or warm light on
+    // its white) is still shown when the face's other eye is clear.
+    const anyClear = eyes.some((e) => e?.clear);
+    for (const e of eyes) {
+      if (!e || !anyClear || (!e.clear && e.light < SHADOW_EYE_L)) continue;
+      const { eye, s, light, darkL, dark, white } = e;
+      const { x0, y0, x1, gw, gh, L, values } = s;
       const ys = eye.map((p) => p[1]);
       const open = (Math.max(...ys) - Math.min(...ys)) / (x1 - x0);
       if (open < MIN_EYE_OPEN) {
