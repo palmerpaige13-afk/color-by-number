@@ -129,6 +129,10 @@ const CLOTHES_OWN_TINT = 2;
 const CLOTHES_OWN_MIN_SHARE = 0.03;
 /** Shades for white clothes on detailed pages. */
 const WHITE_SHADES = 3;
+/** ...and with faces shown on a page (more detail, so the dress's folds keep up with the photo). */
+const OWN_WHITE_SHADES = 5;
+/** ...for clothes at least this share white. */
+const WHITE_MOSTLY = 0.5;
 /** A clothes pixel this light (Lab L)... */
 const WHITE_MIN_L = 62;
 /** ...and this gray (Lab chroma) is white (in shadow or not). */
@@ -143,6 +147,8 @@ const LACE_VARIATION = 1.2;
 const LACE_REACH = 2;
 /** ...and the clothes this close to them are lace too. */
 const LACE_GROW = 3;
+/** A piece of clothes more than this share "lace" is just grainy: none of it counts as lace. */
+const LACE_MAX_SHARE = 0.5;
 /** A hair pixel this far from the hair's usual hue (Lab a, b)... */
 const HAIR_COLOR_REACH = 25;
 /** ...and this much more colorful than it isn't hair (flowers held against it). */
@@ -361,11 +367,16 @@ export function separateFaces(
   held?: RegionMask,
   /** All the people's hair: what no face claims becomes hair of its own, in its own colors. */
   looseHair?: RegionMask,
+  /**
+   * Someone's own photo with faces shown (not a mural): clothes are given only for a white
+   * dress's fold shades (in more shades), not to decide whose arm is whose.
+   */
+  dressOnly = false,
 ): FaceRegions {
   const detected = faces.length;
   faces = faces.flatMap(splitDoubleFace);
   // Clothes are marked by face number as detected; a split face shifts the numbers after it.
-  const clothesByFace = faces.length === detected ? clothes : undefined;
+  const clothesByFace = faces.length === detected && !dressOnly ? clothes : undefined;
   // Parts: faces first (ids 1..F), then each face's hair, then animals. Earlier parts win
   // where masks overlap.
   const parts = new Uint8Array(w * h);
@@ -565,6 +576,24 @@ export function separateFaces(
           kindOf.set(k, PartKind.clothes);
         }
         parts[my * w + mx] = k;
+      }
+    }
+    if (dressOnly) {
+      // Faces shown on someone's own photo: clothes are only for a white dress's fold shades;
+      // any other clothes (or a dress too small) go back as they were, before anything else is
+      // decided from them.
+      for (const k of new Set(partOf.values())) {
+        let n = 0, white = 0;
+        const lab2 = new Float32Array(3);
+        for (let p = 0; p < w * h; p++) {
+          if (parts[p] !== k) continue;
+          n++;
+          rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab2, 0);
+          if (lab2[0] >= WHITE_MIN_L && Math.hypot(lab2[1], lab2[2]) <= WHITE_MAX_CHROMA) white++;
+        }
+        if (white >= n * WHITE_MOSTLY && white >= w * h * WHITE_MIN_SHARE) continue;
+        for (let p = 0; p < w * h; p++) if (parts[p] === k) parts[p] = 0;
+        kindOf.delete(k);
       }
     }
   }
@@ -797,12 +826,20 @@ export function separateFaces(
           if (xx >= 0 && yy >= 0 && xx < w && yy < h && kinds.has(parts[yy * w + xx])) drop[yy * w + xx] = 1;
         }
       }
-      for (let p = 0; p < w * h; p++) if (drop[p]) parts[p] = 0;
+      // Lace is trim (sleeves, a bodice): where most of a piece of clothes looks like it, it's
+      // the photo's grain (or a busy print), not lace, and the piece stays whole.
+      const total = new Map<number, number>(), laced = new Map<number, number>();
+      for (let p = 0; p < w * h; p++) {
+        if (!kinds.has(parts[p])) continue;
+        total.set(parts[p], (total.get(parts[p]) ?? 0) + 1);
+        if (drop[p]) laced.set(parts[p], (laced.get(parts[p]) ?? 0) + 1);
+      }
+      for (let p = 0; p < w * h; p++) if (drop[p] && (!dressOnly || (laced.get(parts[p]) ?? 0) < (total.get(parts[p]) ?? 0) * LACE_MAX_SHARE)) parts[p] = 0;
     }
   }
   for (const [k, kind] of kindOf) {
-    if (kind !== PartKind.clothes || clothesColors > 0 || heldParts.has(k)) continue;
-    const own = whiteShades(smoothed, parts, k);
+    if (kind !== PartKind.clothes || (clothesColors > 0 && !dressOnly) || heldParts.has(k)) continue;
+    const own = whiteShades(smoothed, parts, k, dressOnly ? OWN_WHITE_SHADES : WHITE_SHADES, dressOnly ? WHITE_MOSTLY : 0);
     if (!own) continue;
     const ids = own.rgb.map((rgb, t) => add(rgb, own.lab.subarray(t * 3, t * 3 + 3), k));
     if (ids.every((id) => id >= 0)) whiteTone.set(k, { ids, tone: own.tone });
@@ -1126,37 +1163,42 @@ function whiteShades(
   smoothed: Uint8ClampedArray,
   parts: Uint8Array,
   k: number,
+  n = WHITE_SHADES,
+  /** Only clothes mostly white (a dress, not a teal blanket with light folds) at least this share. */
+  mostly = 0,
 ): { rgb: RGB[]; lab: Float32Array; tone: Map<number, number> } | null {
   const px: number[] = [];
   const L: number[] = [];
   const lab = new Float32Array(3);
+  let all = 0;
   for (let p = 0; p < parts.length; p++) {
     if (parts[p] !== k) continue;
+    all++;
     rgbToLab(smoothed[p * 4], smoothed[p * 4 + 1], smoothed[p * 4 + 2], lab, 0);
     if (lab[0] < WHITE_MIN_L || Math.hypot(lab[1], lab[2]) > WHITE_MAX_CHROMA) continue;
     px.push(p);
     L.push(lab[0]);
   }
-  if (px.length < parts.length * WHITE_MIN_SHARE) return null;
+  if (px.length < parts.length * WHITE_MIN_SHARE || px.length < all * mostly) return null;
   const order = px.map((_, i) => i).sort((a, b) => L[a] - L[b]);
   const group = new Uint8Array(px.length);
-  order.forEach((i, r) => (group[i] = Math.min(WHITE_SHADES - 1, Math.floor((r * WHITE_SHADES) / px.length))));
-  const rgbSum = new Float64Array(WHITE_SHADES * 4);
+  order.forEach((i, r) => (group[i] = Math.min(n - 1, Math.floor((r * n) / px.length))));
+  const rgbSum = new Float64Array(n * 4);
   px.forEach((p, i) => {
     for (let a = 0; a < 3; a++) rgbSum[group[i] * 4 + a] += smoothed[p * 4 + a];
     rgbSum[group[i] * 4 + 3]++;
   });
-  const mean = Array.from({ length: WHITE_SHADES }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))));
+  const mean = Array.from({ length: n }, (_, c) => [0, 1, 2].map((a) => Math.round(rgbSum[c * 4 + a] / Math.max(1, rgbSum[c * 4 + 3]))));
   // Folds in white cloth are faint: the shades are spread further apart in lightness (same
   // hue) so they read on paper.
-  const shadeLab = new Float32Array(WHITE_SHADES * 3);
+  const shadeLab = new Float32Array(n * 3);
   mean.forEach((c, i) => rgbToLab(c[0], c[1], c[2], shadeLab, i * 3));
-  const midL = shadeLab[((WHITE_SHADES - 1) >> 1) * 3];
+  const midL = shadeLab[((n - 1) >> 1) * 3];
   const rgb = mean.map((_, i) => {
     const L = Math.min(97, midL + (shadeLab[i * 3] - midL) * WHITE_STRETCH);
     return labToRgb(L, shadeLab[i * 3 + 1], shadeLab[i * 3 + 2]).map((v) => Math.round(Math.max(0, Math.min(255, v)))) as RGB;
   });
-  const out = new Float32Array(WHITE_SHADES * 3);
+  const out = new Float32Array(n * 3);
   rgb.forEach((c, i) => rgbToLab(c[0], c[1], c[2], out, i * 3));
   const tone = new Map<number, number>();
   px.forEach((p, i) => tone.set(p, group[i]));
